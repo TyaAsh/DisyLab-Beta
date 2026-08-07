@@ -163,17 +163,14 @@ src/
 ├─ styles.css          # 核心样式
 └─ theme-custom.css    # 品牌、字体和可读性覆盖层
 
-docs/                  # 实施、版本、样式与部署文档
+docs/                  # 可公开的版本与功能文档
 public/                # 公共静态资源
 netlify.toml           # Netlify 构建与 SPA 回退配置
 ```
 
 ## 项目文档
 
-- [项目实施文档](docs/Disy无限可能-项目实施文档.md)
-- [样式与文案修改指南](docs/Disy-样式与文案修改指南.md)
 - [v0.1.0 版本功能与技术说明](docs/Disy-v0.1.0-版本功能与技术说明.md)
-- [上线部署指南](docs/Disy-上线部署指南.md)
 
 ## Roadmap
 
@@ -199,8 +196,6 @@ netlify.toml           # Netlify 构建与 SPA 回退配置
 npm run build
 npx netlify deploy --prod --dir=dist
 ```
-
-完整步骤见 [上线部署指南](docs/Disy-上线部署指南.md)。
 
 ## 开发沟通
 

@@ -769,7 +769,6 @@ function LuminousEdge({
   targetPosition,
   style,
 }: EdgeProps) {
-  const reduceEdgeMotion = useReducedMotion()
   const [path] = getBezierPath({
     sourceX,
     sourceY,
@@ -813,10 +812,11 @@ function LuminousEdge({
       <motion.path
         d={path}
         className="luminous-edge-flow"
+        pathLength={1}
         vectorEffect="non-scaling-stroke"
         initial={false}
-        animate={reduceEdgeMotion ? { strokeDashoffset: 0 } : { strokeDashoffset: [0, -148] }}
-        transition={{ duration: 2.35, repeat: Number.POSITIVE_INFINITY, ease: 'linear' }}
+        animate={{ strokeDashoffset: [0, -0.5] }}
+        transition={{ duration: 2.2, repeat: Number.POSITIVE_INFINITY, ease: 'linear' }}
       />
     </>
   )
