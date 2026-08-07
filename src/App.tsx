@@ -182,6 +182,7 @@ type SavedAsset = {
   type?: 'node' | 'group'
   title?: string
   data?: CanvasNode['data']
+  style?: CanvasNode['style']
   nodes?: CanvasNode[]
   edges?: Edge[]
   folderId?: string | null
@@ -1864,6 +1865,7 @@ function App() {
           type: 'node',
           title: node.data.fileName || node.data.title,
           data: { ...node.data },
+          style: node.style ? { ...node.style } : undefined,
           folderId: null,
         },
       ]
@@ -3125,12 +3127,17 @@ function App() {
     const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
     if (asset.data) {
+      const defaultStyle = asset.data.kind === 'text'
+        ? { width: 420, height: 240 }
+        : asset.data.kind === 'image'
+          ? getImageGenerationNodeSize(asset.data.imageAspectRatio ?? '1:1')
+          : undefined
       const node: CanvasNode = {
         id: `asset-node-${stamp}`,
         type: 'disy',
         position,
         data: { ...asset.data },
-        style: asset.data.kind === 'text' ? { width: 420, height: 240 } : undefined,
+        style: asset.style ? { ...defaultStyle, ...asset.style } : defaultStyle,
       }
       setNodes((current) => [...current, node])
       setToastMessage('资产已放入画布')
