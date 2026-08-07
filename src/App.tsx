@@ -994,11 +994,9 @@ function NodeCard({
               )}
             </>
           ) : (
-            <>
-              <div className="image-placeholder-glow" />
-              <Sparkles size={22} />
-              <span>{data.body || '配置模型、比例与质量后生成。'}</span>
-            </>
+            data.status === '生成中'
+              ? <LoaderCircle className="image-node-generation-icon is-spinning" size={24} aria-label="正在生成图片" />
+              : <Sparkles className="image-node-generation-icon" size={22} aria-label="等待生成图片" />
           )}
         </div>
       ) : (

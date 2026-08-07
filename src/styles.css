@@ -437,6 +437,7 @@ button { border: 0; cursor: pointer; }
 }
 .image-generation-node.is-generating .image-placeholder > svg,
 .image-generation-node.is-generating .image-placeholder > span { z-index: 2; }
+.image-node-generation-icon { position: relative; z-index: 2; color: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
 .image-generation-node.is-generating .status-dot { background: #e4e9e6; box-shadow: 0 0 0 4px rgba(228,233,230,.1), 0 0 12px rgba(238,244,241,.75); animation: generation-status-pulse 1.1s ease-in-out infinite; }
 @keyframes image-fluid-wave-a {
   0% { transform: translate3d(-8%, 6%, 0) rotate(-9deg) scale(.9); opacity: .35; }
