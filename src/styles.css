@@ -71,7 +71,7 @@ button { border: 0; cursor: pointer; }
 .react-flow__edge-path { stroke-linecap: round; transition: opacity .2s ease, stroke-width .2s ease, filter .2s ease; }
 .luminous-edge-glow { fill: none; stroke-width: 8; stroke-linecap: round; opacity: .16; filter: blur(4px); pointer-events: none; }
 .luminous-edge-core { fill: none; stroke-width: 1.8 !important; stroke-linecap: round; opacity: .9; filter: drop-shadow(0 0 2px rgba(220, 224, 219, .3)); }
-.luminous-edge-flow { fill: none; stroke: var(--edge-flow); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: .12 .38; opacity: .82; filter: drop-shadow(0 0 4px rgba(236, 239, 235, .82)); pointer-events: none; }
+.luminous-edge-flow { fill: none; stroke: var(--edge-flow); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: .12 .38; stroke-dashoffset: 0; opacity: .82; filter: drop-shadow(0 0 4px rgba(236, 239, 235, .82)); pointer-events: none; animation: luminous-edge-travel 2.2s linear infinite; }
 .react-flow__edge.selected .luminous-edge-glow {
   stroke: var(--accent) !important;
   stroke-width: 14;
@@ -93,6 +93,9 @@ button { border: 0; cursor: pointer; }
 @keyframes selected-edge-breathe {
   0%, 100% { opacity: .38; }
   50% { opacity: .62; }
+}
+@keyframes luminous-edge-travel {
+  to { stroke-dashoffset: -.5; }
 }
 .react-flow__connection-path { stroke: var(--edge-middle); stroke-width: 1.9; stroke-linecap: round; filter: drop-shadow(0 0 4px rgba(222, 226, 221, .6)); }
 
@@ -1680,4 +1683,5 @@ button { border: 0; cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  .luminous-edge-flow { animation-duration: 4.4s !important; animation-iteration-count: infinite !important; }
 }

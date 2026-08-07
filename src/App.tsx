@@ -809,14 +809,11 @@ function LuminousEdge({
         interactionWidth={22}
         style={{ ...style, stroke: `url(#${gradientId})` }}
       />
-      <motion.path
+      <path
         d={path}
         className="luminous-edge-flow"
         pathLength={1}
         vectorEffect="non-scaling-stroke"
-        initial={false}
-        animate={{ strokeDashoffset: [0, -0.5] }}
-        transition={{ duration: 2.2, repeat: Number.POSITIVE_INFINITY, ease: 'linear' }}
       />
     </>
   )
