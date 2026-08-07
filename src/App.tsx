@@ -2170,13 +2170,6 @@ function App() {
 
   const selectImageMention = (reference: ActiveImageReference) => {
     if (!activeGenerationNode) return
-    if (reference.source === 'connection' && reference.sourceNodeId) {
-      setEdges((current) => current.map((edge) => (
-        edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id
-          ? { ...edge, data: { ...(edge.data ?? {}), referenceSelected: true } }
-          : edge
-      )))
-    }
     const body = activeGenerationNode.data.body
     const range = imageMentionRange ?? { start: body.length, end: body.length }
     const nextBody = `${body.slice(0, range.start)}${reference.mention} ${body.slice(range.end)}`
