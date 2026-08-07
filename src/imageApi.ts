@@ -17,6 +17,96 @@ export type GeneratedImage = {
   revisedPrompt?: string
 }
 
+const REFERENCE_IMAGE_TARGET_BYTES = 1_800_000
+const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('参考图片读取失败'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => blob ? resolve(blob) : reject(new Error('参考图片压缩失败')),
+      type,
+      quality,
+    )
+  })
+}
+
+export async function prepareReferenceImageForRequest(source: string): Promise<string> {
+  const trimmedSource = source.trim()
+  if (!trimmedSource || !/^(?:https?:|blob:|data:image\/)/i.test(trimmedSource)) return trimmedSource
+
+  let sourceBlob: Blob
+  const referenceController = new AbortController()
+  const referenceTimeout = window.setTimeout(() => referenceController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
+  try {
+    const response = await fetch(trimmedSource, { signal: referenceController.signal })
+    if (!response.ok) throw new Error(`图片读取失败（${response.status}）`)
+    sourceBlob = await response.blob()
+  } catch (error) {
+    throw new GenerationRequestError(
+      'platform',
+      error instanceof DOMException && error.name === 'AbortError' ? '参考图片读取超时' : '参考图片无法读取',
+      `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}。本次付费生成请求尚未发送。`,
+    )
+  } finally {
+    window.clearTimeout(referenceTimeout)
+  }
+
+  if (!sourceBlob.type.startsWith('image/')) {
+    throw new GenerationRequestError('platform', '参考图片格式无法识别', `收到的文件类型为 ${sourceBlob.type || 'unknown'}`)
+  }
+
+  const isSupportedEditFormat = /^image\/(?:png|jpe?g|webp)$/i.test(sourceBlob.type)
+  // Remote and blob URLs are converted to stable request data. Unsupported
+  // formats are always re-encoded while preserving their exact pixel dimensions.
+  if (isSupportedEditFormat && sourceBlob.size <= REFERENCE_IMAGE_TARGET_BYTES) {
+    return /^data:image\//i.test(trimmedSource) ? trimmedSource : blobToDataUrl(sourceBlob)
+  }
+
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(sourceBlob)
+  } catch (error) {
+    throw new GenerationRequestError(
+      'platform',
+      '参考图片无法解码',
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    )
+  }
+
+  try {
+    const canvas = document.createElement('canvas')
+    // Preserve the exact pixel dimensions. Only encoded file size is reduced.
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('浏览器无法创建图片压缩画布')
+    context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height)
+
+    let compressed: Blob | null = isSupportedEditFormat ? sourceBlob : null
+    for (const quality of [0.88, 0.78, 0.68, 0.58]) {
+      const candidate = await canvasToBlob(canvas, 'image/webp', quality)
+      if (!compressed || candidate.size < compressed.size) compressed = candidate
+      if (candidate.size <= REFERENCE_IMAGE_TARGET_BYTES) {
+        compressed = candidate
+        break
+      }
+    }
+    if (!compressed) throw new Error('参考图片转码失败')
+    return blobToDataUrl(compressed)
+  } finally {
+    bitmap.close()
+  }
+}
+
 export type GenerationErrorCategory = 'api' | 'network' | 'platform'
 
 export class GenerationRequestError extends Error {
@@ -156,20 +246,81 @@ export async function generateRemoteImages(
   if (options.resolution) body.resolution = options.resolution
   if (options.detail) body.quality = options.detail
   if (!/gpt-image/i.test(settings.model)) body.response_format = 'url'
-  if (options.referenceImages?.length) body.image_urls = options.referenceImages
+  const referenceImages = options.referenceImages?.filter(Boolean) ?? []
+  const useStandardImageEdit = referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
 
   let response: Response
   try {
-    response = await fetch(endpoint(settings.baseUrl, 'images/generations'), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    })
+    if (useStandardImageEdit) {
+      const form = new FormData()
+      form.append('model', settings.model)
+      form.append('prompt', options.prompt)
+      form.append('n', String(options.count))
+      form.append('size', compatibleSize)
+      if (options.detail) form.append('quality', options.detail)
+
+      for (const [index, imageSource] of referenceImages.entries()) {
+        let imageResponse: Response
+        const imageController = new AbortController()
+        const imageTimeout = window.setTimeout(() => imageController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
+        try {
+          imageResponse = await fetch(imageSource, { signal: imageController.signal })
+        } catch (error) {
+          throw new GenerationRequestError(
+            'platform',
+            error instanceof DOMException && error.name === 'AbortError' ? '参考图片读取超时' : '参考图片无法转换为模型输入',
+            `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
+          )
+        } finally {
+          window.clearTimeout(imageTimeout)
+        }
+        if (!imageResponse.ok) {
+          throw new GenerationRequestError(
+            'platform',
+            '参考图片无法转换为模型输入',
+            `图片读取失败（${imageResponse.status}）。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
+          )
+        }
+        const imageBlob = await imageResponse.blob()
+        if (!imageBlob.type.startsWith('image/')) {
+          throw new GenerationRequestError(
+            'platform',
+            '参考图片格式无法识别',
+            `第 ${index + 1} 张参考图的文件类型为 ${imageBlob.type || 'unknown'}，本次生成请求未发送。`,
+          )
+        }
+        const extension = imageBlob.type.includes('webp') ? 'webp' : imageBlob.type.includes('jpeg') ? 'jpg' : 'png'
+        // OpenAI's standard edit endpoint accepts `image` for one file and an
+        // `image[]` array for multiple files. Some compatible relays only parse
+        // the singular field, so keep the one-reference request strictly standard.
+        const imageField = referenceImages.length === 1 ? 'image' : 'image[]'
+        form.append(imageField, imageBlob, `reference-${index + 1}.${extension}`)
+      }
+
+      response = await fetch(endpoint(settings.baseUrl, 'images/edits'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${settings.apiKey}` },
+        body: form,
+      })
+    } else {
+      if (referenceImages.length) body.image_urls = referenceImages
+      response = await fetch(endpoint(settings.baseUrl, 'images/generations'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+    }
   } catch (error) {
-    throw createNetworkError(error)
+    if (error instanceof GenerationRequestError) throw error
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    throw new GenerationRequestError(
+      'network',
+      '请求可能已送达并扣费，但浏览器没有收到生成结果',
+      `${detail}。请先检查中转服务的消费记录、任务详情或生成历史，不要直接重复生成。常见原因是中转响应缺少跨域许可、连接中途断开或代理没有把图片响应返回给浏览器。`,
+    )
   }
   // Paid generation requests are never retried or split automatically. A rejected
   // batch stops here so one click can produce at most one billable API request.
@@ -178,7 +329,11 @@ export async function generateRemoteImages(
   try {
     payload = await response.json()
   } catch (error) {
-    throw new GenerationRequestError('platform', 'API 返回了无法识别的数据', error instanceof Error ? error.message : String(error))
+    throw new GenerationRequestError(
+      'platform',
+      '请求可能已经扣费，但 API 返回了无法识别的数据',
+      `${error instanceof Error ? error.message : String(error)}。请检查中转任务或生成历史，不要直接重试。`,
+    )
   }
   type ImageRow = { url: string; revisedPrompt?: string }
   const rows: ImageRow[] = []
@@ -222,6 +377,13 @@ export async function generateRemoteImages(
     })
   }
   visit(payload)
+  if (!rows.length) {
+    throw new GenerationRequestError(
+      'platform',
+      '请求可能已经扣费，但没有收到图片结果',
+      '接口请求成功，但响应中没有可识别的图片。请检查中转任务或生成历史，不要直接重试。',
+    )
+  }
   // Preserve response order and cardinality. Some gateways intentionally reuse the
   // same proxy URL for separate batch items, so URL-based deduplication can lose images.
   return rows

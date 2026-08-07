@@ -69,7 +69,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ModelCapability } from './store'
 import { loadLocalProject, saveLocalProject } from './localDb'
-import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, type GenerationErrorCategory } from './imageApi'
+import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationErrorCategory } from './imageApi'
 
 type NodeKind = 'text' | 'image' | 'upload' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
@@ -102,6 +102,7 @@ type CanvasNode = Node<{
   referenceImageUrl?: string
   referenceImageName?: string
   referenceImages?: ImageReference[]
+  useCurrentImageAsReference?: boolean
   imageAspectRatio?: ImageAspectRatio
   imageResolution?: ImageResolution
   imageDetail?: ImageDetail
@@ -109,8 +110,9 @@ type CanvasNode = Node<{
 }>
 
 type ActiveImageReference = ImageReference & {
-  source: 'connection' | 'manual'
+  source: 'current' | 'connection' | 'manual'
   sourceNodeId?: string
+  selected: boolean
   mention: string
 }
 
@@ -158,6 +160,7 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
+const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 
 type NodeMenuState = {
   x: number
@@ -812,7 +815,6 @@ function LuminousEdge({
       <path
         d={path}
         className="luminous-edge-flow"
-        pathLength={1}
         vectorEffect="non-scaling-stroke"
       />
     </>
@@ -841,6 +843,7 @@ function NodeCard({
   const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
+  const openImagePreview = useContext(ImagePreviewOpenContext)
   const [inlineEditing, setInlineEditing] = useState(false)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -896,7 +899,15 @@ function NodeCard({
           <span>{data.fileName || data.title}</span>
         </div>
         <div className="asset-image-frame">
-          <img src={data.imageUrl} alt={data.fileName || '上传的参考图'} draggable={false} />
+          <img
+            src={data.imageUrl}
+            alt={data.fileName || '上传的参考图'}
+            draggable={false}
+            onDoubleClick={(event) => {
+              event.stopPropagation()
+              openImagePreview(id)
+            }}
+          />
           {variantCount > 1 && (
             <button
               type="button"
@@ -956,7 +967,15 @@ function NodeCard({
         <div className={`image-placeholder ${data.imageUrl || data.referenceImageUrl ? 'has-reference' : ''}`}>
           {data.imageUrl || data.referenceImageUrl ? (
             <>
-              <img src={data.imageUrl || data.referenceImageUrl} alt={data.fileName || data.referenceImageName || '图像节点图片'} draggable={false} />
+              <img
+                src={data.imageUrl || data.referenceImageUrl}
+                alt={data.fileName || data.referenceImageName || '图像节点图片'}
+                draggable={false}
+                onDoubleClick={(event) => {
+                  event.stopPropagation()
+                  if (data.imageUrl) openImagePreview(id)
+                }}
+              />
               {(data.imageVariants?.length ?? 0) > 1 && (
                 <button
                   type="button"
@@ -1091,7 +1110,8 @@ function App() {
   const [activeImageNodeId, setActiveImageNodeId] = useState<string | null>(null)
   const [activeGenerationNodeId, setActiveGenerationNodeId] = useState<string | null>(null)
   const [previewImageNodeId, setPreviewImageNodeId] = useState<string | null>(null)
-  const [previewImageSource, setPreviewImageSource] = useState<{ url: string; alt: string } | null>(null)
+  const [previewImageIndex, setPreviewImageIndex] = useState(0)
+  const [previewImageDirection, setPreviewImageDirection] = useState(1)
   const [imageGalleryNodeId, setImageGalleryNodeId] = useState<string | null>(null)
   const [expandedEditorNodeId, setExpandedEditorNodeId] = useState<string | null>(null)
   const [generationCount, setGenerationCount] = useState(1)
@@ -1144,6 +1164,7 @@ function App() {
   const generationRequestLockRef = useRef(false)
   const aspectTweenRef = useRef<{ kill: () => void } | null>(null)
   const galleryWheelLockRef = useRef(false)
+  const previewWheelLockRef = useRef(false)
   const latestSelectedNodeIdsRef = useRef<string[]>([])
   const { fitView: fitCanvas, screenToFlowPosition, zoomTo } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
@@ -1401,6 +1422,17 @@ function App() {
   }, [toastMessage])
 
   useEffect(() => {
+    if (!imageParameterMenuOpen) return
+    const closeImageParameterMenu = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.image-parameter-control')) return
+      setImageParameterMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeImageParameterMenu, true)
+    return () => document.removeEventListener('pointerdown', closeImageParameterMenu, true)
+  }, [imageParameterMenuOpen])
+
+  useEffect(() => {
     if (activeEditorNodeId && !nodes.some((node) => node.id === activeEditorNodeId)) {
       setActiveEditorNodeId(null)
       setExpandedEditorNodeId(null)
@@ -1473,16 +1505,15 @@ function App() {
   }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, isNodeDragging, measureNodeOverlay])
 
   useEffect(() => {
-    if (!previewImageNodeId && !previewImageSource) return
+    if (!previewImageNodeId) return
     const closePreview = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setPreviewImageNodeId(null)
-        setPreviewImageSource(null)
       }
     }
     window.addEventListener('keydown', closePreview)
     return () => window.removeEventListener('keydown', closePreview)
-  }, [previewImageNodeId, previewImageSource])
+  }, [previewImageNodeId])
 
   useEffect(() => {
     if (!imageGalleryNodeId) return
@@ -2018,21 +2049,35 @@ function App() {
     const references: Omit<ActiveImageReference, 'mention'>[] = []
     const seenUrls = new Set<string>()
 
+    const generationNode = nodeById.get(activeGenerationNodeId)
+    if (generationNode?.data.imageUrl) {
+      seenUrls.add(generationNode.data.imageUrl)
+      references.push({
+        id: `current-${activeGenerationNodeId}`,
+        source: 'current',
+        sourceNodeId: activeGenerationNodeId,
+        selected: generationNode.data.useCurrentImageAsReference !== false,
+        name: '当前主图',
+        url: generationNode.data.imageUrl,
+      })
+    }
+
     edges.forEach((edge) => {
       if (edge.target !== activeGenerationNodeId) return
       const sourceNode = nodeById.get(edge.source)
-      if (sourceNode?.data.kind !== 'upload' || !sourceNode.data.imageUrl || seenUrls.has(sourceNode.data.imageUrl)) return
+      const sourceCanReferenceImage = sourceNode?.data.kind === 'upload' || sourceNode?.data.kind === 'image'
+      if (!sourceCanReferenceImage || !sourceNode.data.imageUrl || seenUrls.has(sourceNode.data.imageUrl)) return
       seenUrls.add(sourceNode.data.imageUrl)
       references.push({
         id: `connection-${sourceNode.id}`,
         source: 'connection',
         sourceNodeId: sourceNode.id,
-        name: sourceNode.data.fileName || sourceNode.data.title || '连接图片',
+        selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected),
+        name: sourceNode.data.fileName || sourceNode.data.title || (sourceNode.data.kind === 'image' ? '生成主图' : '连接图片'),
         url: sourceNode.data.imageUrl,
       })
     })
 
-    const generationNode = nodeById.get(activeGenerationNodeId)
     const manualReferences = generationNode?.data.referenceImages ?? []
     const legacyReferences: ImageReference[] = generationNode?.data.referenceImageUrl ? [{
       id: `legacy-${activeGenerationNodeId}`,
@@ -2042,7 +2087,7 @@ function App() {
     ;[...manualReferences, ...legacyReferences].forEach((reference) => {
       if (!reference.url || seenUrls.has(reference.url)) return
       seenUrls.add(reference.url)
-      references.push({ ...reference, source: 'manual' })
+      references.push({ ...reference, source: 'manual', selected: true })
     })
 
     const duplicateCounts = new Map<string, number>()
@@ -2074,6 +2119,9 @@ function App() {
     const query = imageMentionQuery.trim().toLowerCase()
     return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
   })
+  const selectedImageReferences = activeImageReferences.filter((reference) => (
+    reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
+  ))
   const activeImageAspectRatio = activeGenerationNode?.data.imageAspectRatio ?? '1:1'
   const activeImageResolution = activeGenerationNode?.data.imageResolution ?? '1K'
   const activeImageDetail = activeGenerationNode?.data.imageDetail ?? 'medium'
@@ -2122,6 +2170,13 @@ function App() {
 
   const selectImageMention = (reference: ActiveImageReference) => {
     if (!activeGenerationNode) return
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.map((edge) => (
+        edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id
+          ? { ...edge, data: { ...(edge.data ?? {}), referenceSelected: true } }
+          : edge
+      )))
+    }
     const body = activeGenerationNode.data.body
     const range = imageMentionRange ?? { start: body.length, end: body.length }
     const nextBody = `${body.slice(0, range.start)}${reference.mention} ${body.slice(range.end)}`
@@ -2139,7 +2194,12 @@ function App() {
 
   const removeImageReference = (reference: ActiveImageReference) => {
     if (!activeGenerationNode) return
-    if (reference.source === 'connection' && reference.sourceNodeId) {
+    if (reference.source === 'current') {
+      setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
+        ...node,
+        data: { ...node.data, useCurrentImageAsReference: false },
+      } : node))
+    } else if (reference.source === 'connection' && reference.sourceNodeId) {
       setEdges((current) => current.filter((edge) => !(edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id)))
     } else {
       setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
@@ -2183,12 +2243,63 @@ function App() {
   const previewImageNode = nodes.find(
     (node) => node.id === previewImageNodeId && (node.data.kind === 'upload' || node.data.kind === 'image') && Boolean(node.data.imageUrl),
   )
-  const previewImage = previewImageSource ?? (previewImageNode?.data.imageUrl
-    ? { url: previewImageNode.data.imageUrl, alt: previewImageNode.data.fileName || '图片预览' }
-    : null)
+  const previewImageItems = previewImageNode
+    ? previewImageNode.data.imageVariants?.length
+      ? previewImageNode.data.imageVariants.map((variant, index) => ({
+          id: variant.id,
+          url: variant.url,
+          alt: variant.fileName || `生成图片 ${index + 1}`,
+          fileName: variant.fileName || `disy-image-${index + 1}.png`,
+        }))
+      : previewImageNode.data.imageUrl
+        ? [{
+            id: `preview-${previewImageNode.id}`,
+            url: previewImageNode.data.imageUrl,
+            alt: previewImageNode.data.fileName || '图片预览',
+            fileName: previewImageNode.data.fileName || 'disy-image.png',
+          }]
+        : []
+    : []
+  const safePreviewImageIndex = previewImageItems.length
+    ? Math.min(previewImageIndex, previewImageItems.length - 1)
+    : 0
+  const previewImage = previewImageItems[safePreviewImageIndex] ?? null
+  const openNodeImagePreview = useCallback((nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId)
+    if (!node?.data.imageUrl) return
+    const variants = node.data.imageVariants ?? []
+    const activeIndex = variants.findIndex((variant) => (
+      variant.id === node.data.activeImageVariantId || variant.url === node.data.imageUrl
+    ))
+    setPreviewImageIndex(activeIndex >= 0 ? activeIndex : 0)
+    setPreviewImageDirection(1)
+    setPreviewImageNodeId(nodeId)
+  }, [nodes])
+  const movePreviewImage = useCallback((step: number) => {
+    if (previewImageItems.length < 2) return
+    setPreviewImageDirection(step > 0 ? 1 : -1)
+    setPreviewImageIndex((current) => (current + step + previewImageItems.length) % previewImageItems.length)
+  }, [previewImageItems.length])
+  const onPreviewImageWheel = (event: React.WheelEvent) => {
+    event.preventDefault()
+    if (previewWheelLockRef.current || Math.max(Math.abs(event.deltaX), Math.abs(event.deltaY)) < 8) return
+    previewWheelLockRef.current = true
+    movePreviewImage((Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY) > 0 ? 1 : -1)
+    window.setTimeout(() => { previewWheelLockRef.current = false }, 260)
+  }
   const imageGalleryNode = nodes.find(
     (node) => node.id === imageGalleryNodeId && (node.data.kind === 'upload' || node.data.kind === 'image') && Boolean(node.data.imageVariants?.length),
   )
+
+  useEffect(() => {
+    if (!previewImageNodeId) return
+    const onPreviewKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') movePreviewImage(-1)
+      if (event.key === 'ArrowRight') movePreviewImage(1)
+    }
+    window.addEventListener('keydown', onPreviewKeyDown)
+    return () => window.removeEventListener('keydown', onPreviewKeyDown)
+  }, [movePreviewImage, previewImageNodeId])
 
   const copyActiveText = async () => {
     if (!activeTextNode) return
@@ -2411,8 +2522,8 @@ function App() {
       setToastMessage('请先输入图像提示词')
       return
     }
-    const mentionGuide = activeImageReferences.length
-      ? `参考图片对应关系：${activeImageReferences.map((reference, index) => `${reference.mention} 是第 ${index + 1} 张输入图片（${reference.name}）`).join('；')}`
+    const mentionGuide = selectedImageReferences.length
+      ? `参考图片对应关系：${selectedImageReferences.map((reference, index) => `${reference.mention} 是第 ${index + 1} 张输入图片（${reference.name}）`).join('；')}`
       : ''
     const prompt = [promptText, mentionGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n')
     if (!selectedImageModel) {
@@ -2426,6 +2537,14 @@ function App() {
       setApiOpen(true)
       return
     }
+    const requestedReferenceUrls = Array.from(new Set([
+      ...selectedImageReferences.map((reference) => reference.url),
+      styleReferenceEnabled ? styleReferenceUrl : '',
+    ].filter((url): url is string => Boolean(url))))
+    if (requestedReferenceUrls.length > 16) {
+      setToastMessage(`参考图最多 16 张，当前已选择 ${requestedReferenceUrls.length} 张`)
+      return
+    }
 
     generationRequestLockRef.current = true
     setGenerationLoading(true)
@@ -2435,10 +2554,10 @@ function App() {
       ? { ...node, data: { ...node.data, status: '生成中' } }
       : node))
     try {
-      const referenceImages = Array.from(new Set([
-        ...activeImageReferences.map((reference) => reference.url),
-        styleReferenceEnabled ? styleReferenceUrl : '',
-      ].filter((url): url is string => Boolean(url))))
+      const referenceImages = await Promise.all(requestedReferenceUrls.map(prepareReferenceImageForRequest))
+      const requestMode = referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
+        ? 'images/edits'
+        : 'images/generations'
       const images: Awaited<ReturnType<typeof generateRemoteImages>> = []
       let stoppedError: unknown = null
       // A requested 2×/3×/4× batch is intentionally billed as up to that many
@@ -2499,7 +2618,7 @@ function App() {
             fileName: primaryVariant.fileName,
             imageVariants: [...previousVariants, ...newVariants],
             activeImageVariantId: primaryVariant.id,
-            status: images.length === generationCount ? '已完成' : '部分完成',
+            status: stoppedError ? '生成失败' : '已完成',
           },
         }
       }))
@@ -2532,7 +2651,7 @@ function App() {
         connectionName: selectedImageModel.connection.name,
         requestedCount: generationCount,
         outputCount: images.length,
-        preview: `${activeImageAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]}`,
+        preview: `${activeImageAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]} · 参考图 ${referenceImages.length} 张 · ${requestMode}`,
       })
       if (stoppedError) {
         appendOutputHistory({
@@ -2544,14 +2663,19 @@ function App() {
           connectionName: selectedImageModel.connection.name,
           requestedCount: generationCount - images.length,
           outputCount: 0,
+          preview: `参考图 ${referenceImages.length} 张 · ${requestMode}`,
           error: toOutputHistoryError(stoppedError),
         })
       }
-      setToastMessage(images.length < generationCount
-        ? `已生成 ${images.length}/${generationCount} 张，后续请求已因接口错误停止`
+      setToastMessage(stoppedError
+        ? `生成失败，已停止后续请求${images.length ? `；已保留 ${images.length} 张成功结果` : ''}`
         : `已生成 ${images.length} 张图像`)
     } catch (error) {
       const historyError = toOutputHistoryError(error)
+      const attemptedReferenceCount = selectedImageReferences.length + (styleReferenceEnabled && styleReferenceUrl ? 1 : 0)
+      const attemptedRequestMode = attemptedReferenceCount > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
+        ? 'images/edits'
+        : 'images/generations'
       setNodes((current) => current.map((node) => node.id === generationNodeId
         ? { ...node, data: { ...node.data, status: '生成失败' } }
         : node))
@@ -2564,6 +2688,7 @@ function App() {
         connectionName: selectedImageModel.connection.name,
         requestedCount: generationCount,
         outputCount: 0,
+        preview: `参考图 ${attemptedReferenceCount} 张 · ${attemptedRequestMode}`,
         error: historyError,
       })
       setToastMessage(historyError.summary)
@@ -3162,8 +3287,9 @@ function App() {
   return (
     <div ref={shellRef} className="disy-shell">
       <main className="canvas-area">
-        <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
-          <NodeTextUpdateContext.Provider value={updateNodeBody}>
+        <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
+          <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
+            <NodeTextUpdateContext.Provider value={updateNodeBody}>
           <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -3183,8 +3309,8 @@ function App() {
                 setToastMessage('请选择画布中的其他图片')
                 return
               }
-              if (node.data.kind !== 'upload' || !node.data.imageUrl) {
-                setToastMessage('这里只能选择已经上传到画布的图片')
+              if ((node.data.kind !== 'upload' && node.data.kind !== 'image') || !node.data.imageUrl) {
+                setToastMessage('请选择已经上传或生成完成的图片')
                 return
               }
               setEdges((current) => {
@@ -3194,6 +3320,7 @@ function App() {
                   source: node.id,
                   target: canvasReferencePickerNodeId,
                   type: 'luminous',
+                  data: { referenceSelected: true },
                 }]
               })
               setToastMessage('已加入参考图片，可继续选择')
@@ -3305,8 +3432,9 @@ function App() {
             ariaLabel="画布小地图，可拖拽导航"
           />
           </ReactFlow>
-          </NodeTextUpdateContext.Provider>
-        </ImageGalleryOpenContext.Provider>
+            </NodeTextUpdateContext.Provider>
+          </ImageGalleryOpenContext.Provider>
+        </ImagePreviewOpenContext.Provider>
 
         <AnimatePresence>
           {canvasReferencePickerNodeId && (
@@ -3479,25 +3607,31 @@ function App() {
           className="image-file-input"
           type="file"
           accept="image/*"
-          aria-label="为图像生成节点上传或替换图片"
+          multiple
+          aria-label="为图像生成节点上传参考图片"
           onChange={(event) => {
-            const file = event.target.files?.[0]
+            const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
             const nodeId = generationReferenceNodeIdRef.current
-            if (file && nodeId && file.type.startsWith('image/')) {
-              const reader = new FileReader()
-              reader.onload = () => {
+            if (files.length && nodeId) {
+              void Promise.all(files.map((file) => new Promise<ImageReference>((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve({
+                  id: `manual-${crypto.randomUUID()}`,
+                  name: file.name,
+                  url: String(reader.result),
+                })
+                reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+                reader.readAsDataURL(file)
+              }))).then((references) => {
                 setNodes((current) => current.map((node) => node.id === nodeId ? {
                   ...node,
                   data: {
                     ...node.data,
-                    referenceImageUrl: String(reader.result),
-                    referenceImageName: file.name,
+                    referenceImages: [...(node.data.referenceImages ?? []), ...references],
                   },
                 } : node))
-                setToastMessage('图片已放入图像节点')
-              }
-              reader.onerror = () => setToastMessage('图片读取失败')
-              reader.readAsDataURL(file)
+                setToastMessage(`已添加 ${references.length} 张参考图`)
+              }).catch(() => setToastMessage('图片读取失败'))
             }
             event.target.value = ''
             generationReferenceNodeIdRef.current = null
@@ -3858,7 +3992,7 @@ function App() {
               exit={{ opacity: 0 }}
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <button type="button" onClick={() => setPreviewImageNodeId(activeImageNode.id)}>
+              <button type="button" onClick={() => openNodeImagePreview(activeImageNode.id)}>
                 <Maximize2 size={14} />
                 <span>放大查看</span>
               </button>
@@ -3891,7 +4025,7 @@ function App() {
             >
               {activeGenerationNode.data.imageUrl ? (
                 <>
-                  <button type="button" onClick={() => setPreviewImageNodeId(activeGenerationNode.id)}>
+                  <button type="button" onClick={() => openNodeImagePreview(activeGenerationNode.id)}>
                     <Maximize2 size={14} />
                     <span>放大查看</span>
                   </button>
@@ -3951,37 +4085,69 @@ function App() {
         <AnimatePresence>
           {previewImage && (
             <motion.div
-              className="image-preview-backdrop"
+              className={`image-preview-backdrop ${previewImageItems.length > 1 ? 'has-multiple' : ''}`}
+              role="dialog"
+              aria-modal="true"
+              aria-label="图片预览画廊"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onWheel={onPreviewImageWheel}
               onPointerDown={() => {
                 setPreviewImageNodeId(null)
-                setPreviewImageSource(null)
               }}
             >
-              <button
-                type="button"
-                className="image-preview-close"
-                aria-label="关闭图片预览"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => {
-                  setPreviewImageNodeId(null)
-                  setPreviewImageSource(null)
-                }}
-              >
-                <X size={27} strokeWidth={1.5} />
-              </button>
-              <motion.img
-                className="image-preview-content"
-                src={previewImage.url}
-                alt={previewImage.alt}
-                draggable={false}
-                initial={{ opacity: 0, scale: 0.96, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.97, y: 8 }}
-                onPointerDown={(event) => event.stopPropagation()}
-              />
+              <header className="image-preview-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+                <span>{safePreviewImageIndex + 1} / {previewImageItems.length}</span>
+                <div>
+                  <button type="button" aria-label="关闭图片预览" onClick={() => setPreviewImageNodeId(null)}>
+                    <X size={21} strokeWidth={1.6} />
+                  </button>
+                </div>
+              </header>
+
+              <div className="image-preview-stage">
+                {previewImageItems.length > 1 && (
+                  <button type="button" className="image-preview-arrow is-previous" aria-label="上一张" onPointerDown={(event) => event.stopPropagation()} onClick={() => movePreviewImage(-1)}><ChevronLeft size={32} /></button>
+                )}
+                <AnimatePresence initial={false} mode="wait" custom={previewImageDirection}>
+                  <motion.figure
+                    key={previewImage.id}
+                    className="image-preview-figure"
+                    custom={previewImageDirection}
+                    initial={{ opacity: 0, x: previewImageDirection * 64, scale: .985 }}
+                    animate={{ opacity: 1, x: 0, scale: 1 }}
+                    exit={{ opacity: 0, x: previewImageDirection * -48, scale: .99 }}
+                    transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <img className="image-preview-content" src={previewImage.url} alt={previewImage.alt} draggable={false} />
+                    <figcaption title={previewImage.fileName}>{previewImage.fileName}</figcaption>
+                  </motion.figure>
+                </AnimatePresence>
+                {previewImageItems.length > 1 && (
+                  <button type="button" className="image-preview-arrow is-next" aria-label="下一张" onPointerDown={(event) => event.stopPropagation()} onClick={() => movePreviewImage(1)}><ChevronRight size={32} /></button>
+                )}
+              </div>
+
+              {previewImageItems.length > 1 && (
+                <div className="image-preview-filmstrip" onPointerDown={(event) => event.stopPropagation()}>
+                  {previewImageItems.map((item, index) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className={index === safePreviewImageIndex ? 'is-active' : ''}
+                      aria-label={`查看第 ${index + 1} 张`}
+                      aria-current={index === safePreviewImageIndex ? 'true' : undefined}
+                      onClick={() => {
+                        setPreviewImageDirection(index > safePreviewImageIndex ? 1 : -1)
+                        setPreviewImageIndex(index)
+                      }}
+                    ><img src={item.url} alt="" draggable={false} /></button>
+                  ))}
+                </div>
+              )}
+              {previewImageItems.length > 1 && <span className="image-preview-hint">滚轮或方向键切换</span>}
             </motion.div>
           )}
         </AnimatePresence>
@@ -4005,25 +4171,13 @@ function App() {
                   <span>{libraryPreviewIndex + 1} / {libraryPreviewItems.length}</span>
                 </div>
                 <div>
-                  <button
-                    type="button"
-                    title="下载当前图片"
-                    onClick={() => {
-                      if (libraryPreview.kind === 'asset') {
-                        const asset = savedAssets.find((item) => item.id === libraryPreview.id)
-                        if (asset) void downloadAsset(asset)
-                      } else {
-                        void downloadImageUrl(activeLibraryPreview.url, activeLibraryPreview.fileName)
-                      }
-                    }}
-                  ><Download size={18} /></button>
                   <button type="button" aria-label="关闭画廊" onClick={() => setLibraryPreview(null)}><X size={20} /></button>
                 </div>
               </header>
 
-              <div className="library-gallery-stage" onPointerDown={(event) => event.stopPropagation()}>
+              <div className="library-gallery-stage">
                 {libraryPreviewItems.length > 1 && (
-                  <button type="button" className="library-gallery-arrow is-previous" aria-label="上一张" onClick={() => moveLibraryPreview(-1)}><ChevronLeft size={30} /></button>
+                  <button type="button" className="library-gallery-arrow is-previous" aria-label="上一张" onPointerDown={(event) => event.stopPropagation()} onClick={() => moveLibraryPreview(-1)}><ChevronLeft size={30} /></button>
                 )}
                 <AnimatePresence initial={false} mode="wait" custom={libraryPreviewDirection}>
                   <motion.figure
@@ -4034,13 +4188,14 @@ function App() {
                     animate={{ opacity: 1, x: 0, scale: 1 }}
                     exit={{ opacity: 0, x: libraryPreviewDirection * -52, scale: .99 }}
                     transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}
+                    onPointerDown={(event) => event.stopPropagation()}
                   >
                     <img src={activeLibraryPreview.url} alt={activeLibraryPreview.alt} draggable={false} />
                     <figcaption title={activeLibraryPreview.fileName}>{activeLibraryPreview.fileName}</figcaption>
                   </motion.figure>
                 </AnimatePresence>
                 {libraryPreviewItems.length > 1 && (
-                  <button type="button" className="library-gallery-arrow is-next" aria-label="下一张" onClick={() => moveLibraryPreview(1)}><ChevronRight size={30} /></button>
+                  <button type="button" className="library-gallery-arrow is-next" aria-label="下一张" onPointerDown={(event) => event.stopPropagation()} onClick={() => moveLibraryPreview(1)}><ChevronRight size={30} /></button>
                 )}
               </div>
 
@@ -4155,13 +4310,22 @@ function App() {
                       <button
                         type="button"
                         key={reference.id}
-                        className={`image-reference-thumbnail ${activeGenerationNode.data.body.includes(reference.mention) ? 'is-mentioned' : ''}`}
-                        title={`${reference.name} · 点击插入 ${reference.mention}`}
-                        onClick={() => selectImageMention(reference)}
+                        className={`image-reference-thumbnail ${reference.selected || activeGenerationNode.data.body.includes(reference.mention) ? 'is-mentioned' : ''} ${reference.source === 'current' && !reference.selected ? 'is-disabled' : ''}`}
+                        title={reference.source === 'current' && !reference.selected ? '点击重新启用当前主图参考' : `${reference.name} · 点击插入 ${reference.mention}`}
+                        onClick={() => {
+                          if (reference.source === 'current' && !reference.selected) {
+                            setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
+                              ...node,
+                              data: { ...node.data, useCurrentImageAsReference: true },
+                            } : node))
+                            return
+                          }
+                          selectImageMention(reference)
+                        }}
                       >
                         <img src={reference.url} alt={reference.name} />
-                        <span className="image-reference-name">{reference.name}</span>
-                        {(reference.source === 'manual' || reference.source === 'connection') && (
+                        <span className="image-reference-name">{reference.name}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
+                        {(reference.source === 'manual' || reference.source === 'connection' || reference.source === 'current') && (
                           <span
                             className="reference-remove"
                             role="button"
@@ -4175,6 +4339,15 @@ function App() {
                       </button>
                     ))}
                   </div>
+                  <button
+                    type="button"
+                    className="add-image-reference-button"
+                    title="上传参考图片"
+                    onClick={() => {
+                      generationReferenceNodeIdRef.current = activeGenerationNode.id
+                      generationReferenceInputRef.current?.click()
+                    }}
+                  ><Upload size={15} /></button>
                   <button
                     type="button"
                     className="add-image-reference-button"
@@ -4869,7 +5042,22 @@ function App() {
 
       <AnimatePresence>
         {generationHistoryOpen && (
-          <motion.div className="asset-library-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setGenerationHistoryOpen(false)}>
+          <motion.div
+            className="asset-library-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setGenerationHistoryOpen(false)}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes('application/x-disy-history')) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+            }}
+            onDrop={(event) => {
+              if (!event.dataTransfer.types.includes('application/x-disy-history')) return
+              event.preventDefault()
+            }}
+          >
             <motion.section
               role="dialog"
               aria-modal="true"
@@ -4911,8 +5099,46 @@ function App() {
                         <div
                           className={`asset-library-card ${selectedHistoryIds.includes(record.id) ? 'is-selected' : ''}`}
                           key={record.id}
-                          title={record.prompt}
+                          draggable
+                          title={`${record.prompt} · 拖出窗口可加入画布`}
                           onDoubleClick={() => setLibraryPreview({ kind: 'history', id: record.id })}
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('application/x-disy-history', record.id)
+                            event.dataTransfer.effectAllowed = 'copy'
+                            const transparentPreview = document.createElement('canvas')
+                            transparentPreview.width = 1
+                            transparentPreview.height = 1
+                            transparentPreview.style.position = 'fixed'
+                            transparentPreview.style.left = '-10px'
+                            transparentPreview.style.top = '-10px'
+                            transparentPreview.style.pointerEvents = 'none'
+                            document.body.appendChild(transparentPreview)
+                            event.dataTransfer.setDragImage(transparentPreview, 0, 0)
+                            window.requestAnimationFrame(() => transparentPreview.remove())
+                          }}
+                          onDragEnd={(event) => {
+                            const modal = document.querySelector<HTMLElement>('.generation-history-modal')
+                            if (!modal || event.clientX <= 0 || event.clientY <= 0) return
+                            const rect = modal.getBoundingClientRect()
+                            const droppedOutside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom
+                            if (!droppedOutside) return
+                            const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                            const stamp = Date.now()
+                            setNodes((current) => [...current, {
+                              id: `history-image-${stamp}-${crypto.randomUUID()}`,
+                              type: 'disy',
+                              position: { x: flowPosition.x - 130, y: flowPosition.y - 110 },
+                              data: {
+                                kind: 'upload',
+                                title: record.fileName || '生成历史图片',
+                                body: record.prompt || '',
+                                imageUrl: record.imageUrl,
+                                fileName: record.fileName || `disy-history-${stamp}.png`,
+                              },
+                            }])
+                            setGenerationHistoryOpen(false)
+                            setToastMessage('历史图片已加入画布')
+                          }}
                         >
                           <div className="asset-library-thumbnail">
                             <img src={record.imageUrl} alt={record.prompt} draggable={false} />
