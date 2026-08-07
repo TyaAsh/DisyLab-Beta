@@ -1003,7 +1003,8 @@ button { border: 0; cursor: pointer; }
   cursor: text;
   font: 500 13px/1.75 'Manrope', 'PingFang SC', sans-serif;
 }
-.atomic-prompt-editor:empty::before { content: attr(data-placeholder); color: color-mix(in srgb, var(--muted) 72%, transparent); pointer-events: none; }
+.atomic-prompt-editor:empty::before,
+.atomic-prompt-editor.is-empty::before { content: attr(data-placeholder); color: color-mix(in srgb, var(--muted) 72%, transparent); pointer-events: none; }
 .atomic-prompt-editor:focus { outline: none; }
 .inline-image-reference {
   max-width: 190px;

@@ -527,7 +527,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
   return (
     <div
       ref={rootRef}
-      className="atomic-prompt-editor"
+      className={`atomic-prompt-editor ${value.trim() ? '' : 'is-empty'}`}
       contentEditable
       suppressContentEditableWarning
       role="textbox"
@@ -542,6 +542,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         const nextValue = readAtomicPrompt(event.currentTarget)
         const cursor = getAtomicPromptCaret(event.currentTarget)
         lastEmittedValueRef.current = nextValue
+        event.currentTarget.classList.toggle('is-empty', !nextValue.trim())
         onChange(nextValue, cursor)
       }}
       onBeforeInput={(event) => {
@@ -556,6 +557,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         const nextValue = readAtomicPrompt(event.currentTarget)
         const cursor = getAtomicPromptCaret(event.currentTarget)
         lastEmittedValueRef.current = nextValue
+        event.currentTarget.classList.toggle('is-empty', !nextValue.trim())
         onChange(nextValue, cursor)
       }}
       onClick={(event) => {
