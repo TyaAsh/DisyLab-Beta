@@ -1165,6 +1165,7 @@ function App() {
   const galleryWheelLockRef = useRef(false)
   const previewWheelLockRef = useRef(false)
   const latestSelectedNodeIdsRef = useRef<string[]>([])
+  const latestSelectedEdgeIdsRef = useRef<string[]>([])
   const { fitView: fitCanvas, screenToFlowPosition, zoomTo } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
@@ -1832,11 +1833,19 @@ function App() {
       const target = event.target
       if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
       const selectedIds = latestSelectedNodeIdsRef.current
-      if (!selectedIds.length) return
+      const selectedEdgeIds = latestSelectedEdgeIdsRef.current
+      if (!selectedIds.length && !selectedEdgeIds.length) return
       event.preventDefault()
       const selectedIdSet = new Set(selectedIds)
+      const selectedEdgeIdSet = new Set(selectedEdgeIds)
       setNodes((current) => current.filter((node) => !selectedIdSet.has(node.id)))
-      setEdges((current) => current.filter((edge) => !selectedIdSet.has(edge.source) && !selectedIdSet.has(edge.target)))
+      setEdges((current) => current.filter((edge) => (
+        !selectedEdgeIdSet.has(edge.id)
+        && !selectedIdSet.has(edge.source)
+        && !selectedIdSet.has(edge.target)
+      )))
+      latestSelectedNodeIdsRef.current = []
+      latestSelectedEdgeIdsRef.current = []
       setActiveEditorNodeId(null)
       setActiveImageNodeId(null)
       setActiveGenerationNodeId(null)
@@ -2704,9 +2713,10 @@ function App() {
     ? nodes.find((node) => node.id === selectedNodeIds[0] && node.data.kind === 'group')
     : undefined
 
-  const handleSelectionChange = useCallback(({ nodes: selectedNodes }: { nodes: CanvasNode[] }) => {
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: CanvasNode[]; edges: Edge[] }) => {
     const ids = selectedNodes.map((node) => node.id)
     latestSelectedNodeIdsRef.current = ids
+    latestSelectedEdgeIdsRef.current = selectedEdges.map((edge) => edge.id)
     setSelectedNodeIds(ids)
     if (!ids.length) setMarqueeSelectionCommitted(false)
     if (ids.length > 1) {
