@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.netlify/
+.env
+.env.*
+!.env.example
+*.local
+*.log
+.DS_Store
+Thumbs.db

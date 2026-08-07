@@ -1,0 +1,63 @@
+/*
+ * Disy 界面自定义层
+ * -----------------
+ * 这个文件最后加载，适合修改颜色、字体、圆角和局部尺寸。
+ * 功能布局与交互逻辑仍保留在 App.tsx / styles.css 中。
+ * 修改前建议保留一份副本，详细说明见：docs/Disy-样式与文案修改指南.md
+ */
+
+:root {
+  /* 全局字体。中文字体放在后面作为回退。 */
+  --disy-font-family: 'Manrope', 'DM Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* 品牌与状态色 */
+  --accent: #ff694b;
+  --accent-soft: rgba(255, 105, 75, .14);
+  --success: #70d394;
+
+  /* 画布与文字 */
+  --canvas: #070908;
+  --surface: rgba(29, 31, 30, .88);
+  --surface-strong: #1c1f1d;
+  --ink: #f3f4f0;
+  --muted: #989d97;
+  --line: rgba(245, 247, 242, .105);
+  --canvas-dot: rgba(227, 232, 224, .17);
+}
+
+html,
+body,
+button,
+input,
+textarea,
+select {
+  font-family: var(--disy-font-family);
+}
+
+/* 空画布主文案 */
+.empty-canvas-heading {
+  font-size: 13px;
+}
+
+/*
+ * 常用可选覆盖示例（删除注释即可启用）
+ *
+ * 1. 放大空画布文案：
+ * .empty-canvas-heading { font-size: 16px; font-weight: 650; }
+ *
+ * 2. 调整节点圆角：
+ * .disy-node { border-radius: 20px; }
+ *
+ * 3. 调整弹窗圆角：
+ * .asset-library-modal,
+ * .project-modal,
+ * .api-modal { border-radius: 26px; }
+ *
+ * 4. 使用本地字体：
+ * @font-face {
+ *   font-family: 'MyBrandFont';
+ *   src: url('/fonts/my-brand-font.woff2') format('woff2');
+ *   font-display: swap;
+ * }
+ * :root { --disy-font-family: 'MyBrandFont', 'PingFang SC', sans-serif; }
+ */
