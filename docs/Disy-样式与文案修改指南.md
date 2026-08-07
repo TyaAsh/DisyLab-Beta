@@ -12,6 +12,8 @@
 
 `src/theme-custom.css` 在 `src/styles.css` 之后加载，所以相同选择器会以自定义文件为准。这样升级功能时，更容易保留你的视觉修改。
 
+当前界面已经在该文件中设置统一可读性基线：普通文字不小于 12px，标题不超过 16px。若增加新组件，也应继续遵守这个范围。
+
 ## 2. 修改字体
 
 ### 2.1 直接使用现有字体
@@ -135,7 +137,7 @@ rg -n "要查找的文字" src
 
 ```css
 .empty-canvas-heading {
-  font-size: 16px;
+  font-size: 16px !important;
   font-weight: 650;
   letter-spacing: .04em;
 }
@@ -144,6 +146,8 @@ rg -n "要查找的文字" src
   border-radius: 26px;
 }
 ```
+
+字号基线为了防止旧组件回落到 7–11px，使用了 `!important`。如果自行覆盖字号，也需要加 `!important`，并保持在 12–16px 范围内；颜色、圆角、间距等其他属性不需要。
 
 ## 6. 哪些修改应交给 Codex
 

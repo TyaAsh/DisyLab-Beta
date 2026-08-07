@@ -34,16 +34,86 @@ select {
   font-family: var(--disy-font-family);
 }
 
+/*
+ * 全局可读性基线
+ * 所有可见界面文字保持在 12–16px。两个 font-size: 0 的按钮是纯图标控件，
+ * 必须排除，否则隐藏的字符会再次显示。
+ */
+.disy-shell :where(*:not(svg):not(path):not(.atomic-reference-remove):not(.api-chip)) {
+  font-size: 12px !important;
+}
+
+.disy-shell .api-chip {
+  font-size: 12px !important;
+}
+
+.disy-shell :where(input, textarea, select, .node-body, .modal-copy, .output-record-prompt) {
+  font-size: 13px !important;
+}
+
+.disy-shell :where(h1, h2, h3, .modal-heading h2, .api-manager-heading h2, .asset-library-header h2, .output-history-header h2) {
+  font-size: 16px !important;
+}
+
+.disy-shell :where(.brand-word, .project-settings-header strong, .node-heading, .empty-canvas-heading) {
+  font-size: 14px !important;
+}
+
+.disy-shell :where(small, time, code, kbd, figcaption) {
+  line-height: 1.35;
+}
+
 /* 空画布主文案 */
 .empty-canvas-heading {
-  font-size: 13px;
+  font-size: 14px;
+}
+
+.empty-canvas-heading > button,
+.empty-canvas-actions button {
+  min-height: 40px;
+  padding-inline: 14px;
+}
+
+/* 原本为小字号设计的紧凑控件，随 12px 基线同步增加高度。 */
+.settings-suffix-heading button,
+.canvas-reference-picker-pill button,
+.variant-selected,
+.library-batch-actions button {
+  min-height: 30px;
+}
+
+.image-reference-badge,
+.variant-index,
+.output-kind-badge,
+.output-record-meta span {
+  min-height: 26px;
+}
+
+.output-history-pill small,
+.output-history-pill em,
+.asset-count-badge,
+.api-model-tabs span {
+  min-width: 22px;
+  min-height: 22px;
+  height: auto;
+}
+
+.tool-rail button[data-tooltip]::after,
+.zoom-slider-wrap::after {
+  font-size: 12px !important;
+}
+
+@media (max-width: 720px) {
+  .disy-shell .api-chip {
+    font-size: 0 !important;
+  }
 }
 
 /*
  * 常用可选覆盖示例（删除注释即可启用）
  *
  * 1. 放大空画布文案：
- * .empty-canvas-heading { font-size: 16px; font-weight: 650; }
+ * .empty-canvas-heading { font-size: 16px !important; font-weight: 650; }
  *
  * 2. 调整节点圆角：
  * .disy-node { border-radius: 20px; }

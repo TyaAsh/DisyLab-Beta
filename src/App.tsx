@@ -3225,6 +3225,12 @@ function App() {
           }}
           onNodeContextMenu={openNodeContextMenu}
           onPaneContextMenu={openNodeMenu}
+          onDoubleClick={(event) => {
+            const target = event.target as HTMLElement
+            if (!target.classList.contains('react-flow__pane')) return
+            event.preventDefault()
+            openNodeMenu(event)
+          }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes('application/x-disy-asset') || Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) {
               event.preventDefault()
@@ -3250,10 +3256,6 @@ function App() {
           onPaneClick={(event) => {
             if (canvasReferencePickerNodeId) {
               setCanvasReferencePickerNodeId(null)
-              return
-            }
-            if (event.detail === 2) {
-              openNodeMenu(event)
               return
             }
             setMarqueeSelectionCommitted(false)
