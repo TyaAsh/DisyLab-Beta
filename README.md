@@ -26,13 +26,13 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-ff694b" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
 </p>
 
-> 当前版本为公开体验版。画布数据主要保存在访问者自己的浏览器中，生成能力需要使用者配置兼容的 API 连接。
+> 当前版本为 v0.2.0。项目、画布、资产、历史和 Agent 会话默认保存在本机浏览器中，生成能力需要使用者配置兼容的 API 连接。
 
 ## 在线体验
 
@@ -72,18 +72,23 @@ Disy 希望把这些内容重新放回一张可以持续生长的画布：
 | 生成与输出历史 | 记录生成图片、模型、提示词、请求状态、错误详情和请求 ID。 |
 | 本地优先 | IndexedDB 保存画布项目，localStorage 保存资产与历史，API Key 仅存于当前浏览器会话。 |
 | 项目级创作设置 | 支持风格参考图、全局提示词后缀、画布名称和本地保存状态。 |
+| 多项目与多画布 | 一个项目可创建、切换、重命名、复制和删除多个画布；项目之间的数据和生成历史相互隔离。 |
+| Agent 对话工作台 | 左侧 Disy Logo 打开右侧 Agent；支持多轮对话、会话新建/切换/删除、独立选择对话模型和生图模型。 |
+| Agent 参考图 | 在对话框中使用 `@` 或“从画布选择”引用已生成/上传图片，引用显示在输入框内并保持光标位置。 |
+| Agent 确认生图 | Agent 先输出可编辑的图像方案，用户在对话框确认后才创建待生成节点并发起一次生图请求。 |
+| 完整项目包 | 以 `.disy` 导出/导入项目、多个画布、资产、文件夹、生成历史、输出历史和 Agent 会话；导出包不包含 API Key。 |
 
-更完整的功能边界和版本信息见 [Disy v0.1.0 版本功能与技术说明](docs/Disy-v0.1.0-版本功能与技术说明.md)。
+更完整的功能边界和版本信息见 [版本功能与技术说明](docs/Disy-v0.1.0-版本功能与技术说明.md)。
 
 ## 当前版本边界
 
-Disy v0.1.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
+Disy v0.2.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 
 - 账号注册、登录和用户权限。
 - 云端项目同步与多人实时协作。
 - 服务端 API Key 托管和公共生成额度。
 - 完整的视频、音频生成工作流。
-- 可跨设备同步的资产库。
+- 可跨设备同步的资产库和 Agent 会话。
 
 当前前端会直接请求使用者配置的模型服务，因此目标服务必须允许浏览器跨域访问。若要向大量用户提供共享生成额度，需要先增加服务端代理、身份校验、限流、费用控制和内容安全机制。
 
@@ -158,7 +163,9 @@ npm run preview
 src/
 ├─ App.tsx             # 画布、节点、资产、历史和设置主界面
 ├─ imageApi.ts         # 模型、文本生成、图像生成与错误处理
-├─ localDb.ts          # IndexedDB 项目存储
+├─ localDb.ts          # IndexedDB 项目、画布、会话与工作区存储
+├─ projectPackage.ts   # .disy 项目包导入导出与校验
+├─ AgentPanel.tsx      # 右侧 Agent 对话、引用和确认生图面板
 ├─ store.ts            # Zustand 状态与 API 配置
 ├─ styles.css          # 核心样式
 └─ theme-custom.css    # 品牌、字体和可读性覆盖层
@@ -176,11 +183,10 @@ netlify.toml           # Netlify 构建与 SPA 回退配置
 
 后续版本计划加入：
 
-- 项目管理：支持新建项目，以及上传、导入已有项目文件。
+- 云端项目同步、账号和多人协作。
 - 节点搜索和快速定位。
 - 风格化、分镜、人设图和场景设定图预设。
 - Skill 添加与创作工作流扩展。
-- Agent 对话式生图。
 - 视频生成、首尾帧和视频资产管理。
 - 桌面端应用，增强本地文件访问、离线资产管理与系统级创作体验。
 - 打通 Web 端与桌面端的项目导入、导出和双向传递。
@@ -209,12 +215,6 @@ npx netlify deploy --prod --dir=dist
 - 浏览器和系统版本。
 - 问题截图或录屏。
 - 使用的模型名称；请勿附带 API Key。
-
-## 独立实现说明
-
-Disy 是独立设计与实现的 Web 项目。项目在产品形态和公开技术选型研究过程中参考过包括 [AI Canvas Tauri](https://github.com/Tenney95/AI-Canvas-tauri) 在内的同类创作工具，但不复制其源代码、品牌、Logo、界面素材或受限文案。
-
-如需直接复用第三方项目的代码或资源，请先检查并遵守对应仓库的许可证和商业授权要求。
 
 ## License
 
