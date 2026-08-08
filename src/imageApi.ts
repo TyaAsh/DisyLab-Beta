@@ -17,6 +17,10 @@ export type GeneratedImage = {
   revisedPrompt?: string
 }
 
+export type TextGenerationOptions = {
+  referenceImages?: string[]
+}
+
 const REFERENCE_IMAGE_TARGET_BYTES = 1_800_000
 const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
 
@@ -127,8 +131,33 @@ export class GenerationRequestError extends Error {
   }
 }
 
+function normalizedApiBaseUrl(baseUrl: string) {
+  const trimmed = baseUrl.trim().replace(/\/$/, '')
+  if (/\.apifox\.cn(?:\/|$)/i.test(trimmed)) {
+    throw new Error('这里填写的是 Apifox 文档地址。GRS AI 请使用 https://grsaiapi.com/v1 或 https://grsai.dakka.com.cn/v1')
+  }
+  if (/^https:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)$/i.test(trimmed)) return `${trimmed}/v1`
+  return trimmed
+}
+
 function endpoint(baseUrl: string, path: string) {
-  return `${baseUrl.trim().replace(/\/$/, '')}/${path.replace(/^\//, '')}`
+  return `${normalizedApiBaseUrl(baseUrl)}/${path.replace(/^\//, '')}`
+}
+
+function grsaiFallbackModels(baseUrl: string): RemoteModel[] | null {
+  if (!/^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(baseUrl)) return null
+  return [
+    { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', capability: 'text' },
+    { id: 'gpt-5.4', name: 'GPT 5.4', capability: 'text' },
+    { id: 'gpt-5.5', name: 'GPT 5.5', capability: 'text' },
+    { id: 'nano-banana-pro', name: 'Nano Banana Pro', capability: 'image' },
+    { id: 'nano-banana-2-lite', name: 'Nano Banana 2 Lite', capability: 'image' },
+    { id: 'nano-banana-2', name: 'Nano Banana 2', capability: 'image' },
+    { id: 'nano-banana-fast', name: 'Nano Banana Fast', capability: 'image' },
+    { id: 'gpt-image-2-vip', name: 'GPT Image 2 VIP', capability: 'image' },
+    { id: 'gpt-image-2', name: 'GPT Image 2', capability: 'image' },
+    { id: 'veo3', name: 'Veo 3', capability: 'video' },
+  ]
 }
 
 async function readError(response: Response) {
@@ -196,10 +225,20 @@ function readDeclaredCapability(item: Record<string, unknown>, modelId: string):
 }
 
 export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'>): Promise<RemoteModel[]> {
-  const response = await fetch(endpoint(settings.baseUrl, 'models'), {
-    headers: { Authorization: `Bearer ${settings.apiKey}` },
-  })
-  if (!response.ok) throw new Error(await readError(response))
+  const fallbackModels = grsaiFallbackModels(normalizedApiBaseUrl(settings.baseUrl))
+  let response: Response
+  try {
+    response = await fetch(endpoint(settings.baseUrl, 'models'), {
+      headers: { Authorization: `Bearer ${settings.apiKey}` },
+    })
+  } catch (error) {
+    if (fallbackModels) return fallbackModels
+    throw error
+  }
+  if (!response.ok) {
+    if (fallbackModels) return fallbackModels
+    throw new Error(await readError(response))
+  }
   const payload = await response.json() as unknown
   const container = payload && typeof payload === 'object' ? payload as { data?: unknown[]; models?: unknown[] } : {}
   const rows = Array.isArray(payload) ? payload : container.data ?? container.models ?? []
@@ -213,7 +252,7 @@ export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'base
       return { id, name, capability: readDeclaredCapability(item, id) }
     })
     .filter((model) => model.id)
-  return Array.from(new Map(models.map((model) => [model.id, model])).values())
+  return Array.from(new Map([...models, ...(fallbackModels ?? [])].map((model) => [model.id, model])).values())
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 
@@ -247,11 +286,28 @@ export async function generateRemoteImages(
   if (options.detail) body.quality = options.detail
   if (!/gpt-image/i.test(settings.model)) body.response_format = 'url'
   const referenceImages = options.referenceImages?.filter(Boolean) ?? []
+  const useGrsaiNanoBanana = /^nano-banana(?:-|$)/i.test(settings.model)
   const useStandardImageEdit = referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
 
   let response: Response
   try {
-    if (useStandardImageEdit) {
+    if (useGrsaiNanoBanana) {
+      response = await fetch(endpoint(settings.baseUrl, 'api/generate'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          prompt: options.prompt,
+          images: referenceImages,
+          aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
+          imageSize: options.resolution ?? '1K',
+          replyType: 'json',
+        }),
+      })
+    } else if (useStandardImageEdit) {
       const form = new FormData()
       form.append('model', settings.model)
       form.append('prompt', options.prompt)
@@ -389,7 +445,21 @@ export async function generateRemoteImages(
   return rows
 }
 
-export async function generateRemoteText(settings: ApiRequestSettings, prompt: string) {
+export async function generateRemoteText(
+  settings: ApiRequestSettings,
+  prompt: string,
+  options: TextGenerationOptions = {},
+) {
+  const referenceImages = options.referenceImages?.map((source) => source.trim()).filter(Boolean) ?? []
+  const userContent = referenceImages.length
+    ? [
+        { type: 'text' as const, text: prompt },
+        ...referenceImages.map((url) => ({
+          type: 'image_url' as const,
+          image_url: { url },
+        })),
+      ]
+    : prompt
   let response: Response
   try {
     response = await fetch(endpoint(settings.baseUrl, 'chat/completions'), {
@@ -400,7 +470,7 @@ export async function generateRemoteText(settings: ApiRequestSettings, prompt: s
       },
       body: JSON.stringify({
         model: settings.model,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [{ role: 'user', content: userContent }],
         stream: false,
       }),
     })

@@ -61,15 +61,18 @@ import {
   useUpdateNodeInternals,
   type Connection,
   type Edge,
+  type EdgeChange,
   type EdgeProps,
   type Node,
   type NodeProps,
   type OnConnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useDisyStore, type ApiConnection, type ApiModelConfig, type ModelCapability } from './store'
-import { loadLocalProject, saveLocalProject } from './localDb'
+import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
+import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, replaceWorkspace, saveAgentSession, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationErrorCategory } from './imageApi'
+import { AgentPanel } from './AgentPanel'
+import { parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 type NodeKind = 'text' | 'image' | 'upload' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
@@ -109,11 +112,25 @@ type CanvasNode = Node<{
   groupColor?: string
 }>
 
-type ActiveImageReference = ImageReference & {
+type ActiveImageReference = Omit<ImageReference, 'url'> & {
+  kind?: never
+  url?: string
   source: 'current' | 'connection' | 'manual'
   sourceNodeId?: string
   selected: boolean
   mention: string
+}
+
+type ActiveNodeReference = {
+  id: string
+  source: 'connection'
+  sourceNodeId: string
+  selected: boolean
+  name: string
+  mention: string
+  kind: 'text' | 'image'
+  text?: string
+  url?: string
 }
 
 const IMAGE_ASPECT_OPTIONS: Array<{ value: ImageAspectRatio; label: string; width: number; height: number }> = [
@@ -154,7 +171,7 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
   }
   return {
     width: Math.round(contentWidth),
-    height: Math.round(contentHeight + 92),
+    height: Math.round(contentHeight),
   }
 }
 
@@ -201,6 +218,7 @@ type GenerationRecord = {
   model: string
   imageUrl: string
   fileName: string
+  projectId?: string
 }
 
 type LibraryPreview = {
@@ -223,6 +241,7 @@ type OutputHistoryRecord = {
   connectionName: string
   requestedCount: number
   outputCount: number
+  projectId?: string
   preview?: string
   error?: {
     category: GenerationErrorCategory
@@ -337,16 +356,28 @@ function getReferenceMention(label: string) {
   return `@[${label}]`
 }
 
+function getConnectedReferenceLabel(node: CanvasNode) {
+  if (node.data.kind === 'text') return '文本'
+  return node.data.fileName || node.data.title || '图像'
+}
+
+function getConnectedReferenceMention(node: CanvasNode) {
+  return `@[node:${node.id}]`
+}
+
 type AtomicPromptEditorHandle = {
   focusAt: (offset: number) => void
+  getCaret: () => number
 }
 
 type AtomicPromptEditorProps = {
   value: string
-  references: ActiveImageReference[]
+  references: Array<ActiveImageReference | ActiveNodeReference>
   onChange: (value: string, cursor: number) => void
   onRemoveToken: (start: number, end: number) => void
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void
+  ariaLabel?: string
+  placeholder?: string
 }
 
 function serializeAtomicPrompt(root: globalThis.Node): string {
@@ -455,11 +486,14 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
   onChange,
   onRemoveToken,
   onKeyDown,
+  ariaLabel = '图像提示词',
+  placeholder = '描述任何你想生成的图像，按 @ 引用参考素材',
 }, forwardedRef) {
   const rootRef = useRef<HTMLDivElement>(null)
   const lastEmittedValueRef = useRef(value)
   const composingRef = useRef(false)
-  const referenceSignature = references.map((reference) => `${reference.id}:${reference.mention}:${reference.url}`).join('|')
+  const lastCaretRef = useRef(value.length)
+  const referenceSignature = references.map((reference) => `${reference.id}:${reference.mention}:${reference.url ?? ''}:${'kind' in reference ? reference.kind : 'image'}`).join('|')
 
   const renderValue = useCallback(() => {
     const root = rootRef.current
@@ -480,12 +514,21 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         return
       }
       const token = document.createElement('span')
-      token.className = 'inline-image-reference atomic-image-reference'
+      token.className = `inline-image-reference atomic-image-reference ${'kind' in reference && reference.kind === 'text' ? 'is-text-reference' : ''}`
       token.contentEditable = 'false'
       token.dataset.atomicMention = reference.mention
-      const image = document.createElement('img')
-      image.src = reference.url
-      image.alt = ''
+      let visual: HTMLElement
+      if (reference.url) {
+        const image = document.createElement('img')
+        image.src = reference.url
+        image.alt = ''
+        visual = image
+      } else {
+        const glyph = document.createElement('span')
+        glyph.className = 'atomic-text-reference-glyph'
+        glyph.textContent = 'T'
+        visual = glyph
+      }
       const label = document.createElement('span')
       label.textContent = reference.name
       const remove = document.createElement('button')
@@ -496,7 +539,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
       remove.dataset.removeTokenStart = String(sourceOffset)
       remove.dataset.removeTokenEnd = String(sourceOffset + reference.mention.length)
       remove.setAttribute('aria-label', `移除引用 ${reference.name}`)
-      token.append(image, label, remove)
+      token.append(visual, label, remove)
       fragment.append(token)
       sourceOffset += reference.mention.length
     })
@@ -521,6 +564,10 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
       if (!root) return
       root.focus()
       setAtomicPromptCaret(root, offset)
+      lastCaretRef.current = offset
+    },
+    getCaret() {
+      return lastCaretRef.current
     },
   }), [])
 
@@ -532,18 +579,24 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
       suppressContentEditableWarning
       role="textbox"
       aria-multiline="true"
-      aria-label="图像提示词"
-      data-placeholder="描述任何你想生成的图像，按 @ 引用参考图"
+      aria-label={ariaLabel}
+      data-placeholder={placeholder}
       onCompositionStart={() => {
         composingRef.current = true
       }}
       onCompositionEnd={(event) => {
         composingRef.current = false
-        const nextValue = readAtomicPrompt(event.currentTarget)
-        const cursor = getAtomicPromptCaret(event.currentTarget)
-        lastEmittedValueRef.current = nextValue
-        event.currentTarget.classList.toggle('is-empty', !nextValue.trim())
-        onChange(nextValue, cursor)
+        const root = event.currentTarget
+        window.requestAnimationFrame(() => {
+          if (!root.isConnected || composingRef.current) return
+          const nextValue = readAtomicPrompt(root)
+          if (lastEmittedValueRef.current === nextValue) return
+          const cursor = getAtomicPromptCaret(root)
+          lastCaretRef.current = cursor
+          lastEmittedValueRef.current = nextValue
+          root.classList.toggle('is-empty', !nextValue.trim())
+          onChange(nextValue, cursor)
+        })
       }}
       onBeforeInput={(event) => {
         if (event.nativeEvent.isComposing || composingRef.current) return
@@ -556,11 +609,13 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         if (event.nativeEvent.isComposing || composingRef.current) return
         const nextValue = readAtomicPrompt(event.currentTarget)
         const cursor = getAtomicPromptCaret(event.currentTarget)
+        lastCaretRef.current = cursor
         lastEmittedValueRef.current = nextValue
         event.currentTarget.classList.toggle('is-empty', !nextValue.trim())
         onChange(nextValue, cursor)
       }}
       onClick={(event) => {
+        lastCaretRef.current = getAtomicPromptCaret(event.currentTarget)
         const removeButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-remove-token-start]')
         if (!removeButton) return
         event.preventDefault()
@@ -587,6 +642,11 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
           return
         }
         onKeyDown(event)
+      }}
+      onKeyUp={(event) => {
+        if (!event.nativeEvent.isComposing && !composingRef.current) {
+          lastCaretRef.current = getAtomicPromptCaret(event.currentTarget)
+        }
       }}
     />
   )
@@ -848,7 +908,9 @@ function NodeCard({
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
   const [inlineEditing, setInlineEditing] = useState(false)
+  const [inlineDraft, setInlineDraft] = useState(data.body)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const inlineComposingRef = useRef(false)
 
   useEffect(() => {
     if (!inlineEditing) return
@@ -856,6 +918,10 @@ function NodeCard({
     textarea?.focus()
     textarea?.setSelectionRange(textarea.value.length, textarea.value.length)
   }, [inlineEditing])
+
+  useEffect(() => {
+    if (!inlineEditing) setInlineDraft(data.body)
+  }, [data.body, inlineEditing])
 
   if (data.kind === 'group') {
     return (
@@ -1007,14 +1073,27 @@ function NodeCard({
           <textarea
             ref={inlineTextareaRef}
             className="inline-node-textarea nodrag nowheel"
-            value={data.body}
+            value={inlineDraft}
             maxLength={2000}
             placeholder="写下你的灵感…"
             aria-label="编辑文本节点内容"
             onPointerDown={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
-            onChange={(event) => updateNodeText(id, event.target.value)}
-            onBlur={() => setInlineEditing(false)}
+            onCompositionStart={() => { inlineComposingRef.current = true }}
+            onCompositionEnd={(event) => {
+              inlineComposingRef.current = false
+              setInlineDraft(event.currentTarget.value)
+              updateNodeText(id, event.currentTarget.value)
+            }}
+            onChange={(event) => {
+              const nextValue = event.target.value
+              setInlineDraft(nextValue)
+              if (!inlineComposingRef.current) updateNodeText(id, nextValue)
+            }}
+            onBlur={(event) => {
+              updateNodeText(id, event.currentTarget.value)
+              setInlineEditing(false)
+            }}
             onKeyDown={(event) => {
               event.stopPropagation()
               if (event.key === 'Escape' || (event.key === 'Enter' && (event.ctrlKey || event.metaKey))) {
@@ -1030,6 +1109,7 @@ function NodeCard({
             onWheel={(event) => event.stopPropagation()}
             onDoubleClick={(event) => {
               event.stopPropagation()
+              setInlineDraft(data.body)
               setInlineEditing(true)
             }}
           >
@@ -1038,7 +1118,7 @@ function NodeCard({
         )
       )}
 
-      {data.status && (
+      {data.status === '生成中' && (
         <div className="node-status">
           <span className="status-dot" />
           {data.status}
@@ -1065,7 +1145,7 @@ function App() {
   } = useDisyStore()
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+  const [edges, setEdges, applyEdgesChange] = useEdgesState(initialEdges)
   const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null)
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null)
   const [nodeClipboard, setNodeClipboard] = useState<NodeClipboard | null>(null)
@@ -1088,6 +1168,7 @@ function App() {
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
   const [generationHistorySearch, setGenerationHistorySearch] = useState('')
   const [historyThumbnailSize, setHistoryThumbnailSize] = useState(132)
+  const [imageGalleryThumbnailSize, setImageGalleryThumbnailSize] = useState(190)
   const [outputHistory, setOutputHistory] = useState<OutputHistoryRecord[]>(readOutputHistory)
   const [outputHistoryOpen, setOutputHistoryOpen] = useState(false)
   const [outputHistoryFilter, setOutputHistoryFilter] = useState<'all' | 'text' | 'image' | 'failed'>('all')
@@ -1102,6 +1183,11 @@ function App() {
   const [imageMentionQuery, setImageMentionQuery] = useState('')
   const [imageMentionIndex, setImageMentionIndex] = useState(0)
   const [imageMentionRange, setImageMentionRange] = useState<{ start: number; end: number } | null>(null)
+  const [textMentionOpen, setTextMentionOpen] = useState(false)
+  const [textMentionQuery, setTextMentionQuery] = useState('')
+  const [textMentionIndex, setTextMentionIndex] = useState(0)
+  const [textMentionRange, setTextMentionRange] = useState<{ start: number; end: number } | null>(null)
+  const [textReferencePreview, setTextReferencePreview] = useState<{ name: string; text: string; left: number; bottom: number } | null>(null)
   const [canvasReferencePickerNodeId, setCanvasReferencePickerNodeId] = useState<string | null>(null)
   const [generationLoading, setGenerationLoading] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -1126,6 +1212,25 @@ function App() {
   const [apiOpen, setApiOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectSearch, setProjectSearch] = useState('')
+  const [workspaceProjects, setWorkspaceProjects] = useState<WorkspaceProject[]>([])
+  const [workspaceCanvases, setWorkspaceCanvases] = useState<WorkspaceCanvas[]>([])
+  const [activeProjectId, setActiveProjectId] = useState(CURRENT_PROJECT_ID)
+  const [activeCanvasId, setActiveCanvasId] = useState(`${CURRENT_PROJECT_ID}--canvas-default`)
+  const [projectName, setProjectName] = useState('Disy Infinite')
+  const [canvasSwitcherOpen, setCanvasSwitcherOpen] = useState(false)
+  const [projectCardScale, setProjectCardScale] = useState(1)
+  const [canvasCardScale, setCanvasCardScale] = useState(1)
+  const [agentOpen, setAgentOpen] = useState(false)
+  const [agentBusy, setAgentBusy] = useState(false)
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([])
+  const [agentPlans, setAgentPlans] = useState<AgentImagePlan[]>([])
+  const [agentReferences, setAgentReferences] = useState<AgentImageReference[]>([])
+  const [agentPendingReference, setAgentPendingReference] = useState<AgentImageReference | null>(null)
+  const [agentConversationId, setAgentConversationId] = useState(() => `agent-session-${crypto.randomUUID()}`)
+  const [agentConversationOptions, setAgentConversationOptions] = useState<{ id: string; title: string; updatedAt: string }[]>([])
+  const [agentCanvasPicking, setAgentCanvasPicking] = useState(false)
+  const [agentTextModelKey, setAgentTextModelKey] = useState('')
+  const [agentImageModelKey, setAgentImageModelKey] = useState('')
   const [canvasName, setCanvasName] = useState('Disy Infinite')
   const [canvasNameDraft, setCanvasNameDraft] = useState('Disy Infinite')
   const [canvasNameEditing, setCanvasNameEditing] = useState(false)
@@ -1153,16 +1258,19 @@ function App() {
   const editorTextareaRef = useRef<HTMLTextAreaElement>(null)
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null)
   const imagePromptEditorRef = useRef<AtomicPromptEditorHandle>(null)
+  const textPromptEditorRef = useRef<AtomicPromptEditorHandle>(null)
   const overlayMeasureFrameRef = useRef<number | null>(null)
   const overlayMeasureTargetRef = useRef<string | null>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceNodeIdRef = useRef<string | null>(null)
   const assetUploadInputRef = useRef<HTMLInputElement>(null)
+  const workspaceImportInputRef = useRef<HTMLInputElement>(null)
   const uploadPositionRef = useRef<{ x: number; y: number } | null>(null)
   const pasteSequenceRef = useRef(0)
   const modelFetchRequestRef = useRef(0)
   const generationRequestLockRef = useRef(false)
+  const agentPlanLocksRef = useRef(new Set<string>())
   const aspectTweenRef = useRef<{ kill: () => void } | null>(null)
   const galleryWheelLockRef = useRef(false)
   const previewWheelLockRef = useRef(false)
@@ -1281,6 +1389,15 @@ function App() {
   }, [outputHistory])
 
   useEffect(() => {
+    try {
+      if (generationHistory.length) localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(generationHistory.filter((record) => !record.imageUrl.startsWith('data:'))))
+      else localStorage.removeItem(GENERATION_HISTORY_KEY)
+    } catch {
+      // Base64 results remain available in this session when the quota is too small.
+    }
+  }, [generationHistory])
+
+  useEffect(() => {
     const pruneExpiredOutputHistory = () => {
       setOutputHistory((current) => {
         const retained = pruneOutputHistory(current)
@@ -1366,37 +1483,95 @@ function App() {
 
   useEffect(() => {
     let cancelled = false
-    void loadLocalProject(CURRENT_PROJECT_ID).then((project) => {
-      if (cancelled || !project) return
-      const restoredNodes = project.nodes as CanvasNode[]
-      const restoredEdges = project.edges as Edge[]
+    const hydrate = (canvas: WorkspaceCanvas, owner?: WorkspaceProject) => {
+      const restoredNodes = (canvas.nodes as CanvasNode[]).map((node) => {
+        if (node.data.kind === 'text' && node.data.promptText === undefined) {
+          return { ...node, data: { ...node.data, promptText: node.data.body } }
+        }
+        if (node.data.kind === 'image') {
+          return { ...node, style: { ...node.style, ...getImageGenerationNodeSize(node.data.imageAspectRatio ?? '1:1') } }
+        }
+        return node
+      })
+      const restoredEdges = canvas.edges as Edge[]
       setNodes(restoredNodes)
       setEdges(restoredEdges)
-      setCanvasName(project.name)
-      setCanvasNameDraft(project.name)
-      setStyleReferenceName(project.styleReferenceName)
-      setStyleReferenceUrl(project.styleReferenceUrl ?? '')
-      setStyleReferenceEnabled(project.styleReferenceEnabled ?? true)
-      setProjectPromptSuffix(project.promptSuffix)
-      setProjectSettingsLocked(project.settingsLocked)
+      setActiveCanvasId(canvas.id)
+      setActiveProjectId(canvas.projectId)
+      setProjectName(owner?.name ?? 'Disy Infinite')
+      setCanvasName(canvas.name)
+      setCanvasNameDraft(canvas.name)
+      setStyleReferenceName(canvas.styleReferenceName)
+      setStyleReferenceUrl(canvas.styleReferenceUrl ?? '')
+      setStyleReferenceEnabled(canvas.styleReferenceEnabled ?? true)
+      setProjectPromptSuffix(canvas.promptSuffix)
+      setProjectSettingsLocked(canvas.settingsLocked)
       savedCanvasSignatureRef.current = buildCanvasSignature(
         restoredNodes,
         restoredEdges,
-        project.name,
-        project.styleReferenceName,
-        project.styleReferenceUrl ?? '',
-        project.styleReferenceEnabled ?? true,
-        project.promptSuffix,
-        project.settingsLocked,
+        canvas.name,
+        canvas.styleReferenceName,
+        canvas.styleReferenceUrl ?? '',
+        canvas.styleReferenceEnabled ?? true,
+        canvas.promptSuffix,
+        canvas.settingsLocked,
       )
       setCanvasSaved(true)
-    }).catch(() => {
+    }
+    void (async () => {
+      await loadLocalProject(CURRENT_PROJECT_ID)
+      let projects = await listWorkspaceProjects()
+      if (!projects.length) {
+        const created = await createWorkspaceProject('Disy Infinite')
+        projects = [created.project]
+      }
+      if (cancelled) return
+      const owner = projects[0]
+      const canvases = await listWorkspaceCanvases(owner.id)
+      const canvas = canvases.find((item) => item.id === owner.activeCanvasId) ?? canvases[0]
+      if (!canvas || cancelled) return
+      setWorkspaceProjects(projects)
+      setWorkspaceCanvases(canvases)
+      hydrate(canvas, owner)
+      const sessions = await listAgentSessions(canvas.id)
+      if (cancelled) return
+      setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
+      const activeSession = sessions[0]
+      setAgentConversationId(activeSession?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
+      setAgentMessages((activeSession?.messages as AgentMessage[] | undefined) ?? [])
+      const interruptedPlans = (activeSession?.plans as AgentImagePlan[] | undefined) ?? []
+      const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
+      if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
+      setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成在应用关闭时中断，请在对应图像节点中手动重试。' } : plan))
+      setAgentTextModelKey(activeSession?.selectedChatModelId ?? '')
+      setAgentImageModelKey(activeSession?.selectedImageModelId ?? '')
+    })().catch(() => {
       if (!cancelled) setToastMessage('本地项目读取失败')
     })
     return () => {
       cancelled = true
     }
   }, [setEdges, setNodes])
+
+  useEffect(() => {
+    let cancelled = false
+    const legacyAssets = readSavedAssets()
+    void loadLocalAssets<SavedAsset>().then(async (storedAssets) => {
+      if (cancelled) return
+      if (storedAssets) {
+        setSavedAssets(storedAssets)
+        return
+      }
+      if (!legacyAssets.length) return
+      await saveLocalAssets(legacyAssets)
+      if (cancelled) return
+      setSavedAssets(legacyAssets)
+      localStorage.removeItem('disy-saved-assets')
+    }).catch((error) => {
+      if (!cancelled) setToastMessage(`资产库读取失败：${error instanceof Error ? error.message : '浏览器存储不可用'}`)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     const signature = buildCanvasSignature(
@@ -1422,6 +1597,28 @@ function App() {
     const timer = window.setTimeout(() => setToastMessage(null), 1800)
     return () => window.clearTimeout(timer)
   }, [toastMessage])
+
+  useEffect(() => {
+    if (!activeProjectId || !activeCanvasId) return
+    const timer = window.setTimeout(() => {
+      const now = new Date().toISOString()
+      const title = agentMessages[0]?.content.slice(0, 36) || '新的对话'
+      void saveAgentSession({
+        id: agentConversationId,
+        projectId: activeProjectId,
+        canvasId: activeCanvasId,
+        title,
+        messages: agentMessages,
+        plans: agentPlans,
+        selectedChatModelId: agentTextModelKey,
+        selectedImageModelId: agentImageModelKey,
+        createdAt: agentMessages[0]?.createdAt ?? now,
+        updatedAt: now,
+      }).catch(() => undefined)
+      setAgentConversationOptions((current) => [{ id: agentConversationId, title, updatedAt: now }, ...current.filter((item) => item.id !== agentConversationId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey])
 
   useEffect(() => {
     if (!imageParameterMenuOpen) return
@@ -1580,20 +1777,43 @@ function App() {
     imageInputRef.current?.click()
   }, [closeAllMenus])
 
+  const connectionCreatesCycle = useCallback((sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return true
+    const outgoing = new Map<string, string[]>()
+    edges.forEach((edge) => outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]))
+    const pending = [targetId]
+    const visited = new Set<string>()
+    while (pending.length) {
+      const current = pending.pop()!
+      if (current === sourceId) return true
+      if (visited.has(current)) continue
+      visited.add(current)
+      pending.push(...(outgoing.get(current) ?? []))
+    }
+    return false
+  }, [edges])
+
   const onConnect = useCallback(
     (connection: Connection) => {
       const source = nodes.find((node) => node.id === connection.source)
       const target = nodes.find((node) => node.id === connection.target)
       if (!source || !target || source.id === target.id) return
+      if (connectionCreatesCycle(source.id, target.id)) {
+        setToastMessage('该连接会形成循环引用')
+        return
+      }
       setEdges((current) =>
+        current.some((edge) => edge.source === source.id && edge.target === target.id)
+          ? current
+          :
         addEdge(
-          { ...connection, type: 'luminous' },
+          { ...connection, type: 'luminous', data: { referenceSelected: true } },
           current,
         ),
       )
       closeAllMenus()
     },
-    [closeAllMenus, nodes, setEdges],
+    [closeAllMenus, connectionCreatesCycle, nodes, setEdges],
   )
 
   const onConnectEnd: OnConnectEnd = useCallback(
@@ -1608,13 +1828,21 @@ function App() {
 
       if (targetNodeId && targetNodeId !== connectionState.fromNode.id) {
         const sourceNodeId = connectionState.fromNode.id
+        if (connectionCreatesCycle(sourceNodeId, targetNodeId)) {
+          setToastMessage('该连接会形成循环引用')
+          return
+        }
         setEdges((current) =>
+          current.some((edge) => edge.source === sourceNodeId && edge.target === targetNodeId)
+            ? current
+            :
           addEdge(
             {
               id: `${sourceNodeId}-${targetNodeId}-${Date.now()}`,
               source: sourceNodeId,
               target: targetNodeId,
               type: 'luminous',
+              data: { referenceSelected: true },
             },
             current,
           ),
@@ -1635,7 +1863,7 @@ function App() {
       })
       closeContextMenu()
     },
-    [closeAllMenus, closeContextMenu, screenToFlowPosition, setEdges],
+    [closeAllMenus, closeContextMenu, connectionCreatesCycle, screenToFlowPosition, setEdges],
   )
 
   const createNode = (kind: CreatableNodeKind, positionOverride?: { x: number; y: number }) => {
@@ -1645,12 +1873,13 @@ function App() {
       upload: '新上传',
     }
     const bodies: Record<CreatableNodeKind, string> = {
-      text: '写下你的灵感，连接到图像节点。',
+      text: '',
       image: '',
       upload: '上传一张参考图。',
     }
     const id = `${kind}-${Date.now()}`
 
+    const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
     setNodes((current) => [
       ...current,
       {
@@ -1666,6 +1895,7 @@ function App() {
           kind,
           title: titles[kind],
           body: bodies[kind],
+          ...(kind === 'text' ? { promptText: '' } : {}),
           ...(kind === 'image' ? {
             status: '待生成',
             imageAspectRatio: '1:1' as ImageAspectRatio,
@@ -1676,8 +1906,7 @@ function App() {
       },
     ])
 
-    const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
-    if (connectionSourceId && kind === 'image') {
+    if (connectionSourceId && (kind === 'image' || kind === 'text')) {
       setEdges((current) =>
         addEdge(
           {
@@ -1685,6 +1914,7 @@ function App() {
             source: connectionSourceId,
             target: id,
             type: 'luminous',
+            data: { referenceSelected: true },
           },
           current,
         ),
@@ -1727,9 +1957,11 @@ function App() {
     setNodeMenu({ x: 82, y: 112, flowX: flowPosition.x, flowY: flowPosition.y })
   }
 
-  const updateActiveTextNode = (body: string) => {
+  const updateActiveTextNode = (promptText: string) => {
     if (!activeEditorNodeId) return
-    updateNodeBody(activeEditorNodeId, body)
+    setNodes((current) => current.map((node) => node.id === activeEditorNodeId
+      ? { ...node, data: { ...node.data, promptText } }
+      : node))
   }
 
   const updateNodeBody = useCallback((nodeId: string, body: string) => {
@@ -1739,6 +1971,67 @@ function App() {
       ),
     )
   }, [setNodes])
+
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const removedEdgeIds = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id))
+    const removedEdges = changes.flatMap((change) => change.type === 'remove'
+      ? edges.filter((edge) => edge.id === change.id)
+      : [])
+      .filter((removed) => !edges.some((edge) => edge.id !== removed.id
+        && !removedEdgeIds.has(edge.id)
+        && edge.source === removed.source
+        && edge.target === removed.target))
+    applyEdgesChange(changes)
+    if (!removedEdges.length) return
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    setNodes((current) => current.map((node) => {
+      const mentions = removedEdges
+        .filter((edge) => edge.target === node.id)
+        .map((edge) => nodeById.get(edge.source))
+        .filter((source): source is CanvasNode => Boolean(source))
+        .map((source) => getConnectedReferenceMention(source))
+      if (!mentions.length) return node
+      const clean = (value: string) => mentions.reduce((result, mention) => result.replaceAll(mention, ''), value)
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/ +\n/g, '\n')
+        .trimStart()
+      return node.data.kind === 'text'
+        ? { ...node, data: { ...node.data, promptText: clean(node.data.promptText ?? '') } }
+        : node.data.kind === 'image'
+          ? { ...node, data: { ...node.data, body: clean(node.data.body) } }
+          : node
+    }))
+  }, [applyEdgesChange, edges, nodes, setNodes])
+
+  const removeNodesAndCleanReferences = useCallback((nodeIds: Set<string>) => {
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const removedSourceMentionsByTarget = new Map<string, string[]>()
+    edges.forEach((edge) => {
+      if (!nodeIds.has(edge.source) || nodeIds.has(edge.target)) return
+      const source = nodeById.get(edge.source)
+      if (!source) return
+      removedSourceMentionsByTarget.set(edge.target, [
+        ...(removedSourceMentionsByTarget.get(edge.target) ?? []),
+        getConnectedReferenceMention(source),
+      ])
+    })
+    const clean = (value: string, mentions: string[]) => mentions.reduce((result, mention) => result.replaceAll(mention, ''), value)
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/ +\n/g, '\n')
+      .trimStart()
+    setNodes((current) => current
+      .filter((node) => !nodeIds.has(node.id))
+      .map((node) => {
+        const mentions = removedSourceMentionsByTarget.get(node.id)
+        if (!mentions?.length) return node
+        return node.data.kind === 'text'
+          ? { ...node, data: { ...node.data, promptText: clean(node.data.promptText ?? '', mentions) } }
+          : node.data.kind === 'image'
+            ? { ...node, data: { ...node.data, body: clean(node.data.body, mentions) } }
+            : node
+      }))
+    setEdges((current) => current.filter((edge) => !nodeIds.has(edge.source) && !nodeIds.has(edge.target)))
+  }, [edges, nodes, setEdges, setNodes])
 
   const openNodeContextMenu = (event: React.MouseEvent, node: CanvasNode) => {
     event.preventDefault()
@@ -1840,12 +2133,8 @@ function App() {
       event.preventDefault()
       const selectedIdSet = new Set(selectedIds)
       const selectedEdgeIdSet = new Set(selectedEdgeIds)
-      setNodes((current) => current.filter((node) => !selectedIdSet.has(node.id)))
-      setEdges((current) => current.filter((edge) => (
-        !selectedEdgeIdSet.has(edge.id)
-        && !selectedIdSet.has(edge.source)
-        && !selectedIdSet.has(edge.target)
-      )))
+      if (selectedIdSet.size) removeNodesAndCleanReferences(selectedIdSet)
+      if (selectedEdgeIdSet.size) onEdgesChange([...selectedEdgeIdSet].map((id) => ({ id, type: 'remove' as const })))
       latestSelectedNodeIdsRef.current = []
       latestSelectedEdgeIdsRef.current = []
       setActiveEditorNodeId(null)
@@ -1855,37 +2144,48 @@ function App() {
     }
     window.addEventListener('keydown', onDeleteShortcut)
     return () => window.removeEventListener('keydown', onDeleteShortcut)
-  }, [setEdges, setNodes])
+  }, [onEdgesChange, removeNodesAndCleanReferences])
 
   const deleteContextNode = () => {
     if (!nodeContextMenu) return
     const nodeId = nodeContextMenu.nodeId
-    setNodes((current) => current.filter((item) => item.id !== nodeId))
-    setEdges((current) => current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId))
+    removeNodesAndCleanReferences(new Set([nodeId]))
     setToastMessage('节点已删除')
     closeContextMenu()
   }
 
-  const saveNodeToAssets = (node: CanvasNode) => {
+  const commitSavedAssets = async (nextAssets: SavedAsset[], successMessage: string) => {
     try {
-      const nextAssets: SavedAsset[] = [
-        ...savedAssets,
-        {
-          id: `asset-${Date.now()}`,
-          savedAt: new Date().toISOString(),
-          type: 'node',
-          title: node.data.fileName || node.data.title,
-          data: { ...node.data },
-          style: node.style ? { ...node.style } : undefined,
-          folderId: null,
-        },
-      ]
-      localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
+      await saveLocalAssets(nextAssets)
       setSavedAssets(nextAssets)
-      setToastMessage('已加入资产库')
-    } catch {
-      setToastMessage('资产保存失败，本机存储空间可能不足')
+      setToastMessage(successMessage)
+      localStorage.removeItem('disy-saved-assets')
+      return true
+    } catch (error) {
+      const reason = error instanceof DOMException && error.name === 'QuotaExceededError'
+        ? '浏览器分配给本站的存储额度已用完'
+        : error instanceof Error && error.message
+          ? error.message
+          : '浏览器存储不可用'
+      setToastMessage(`资产保存失败：${reason}`)
+      return false
     }
+  }
+
+  const saveNodeToAssets = (node: CanvasNode) => {
+    const nextAssets: SavedAsset[] = [
+      ...savedAssets,
+      {
+        id: `asset-${Date.now()}`,
+        savedAt: new Date().toISOString(),
+        type: 'node',
+        title: node.data.fileName || node.data.title,
+        data: { ...node.data },
+        style: node.style ? { ...node.style } : undefined,
+        folderId: null,
+      },
+    ]
+    void commitSavedAssets(nextAssets, '已加入资产库')
   }
 
   const saveContextNodeToAssets = () => {
@@ -1986,8 +2286,9 @@ function App() {
   const saveCanvasState = async (nameOverride = canvasName, silent = false) => {
     const normalizedName = nameOverride.trim() || '未命名画布'
     try {
-      await saveLocalProject({
-        id: CURRENT_PROJECT_ID,
+      await saveWorkspaceCanvas({
+        id: activeCanvasId,
+        projectId: activeProjectId,
         name: normalizedName,
         nodes,
         edges,
@@ -1996,6 +2297,7 @@ function App() {
         styleReferenceEnabled,
         promptSuffix: projectPromptSuffix,
         settingsLocked: projectSettingsLocked,
+        createdAt: workspaceCanvases.find((canvas) => canvas.id === activeCanvasId)?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })
       setCanvasName(normalizedName)
@@ -2011,6 +2313,7 @@ function App() {
         projectSettingsLocked,
       )
       setCanvasSaved(true)
+      setWorkspaceCanvases((current) => current.map((canvas) => canvas.id === activeCanvasId ? { ...canvas, name: normalizedName, nodes, edges, updatedAt: new Date().toISOString() } : canvas))
       if (!silent) setToastMessage('项目已保存到本机')
     } catch {
       setCanvasSaved(false)
@@ -2035,6 +2338,280 @@ function App() {
     void saveCanvasState(canvasNameDraft)
   }
 
+  const workspaceMutationBlocked = () => generationLoading
+    || generationRequestLockRef.current
+    || agentPlanLocksRef.current.size > 0
+    || agentPlans.some((plan) => plan.status === 'running')
+
+  const openWorkspaceCanvas = async (canvasId: string, projectId = activeProjectId, skipCurrentSave = false) => {
+    if (!skipCurrentSave && workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能切换画布')
+      throw new Error('Generation in progress')
+    }
+    if (!skipCurrentSave) await saveCanvasState(canvasName, true)
+    const [canvas, project, canvases, sessions] = await Promise.all([
+      loadWorkspaceCanvas(canvasId),
+      listWorkspaceProjects().then((items) => items.find((item) => item.id === projectId)),
+      listWorkspaceCanvases(projectId),
+      listAgentSessions(canvasId),
+    ])
+    if (!canvas || !project) throw new Error('画布不存在')
+    const restoredNodes = (canvas.nodes as CanvasNode[]).map((node) => node.data.kind === 'image'
+      ? { ...node, style: { ...node.style, ...getImageGenerationNodeSize(node.data.imageAspectRatio ?? '1:1') } }
+      : node.data.kind === 'text' && node.data.promptText === undefined ? { ...node, data: { ...node.data, promptText: node.data.body } } : node)
+    setNodes(restoredNodes)
+    setEdges(canvas.edges as Edge[])
+    setActiveProjectId(projectId)
+    setActiveCanvasId(canvas.id)
+    setProjectName(project.name)
+    setWorkspaceCanvases(canvases)
+    setCanvasName(canvas.name)
+    setCanvasNameDraft(canvas.name)
+    setStyleReferenceName(canvas.styleReferenceName)
+    setStyleReferenceUrl(canvas.styleReferenceUrl ?? '')
+    setStyleReferenceEnabled(canvas.styleReferenceEnabled ?? true)
+    setProjectPromptSuffix(canvas.promptSuffix)
+    setProjectSettingsLocked(canvas.settingsLocked)
+    const session = sessions[0]
+    setAgentMessages((session?.messages as AgentMessage[] | undefined) ?? [])
+    const interruptedPlans = (session?.plans as AgentImagePlan[] | undefined) ?? []
+    const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
+    if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
+    setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+    setAgentTextModelKey(session?.selectedChatModelId ?? agentTextModelKey)
+    setAgentImageModelKey(session?.selectedImageModelId ?? agentImageModelKey)
+    setActiveEditorNodeId(null)
+    setActiveImageNodeId(null)
+    setCanvasSwitcherOpen(false)
+    const nextProject = { ...project, activeCanvasId: canvas.id, updatedAt: new Date().toISOString() }
+    await saveWorkspaceProject(nextProject)
+    setWorkspaceProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item))
+    savedCanvasSignatureRef.current = buildCanvasSignature(restoredNodes, canvas.edges as Edge[], canvas.name, canvas.styleReferenceName, canvas.styleReferenceUrl ?? '', canvas.styleReferenceEnabled ?? true, canvas.promptSuffix, canvas.settingsLocked)
+    setCanvasSaved(true)
+  }
+
+  const addCanvasToCurrentProject = async () => {
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能新建画布')
+      return
+    }
+    await saveCanvasState(canvasName, true)
+    const canvas = await createWorkspaceCanvas(activeProjectId)
+    setWorkspaceCanvases((current) => [...current, canvas])
+    await openWorkspaceCanvas(canvas.id)
+    setCanvasNameEditing(true)
+    setToastMessage('已创建新画布')
+  }
+
+  const beginNewAgentConversation = () => {
+    if (agentBusy || agentPlanLocksRef.current.size > 0) {
+      setToastMessage('Agent 正在处理，完成后再新建对话')
+      return
+    }
+    const now = new Date().toISOString()
+    const id = `${activeProjectId}--${activeCanvasId}--agent-${crypto.randomUUID()}`
+    setAgentConversationId(id)
+    setAgentMessages([])
+    setAgentPlans([])
+    setAgentReferences([])
+    setAgentPendingReference(null)
+    setAgentCanvasPicking(false)
+    setAgentConversationOptions((current) => [{ id, title: '新的对话', updatedAt: now }, ...current])
+  }
+
+  const selectAgentConversation = async (id: string) => {
+    if (id === agentConversationId) return
+    if (agentBusy || agentPlanLocksRef.current.size > 0) {
+      setToastMessage('Agent 正在处理，完成后再切换对话')
+      return
+    }
+    const sessions = await listAgentSessions(activeCanvasId)
+    const session = sessions.find((item) => item.id === id)
+    if (!session) return
+    setAgentConversationId(session.id)
+    setAgentMessages((session.messages as AgentMessage[] | undefined) ?? [])
+    const plans = (session.plans as AgentImagePlan[] | undefined) ?? []
+    setAgentPlans(plans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+    setAgentReferences([])
+    setAgentPendingReference(null)
+    setAgentCanvasPicking(false)
+    setAgentTextModelKey(session.selectedChatModelId ?? agentTextModelKey)
+    setAgentImageModelKey(session.selectedImageModelId ?? agentImageModelKey)
+  }
+
+  const deleteCurrentAgentConversation = async () => {
+    if (agentBusy || agentPlanLocksRef.current.size > 0) {
+      setToastMessage('Agent 正在处理，完成后再删除对话')
+      return
+    }
+    if (!window.confirm('确认删除当前对话？')) return
+    await deleteAgentSession(agentConversationId)
+    const sessions = (await listAgentSessions(activeCanvasId)).filter((session) => session.id !== agentConversationId)
+    setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
+    const next = sessions[0]
+    if (next) {
+      setAgentConversationId(next.id)
+      setAgentMessages((next.messages as AgentMessage[] | undefined) ?? [])
+      setAgentPlans(((next.plans as AgentImagePlan[] | undefined) ?? []).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+      setAgentTextModelKey(next.selectedChatModelId ?? agentTextModelKey)
+      setAgentImageModelKey(next.selectedImageModelId ?? agentImageModelKey)
+    } else {
+      const id = `${activeProjectId}--${activeCanvasId}--agent-${crypto.randomUUID()}`
+      setAgentConversationId(id)
+      setAgentMessages([])
+      setAgentPlans([])
+      setAgentConversationOptions([{ id, title: '新的对话', updatedAt: new Date().toISOString() }])
+    }
+    setAgentReferences([])
+    setAgentPendingReference(null)
+    setAgentCanvasPicking(false)
+    setToastMessage('对话已删除')
+  }
+
+  const removeCanvas = async (canvasId: string) => {
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能删除画布')
+      return
+    }
+    const canvas = workspaceCanvases.find((item) => item.id === canvasId)
+    if (!canvas || workspaceCanvases.length <= 1) return
+    if (!window.confirm(`确认删除画布“${canvas.name}”？此操作不可撤销。`)) return
+    const nextProject = await deleteWorkspaceCanvas(activeProjectId, canvasId)
+    const nextCanvases = workspaceCanvases.filter((item) => item.id !== canvasId)
+    setWorkspaceCanvases(nextCanvases)
+    setWorkspaceProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item))
+    if (canvasId === activeCanvasId) await openWorkspaceCanvas(nextProject.activeCanvasId, activeProjectId, true)
+    setToastMessage('画布已删除')
+  }
+
+  const createNewProject = async () => {
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能新建项目')
+      return
+    }
+    await saveCanvasState(canvasName, true)
+    const created = await createWorkspaceProject(`新项目 ${workspaceProjects.length + 1}`)
+    setWorkspaceProjects((current) => [created.project, ...current])
+    setProjectOpen(false)
+    await openWorkspaceCanvas(created.canvas.id, created.project.id)
+    setProjectName(created.project.name)
+    setToastMessage('新项目已创建')
+  }
+
+  const removeProject = async (projectId: string) => {
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能删除项目')
+      return
+    }
+    const project = workspaceProjects.find((item) => item.id === projectId)
+    if (!project || !window.confirm(`确认删除项目“${project.name}”及其全部画布？此操作不可撤销。`)) return
+    let fallback = workspaceProjects.find((item) => item.id !== projectId)
+    if (!fallback) {
+      const created = await createWorkspaceProject('新项目')
+      fallback = created.project
+    }
+    await deleteWorkspaceProject(projectId)
+    const projects = await listWorkspaceProjects()
+    setWorkspaceProjects(projects)
+    setGenerationHistory((current) => current.filter((record) => record.projectId ? record.projectId !== projectId : projectId !== CURRENT_PROJECT_ID))
+    setOutputHistory((current) => current.filter((record) => record.projectId ? record.projectId !== projectId : projectId !== CURRENT_PROJECT_ID))
+    if (projectId === activeProjectId) await openWorkspaceCanvas(fallback.activeCanvasId, fallback.id, true)
+    setToastMessage('项目已删除')
+  }
+
+  const exportWholeWorkspace = async () => {
+    await saveCanvasState(canvasName, true)
+    await saveAgentSession({
+      id: agentConversationId,
+      projectId: activeProjectId,
+      canvasId: activeCanvasId,
+      title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
+      messages: agentMessages,
+      plans: agentPlans,
+      selectedChatModelId: agentTextModelKey,
+      selectedImageModelId: agentImageModelKey,
+      createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    await saveWorkspaceAuxiliaryData({
+      folders: assetFolders,
+      generationHistory,
+      outputHistory,
+      publicSettings: {
+        ...apiSettings,
+        connections: apiSettings.connections.map(({ apiKey: _apiKey, ...connection }) => connection),
+      },
+    })
+    const snapshot = await exportWorkspaceSnapshot()
+    const archivedSnapshot = structuredClone(snapshot) as unknown as Record<string, unknown>
+    const mediaCache = new Map<string, string>()
+    const archiveMedia = async (value: unknown, parentKey = ''): Promise<void> => {
+      if (!value || typeof value !== 'object') return
+      if (Array.isArray(value)) {
+        for (const item of value) await archiveMedia(item, parentKey)
+        return
+      }
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        const isMediaKey = key === 'url' || key === 'imageUrl' || key === 'styleReferenceUrl' || key === 'referenceImageUrl'
+        if (isMediaKey && typeof child === 'string' && /^(?:https?:|blob:)/i.test(child)) {
+          let stable = mediaCache.get(child)
+          if (!stable) {
+            stable = await prepareReferenceImageForRequest(child)
+            mediaCache.set(child, stable)
+          }
+          ;(value as Record<string, unknown>)[key] = stable
+        } else {
+          await archiveMedia(child, key)
+        }
+      }
+    }
+    await archiveMedia(archivedSnapshot)
+    const blob = new Blob([JSON.stringify(archivedSnapshot)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `Disy-完整项目-${new Date().toISOString().slice(0, 10)}.disy`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    setToastMessage(`已导出 ${snapshot.projects.length} 个项目、${snapshot.canvases.length} 张画布（不含 API Key）`)
+  }
+
+  const importWholeWorkspace = async (file: File) => {
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能导入项目')
+      return
+    }
+    const snapshot = JSON.parse(await file.text()) as unknown
+    if (!window.confirm('导入会替换当前本机工作区。确认后将先自动导出一份完整备份，再执行导入。')) return
+    await exportWholeWorkspace()
+    await replaceWorkspace(snapshot)
+    const projects = await listWorkspaceProjects()
+    if (!projects.length) throw new Error('导入包没有项目')
+    setWorkspaceProjects(projects)
+    const auxiliary = await loadWorkspaceAuxiliaryData()
+    setAssetFolders(auxiliary.folders as AssetFolder[])
+    setGenerationHistory(auxiliary.generationHistory as GenerationRecord[])
+    setOutputHistory(auxiliary.outputHistory as OutputHistoryRecord[])
+    setSavedAssets((await loadLocalAssets<SavedAsset>()) ?? [])
+    const importedApiSettings = auxiliary.publicSettings as Partial<ApiSettings>
+    if (Array.isArray(importedApiSettings.connections)) {
+      saveApiSettings({
+        connections: importedApiSettings.connections.map((connection) => ({
+          ...connection,
+          apiKey: apiSettings.connections.find((current) => current.id === connection.id)?.apiKey ?? '',
+        })),
+        selectedTextModel: importedApiSettings.selectedTextModel,
+        selectedImageModel: importedApiSettings.selectedImageModel,
+      })
+    }
+    const owner = projects[0]
+    const canvases = await listWorkspaceCanvases(owner.id)
+    setWorkspaceCanvases(canvases)
+    await openWorkspaceCanvas(owner.activeCanvasId, owner.id, true)
+    setProjectOpen(false)
+    setToastMessage('完整项目已导入；API Key 出于安全原因未导入')
+  }
+
   useEffect(() => {
     const onSaveShortcut = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
@@ -2054,6 +2631,65 @@ function App() {
   const activeGenerationNode = nodes.find(
     (node) => node.id === activeGenerationNodeId && node.data.kind === 'image',
   )
+  const activeTextReferences = useMemo<ActiveNodeReference[]>(() => {
+    if (!activeEditorNodeId) return []
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const promptText = nodeById.get(activeEditorNodeId)?.data.promptText ?? ''
+    return edges.flatMap<ActiveNodeReference>((edge): ActiveNodeReference[] => {
+      if (edge.target !== activeEditorNodeId) return []
+      const sourceNode = nodeById.get(edge.source)
+      if (!sourceNode) return []
+      const name = getConnectedReferenceLabel(sourceNode)
+      const mention = getConnectedReferenceMention(sourceNode)
+      if (sourceNode.data.kind === 'text') {
+        return [{
+          id: `connection-${sourceNode.id}`,
+          source: 'connection' as const,
+          sourceNodeId: sourceNode.id,
+          selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || promptText.includes(mention),
+          name,
+          mention,
+          kind: 'text' as const,
+          text: sourceNode.data.body,
+        }]
+      }
+      if (sourceNode.data.kind === 'image' || sourceNode.data.kind === 'upload') {
+        return [{
+          id: `connection-${sourceNode.id}`,
+          source: 'connection' as const,
+          sourceNodeId: sourceNode.id,
+          selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || promptText.includes(mention),
+          name,
+          mention,
+          kind: 'image' as const,
+          url: sourceNode.data.imageUrl,
+        }]
+      }
+      return []
+    })
+  }, [activeEditorNodeId, edges, nodes])
+  const activeGenerationTextReferences = useMemo<ActiveNodeReference[]>(() => {
+    if (!activeGenerationNodeId) return []
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const promptText = nodeById.get(activeGenerationNodeId)?.data.body ?? ''
+    return edges.flatMap<ActiveNodeReference>((edge): ActiveNodeReference[] => {
+      if (edge.target !== activeGenerationNodeId) return []
+      const sourceNode = nodeById.get(edge.source)
+      if (!sourceNode || sourceNode.data.kind !== 'text') return []
+      const name = getConnectedReferenceLabel(sourceNode)
+      const mention = getConnectedReferenceMention(sourceNode)
+      return [{
+        id: `connection-${sourceNode.id}`,
+        source: 'connection' as const,
+        sourceNodeId: sourceNode.id,
+        selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || promptText.includes(mention),
+        name,
+        mention,
+        kind: 'text' as const,
+        text: sourceNode.data.body,
+      }]
+    })
+  }, [activeGenerationNodeId, edges, nodes])
   const activeImageReferences = useMemo<ActiveImageReference[]>(() => {
     if (!activeGenerationNodeId) return []
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
@@ -2077,8 +2713,9 @@ function App() {
       if (edge.target !== activeGenerationNodeId) return
       const sourceNode = nodeById.get(edge.source)
       const sourceCanReferenceImage = sourceNode?.data.kind === 'upload' || sourceNode?.data.kind === 'image'
-      if (!sourceCanReferenceImage || !sourceNode.data.imageUrl || seenUrls.has(sourceNode.data.imageUrl)) return
-      seenUrls.add(sourceNode.data.imageUrl)
+      if (!sourceCanReferenceImage) return
+      if (sourceNode.data.imageUrl && seenUrls.has(sourceNode.data.imageUrl)) return
+      if (sourceNode.data.imageUrl) seenUrls.add(sourceNode.data.imageUrl)
       references.push({
         id: `connection-${sourceNode.id}`,
         source: 'connection',
@@ -2126,11 +2763,18 @@ function App() {
         : node)
     })
   }, [activeGenerationNodeId, activeImageReferences, setNodes])
-  const filteredImageMentionReferences = activeImageReferences.filter((reference) => {
+  const activeGenerationReferences = [...activeImageReferences, ...activeGenerationTextReferences]
+  const filteredImageMentionReferences = activeGenerationReferences.filter((reference) => {
     const query = imageMentionQuery.trim().toLowerCase()
     return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
   })
   const selectedImageReferences = activeImageReferences.filter((reference) => (
+    reference.source === 'connection'
+      ? reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
+      : reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
+  ))
+  const selectedAvailableImageReferences = selectedImageReferences.filter((reference): reference is ActiveImageReference & { url: string } => Boolean(reference.url))
+  const selectedGenerationTextReferences = activeGenerationTextReferences.filter((reference) => (
     reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
   ))
   const activeImageAspectRatio = activeGenerationNode?.data.imageAspectRatio ?? '1:1'
@@ -2179,15 +2823,29 @@ function App() {
     }
   }
 
-  const selectImageMention = (reference: ActiveImageReference) => {
+  const selectImageMention = (reference: ActiveImageReference | ActiveNodeReference) => {
     if (!activeGenerationNode) return
+    if ('kind' in reference && reference.kind === 'text' && !reference.text?.trim()) {
+      setToastMessage('来源文本暂无内容')
+      return
+    }
+    if (!('kind' in reference) && !reference.url) {
+      setToastMessage('来源图片尚未生成')
+      return
+    }
     const body = activeGenerationNode.data.body
-    const range = imageMentionRange ?? { start: body.length, end: body.length }
+    const imageCaret = imagePromptEditorRef.current?.getCaret() ?? body.length
+    const range = imageMentionRange ?? { start: imageCaret, end: imageCaret }
     const nextBody = `${body.slice(0, range.start)}${reference.mention} ${body.slice(range.end)}`
     setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
       ...node,
       data: { ...node.data, promptText: undefined, body: nextBody },
     } : node))
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.map((edge) => edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id
+        ? { ...edge, data: { ...edge.data, referenceSelected: true } }
+        : edge))
+    }
     setImageMentionOpen(false)
     setImageMentionQuery('')
     setImageMentionRange(null)
@@ -2196,7 +2854,7 @@ function App() {
     })
   }
 
-  const removeImageReference = (reference: ActiveImageReference) => {
+  const removeImageReference = (reference: ActiveImageReference | ActiveNodeReference) => {
     if (!activeGenerationNode) return
     if (reference.source === 'current') {
       setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
@@ -2204,7 +2862,9 @@ function App() {
         data: { ...node.data, useCurrentImageAsReference: false },
       } : node))
     } else if (reference.source === 'connection' && reference.sourceNodeId) {
-      setEdges((current) => current.filter((edge) => !(edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id)))
+      setEdges((current) => current.filter((edge) => !(
+        edge.source === reference.sourceNodeId && edge.target === activeGenerationNode.id
+      )))
     } else {
       setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
         ...node,
@@ -2234,7 +2894,7 @@ function App() {
     } : node))
     const beforeCursor = value.slice(0, cursor)
     const match = beforeCursor.match(/@(?:\[([^\]]*)\]|([^@\s]*))$/)
-    if (match && activeImageReferences.length) {
+    if (match && activeGenerationReferences.length) {
       setImageMentionRange({ start: cursor - match[0].length, end: cursor })
       setImageMentionQuery(match[1] ?? match[2] ?? '')
       setImageMentionIndex(0)
@@ -2242,6 +2902,64 @@ function App() {
     } else {
       setImageMentionOpen(false)
       setImageMentionRange(null)
+    }
+  }
+  const filteredTextMentionReferences = activeTextReferences.filter((reference) => {
+    const query = textMentionQuery.trim().toLowerCase()
+    return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
+  })
+  const selectedTextNodeReferences = activeTextReferences.filter((reference) => (
+    reference.selected || (activeTextNode?.data.promptText ?? '').includes(reference.mention)
+  ))
+  const selectTextMention = (reference: ActiveNodeReference) => {
+    if (!activeTextNode) return
+    if (reference.kind === 'text' ? !reference.text?.trim() : !reference.url) {
+      setToastMessage(reference.kind === 'text' ? '来源文本暂无内容' : '来源图片尚未生成')
+      return
+    }
+    const promptText = activeTextNode.data.promptText ?? ''
+    const textCaret = textPromptEditorRef.current?.getCaret() ?? promptText.length
+    const range = textMentionRange ?? { start: textCaret, end: textCaret }
+    const nextPrompt = `${promptText.slice(0, range.start)}${reference.mention} ${promptText.slice(range.end)}`
+    setNodes((current) => current.map((node) => node.id === activeTextNode.id
+      ? { ...node, data: { ...node.data, promptText: nextPrompt } }
+      : node))
+    setEdges((current) => current.map((edge) => edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
+      ? { ...edge, data: { ...edge.data, referenceSelected: true } }
+      : edge))
+    setTextMentionOpen(false)
+    setTextMentionQuery('')
+    setTextMentionRange(null)
+    window.requestAnimationFrame(() => textPromptEditorRef.current?.focusAt(range.start + reference.mention.length + 1))
+  }
+  const removeTextReference = (reference: ActiveNodeReference) => {
+    if (!activeTextNode) return
+    setEdges((current) => current.filter((edge) => !(
+      edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
+    )))
+    setNodes((current) => current.map((node) => {
+      if (node.id !== activeTextNode.id) return node
+      const promptText = (node.data.promptText ?? '')
+        .replaceAll(reference.mention, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/ +\n/g, '\n')
+        .trimStart()
+      return { ...node, data: { ...node.data, promptText } }
+    }))
+  }
+  const handleTextPromptChange = (value: string, cursor: number) => {
+    if (!activeTextNode) return
+    updateActiveTextNode(value)
+    const beforeCursor = value.slice(0, cursor)
+    const match = beforeCursor.match(/@(?:\[([^\]]*)\]|([^@\s]*))$/)
+    if (match && activeTextReferences.length) {
+      setTextMentionRange({ start: cursor - match[0].length, end: cursor })
+      setTextMentionQuery(match[1] ?? match[2] ?? '')
+      setTextMentionIndex(0)
+      setTextMentionOpen(true)
+    } else {
+      setTextMentionOpen(false)
+      setTextMentionRange(null)
     }
   }
   const previewImageNode = nodes.find(
@@ -2318,7 +3036,7 @@ function App() {
   const applyMarkdownFormat = (action: MarkdownAction) => {
     if (!activeTextNode) return
     const textarea = expandedEditorNodeId ? expandedTextareaRef.current : editorTextareaRef.current
-    const body = activeTextNode.data.body
+    const body = expandedEditorNodeId ? activeTextNode.data.body : (activeTextNode.data.promptText ?? '')
     const start = textarea?.selectionStart ?? body.length
     const end = textarea?.selectionEnd ?? start
     const selected = body.slice(start, end)
@@ -2365,7 +3083,8 @@ function App() {
       nextEnd = blockStart + replacement.length
     }
 
-    updateNodeBody(activeTextNode.id, nextBody)
+    if (expandedEditorNodeId) updateNodeBody(activeTextNode.id, nextBody)
+    else updateActiveTextNode(nextBody)
     window.requestAnimationFrame(() => {
       const target = expandedEditorNodeId ? expandedTextareaRef.current : editorTextareaRef.current
       target?.focus()
@@ -2390,11 +3109,17 @@ function App() {
   const hasCatalogTextModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'text'))
   const hasCatalogImageModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'image'))
 
-  const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt'>) => {
+  useEffect(() => {
+    if (!agentTextModelKey && enabledTextModels[0]) setAgentTextModelKey(`${enabledTextModels[0].connection.id}::${enabledTextModels[0].model.id}`)
+    if (!agentImageModelKey && enabledImageModels[0]) setAgentImageModelKey(`${enabledImageModels[0].connection.id}::${enabledImageModels[0].model.id}`)
+  }, [agentImageModelKey, agentTextModelKey, enabledImageModels, enabledTextModels])
+
+  const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt' | 'projectId'>) => {
     const nextRecord: OutputHistoryRecord = {
       ...record,
       id: `output-${Date.now()}-${crypto.randomUUID()}`,
       createdAt: new Date().toISOString(),
+      projectId: activeProjectId,
     }
     setOutputHistory((current) => {
       const cutoff = Date.now() - OUTPUT_HISTORY_RETENTION_MS
@@ -2434,7 +3159,20 @@ function App() {
 
   const generateFromActiveTextNode = async () => {
     if (!activeTextNode || generationLoading || generationRequestLockRef.current) return
-    const prompt = [activeTextNode.data.body.trim(), projectPromptSuffix.trim()].filter(Boolean).join('\n')
+    const rawPromptText = activeTextNode.data.promptText ?? ''
+    const promptText = activeTextReferences.reduce((value, reference) => {
+      const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
+      return value.replaceAll(reference.mention, available ? `@${reference.name}` : '')
+    }, rawPromptText).replace(/@\[node:[^\]]+\]/g, '').trim()
+    const selectedTextReferences = selectedTextNodeReferences.filter((reference) => reference.kind === 'text' && reference.text?.trim())
+    const selectedVisualReferences = selectedTextNodeReferences.filter((reference) => reference.kind === 'image' && reference.url)
+    const textReferenceGuide = selectedTextReferences.length
+      ? `参考文本：\n${selectedTextReferences.map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
+      : ''
+    const imageReferenceGuide = selectedVisualReferences.length
+      ? `参考图片对应关系：${selectedVisualReferences.map((reference, index) => `@${reference.name} 是第 ${index + 1} 张输入图片`).join('；')}`
+      : ''
+    const prompt = [promptText, textReferenceGuide, imageReferenceGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
     if (!prompt) {
       setToastMessage('请先输入文本提示词')
       return
@@ -2459,34 +3197,15 @@ function App() {
     setGenerationLoading(true)
     setModelMenuOpen(false)
     try {
-      const outputs = [await generateRemoteText({
+      const referenceImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!)))
+      const output = await generateRemoteText({
         baseUrl: selectedTextModel.connection.baseUrl,
         apiKey: selectedTextModel.connection.apiKey,
         model: selectedTextModel.model.id,
-      }, prompt)]
-      const stamp = Date.now()
-      const baseX = activeTextNode.position.x + (activeTextNode.width ?? 420) + 150
-      const baseY = activeTextNode.position.y
-      const generatedNodes: CanvasNode[] = outputs.map((output, index) => ({
-        id: `generated-text-${stamp}-${index}`,
-        type: 'disy',
-        position: { x: baseX + index * 450, y: baseY },
-        data: {
-          kind: 'text',
-          title: '文本',
-          body: output,
-          status: selectedTextModel.model.name,
-        },
-        style: { width: 420, height: 240 },
-      }))
-      const generatedEdges: Edge[] = generatedNodes.map((node, index) => ({
-        id: `edge-${activeTextNode.id}-${node.id}-${index}`,
-        source: activeTextNode.id,
-        target: node.id,
-        type: 'luminous',
-      }))
-      setNodes((current) => [...current, ...generatedNodes])
-      setEdges((current) => [...current, ...generatedEdges])
+      }, prompt, { referenceImages })
+      setNodes((current) => current.map((node) => node.id === activeTextNode.id
+        ? { ...node, data: { ...node.data, body: output, status: selectedTextModel.model.name } }
+        : node))
       appendOutputHistory({
         kind: 'text',
         status: 'success',
@@ -2495,10 +3214,10 @@ function App() {
         modelName: selectedTextModel.model.name,
         connectionName: selectedTextModel.connection.name,
         requestedCount: generationCount,
-        outputCount: outputs.length,
-        preview: outputs[0]?.slice(0, 240),
+        outputCount: 1,
+        preview: output.slice(0, 240),
       })
-      setToastMessage(`已生成 ${outputs.length} 个文本节点`)
+      setToastMessage('文本节点已更新')
     } catch (error) {
       const historyError = toOutputHistoryError(error)
       appendOutputHistory({
@@ -2521,15 +3240,22 @@ function App() {
 
   const generateFromActiveImageNode = async () => {
     if (!activeGenerationNode || generationLoading || generationRequestLockRef.current) return
-    const promptText = activeGenerationNode.data.body.trim()
+    const promptText = activeGenerationReferences.reduce((value, reference) => {
+      if (!('kind' in reference)) return value
+      const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
+      return value.replaceAll(reference.mention, available ? `@${reference.name}` : '')
+    }, activeGenerationNode.data.body).replace(/@\[node:[^\]]+\]/g, '').trim()
     if (!promptText) {
       setToastMessage('请先输入图像提示词')
       return
     }
-    const mentionGuide = selectedImageReferences.length
-      ? `参考图片对应关系：${selectedImageReferences.map((reference, index) => `${reference.mention} 是第 ${index + 1} 张输入图片（${reference.name}）`).join('；')}`
+    const mentionGuide = selectedAvailableImageReferences.length
+      ? `参考图片对应关系：${selectedAvailableImageReferences.map((reference, index) => `@${reference.name} 是第 ${index + 1} 张输入图片`).join('；')}`
       : ''
-    const prompt = [promptText, mentionGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n')
+    const textReferenceGuide = selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).length
+      ? `参考文本：\n${selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
+      : ''
+    const prompt = [promptText, textReferenceGuide, mentionGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
     if (!selectedImageModel) {
       setToastMessage(hasCatalogImageModels ? '已有图像模型但尚未启用，请到 API 设置中勾选' : '请先添加并启用图像模型')
       setApiOpen(true)
@@ -2542,7 +3268,7 @@ function App() {
       return
     }
     const requestedReferenceUrls = Array.from(new Set([
-      ...selectedImageReferences.map((reference) => reference.url),
+      ...selectedAvailableImageReferences.map((reference) => reference.url),
       styleReferenceEnabled ? styleReferenceUrl : '',
     ].filter((url): url is string => Boolean(url))))
     if (requestedReferenceUrls.length > 16) {
@@ -2559,9 +3285,11 @@ function App() {
       : node))
     try {
       const referenceImages = await Promise.all(requestedReferenceUrls.map(prepareReferenceImageForRequest))
-      const requestMode = referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
-        ? 'images/edits'
-        : 'images/generations'
+      const requestMode = /^nano-banana(?:-|$)/i.test(selectedImageModel.model.id)
+        ? 'api/generate'
+        : referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
+          ? 'images/edits'
+          : 'images/generations'
       const images: Awaited<ReturnType<typeof generateRemoteImages>> = []
       let stoppedError: unknown = null
       // A requested 2×/3×/4× batch is intentionally billed as up to that many
@@ -2633,6 +3361,7 @@ function App() {
         model: selectedImageModel.model.name,
         imageUrl: variant.url,
         fileName: variant.fileName,
+        projectId: activeProjectId,
       }))
       setGenerationHistory((current) => {
         const next = [...current, ...records]
@@ -2702,14 +3431,111 @@ function App() {
     }
   }
 
+  const agentImageCandidates: AgentImageReference[] = nodes.flatMap((node) => {
+    if ((node.data.kind !== 'image' && node.data.kind !== 'upload') || !node.data.imageUrl) return []
+    return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
+  })
+
+  const sendAgentMessage = async (content: string) => {
+    if (agentBusy) return
+    const [connectionId, modelId] = agentTextModelKey.split('::')
+    const selection = enabledTextModels.find((item) => item.connection.id === connectionId && item.model.id === modelId)
+    if (!selection) {
+      setToastMessage('请先为 Agent 选择对话模型')
+      setApiOpen(true)
+      return
+    }
+    const userMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'user', content, createdAt: new Date().toISOString() }
+    const nextMessages = [...agentMessages, userMessage]
+    setAgentMessages(nextMessages)
+    setAgentBusy(true)
+    try {
+      const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url)))
+      const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴；只有用户明确表达想生成图像时，才提出 imagePlan。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlan":{"prompt":"可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}}。如果不需要生图，省略 imagePlan。参考图名称：${agentReferences.map((item) => item.name).join('、') || '无'}。\n\n${transcript}`
+      const raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
+      const parsed = parseAgentReply(raw)
+      const assistantMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: parsed.reply || '我已经整理好了。', createdAt: new Date().toISOString() }
+      setAgentMessages((current) => [...current, assistantMessage])
+      if (parsed.imagePlan) {
+        const [imageConnectionId, imageModelId] = agentImageModelKey.split('::')
+        setAgentPlans((current) => [...current, {
+          id: `agent-plan-${crypto.randomUUID()}`,
+          status: 'ready',
+          prompt: parsed.imagePlan!.prompt,
+          referenceNodeIds: agentReferences.map((item) => item.nodeId),
+          aspectRatio: parsed.imagePlan!.aspectRatio,
+          resolution: parsed.imagePlan!.resolution,
+          detail: parsed.imagePlan!.detail,
+          count: parsed.imagePlan!.count,
+          imageConnectionId,
+          imageModelId,
+        }])
+      }
+      setAgentReferences([])
+    } catch (error) {
+      setAgentMessages((current) => [...current, { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: `这次没有成功：${error instanceof Error ? error.message : '对话请求失败'}`, createdAt: new Date().toISOString() }])
+    } finally {
+      setAgentBusy(false)
+    }
+  }
+
+  const confirmAgentPlan = async (planId: string) => {
+    if (agentPlanLocksRef.current.has(planId)) return
+    const plan = agentPlans.find((item) => item.id === planId)
+    if (!plan || plan.status !== 'ready' || !plan.prompt.trim()) return
+    const model = enabledImageModels.find((item) => item.connection.id === plan.imageConnectionId && item.model.id === plan.imageModelId)
+    if (!model) {
+      setToastMessage('这份方案的生图模型不可用，请重新选择')
+      return
+    }
+    const references = plan.referenceNodeIds.map((nodeId) => agentImageCandidates.find((item) => item.nodeId === nodeId)).filter((item): item is AgentImageReference => Boolean(item))
+    if (references.length !== plan.referenceNodeIds.length) {
+      setToastMessage('部分参考图已被删除或失效，请重新发起方案')
+      return
+    }
+    agentPlanLocksRef.current.add(planId)
+    const nodeId = `agent-image-${crypto.randomUUID()}`
+    const flowPosition = screenToFlowPosition({ x: Math.max(360, window.innerWidth - (agentOpen ? 720 : 420)), y: 230 })
+    const aspectRatio = (IMAGE_ASPECT_OPTIONS.some((option) => option.value === plan.aspectRatio) ? plan.aspectRatio : '1:1') as ImageAspectRatio
+    setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'running', nodeId } : item))
+    setNodes((current) => [...current, {
+      id: nodeId,
+      type: 'disy',
+      position: flowPosition,
+      style: getImageGenerationNodeSize(aspectRatio),
+      data: { kind: 'image', title: '图像', body: plan.prompt, status: '生成中', imageAspectRatio: aspectRatio, imageResolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'), imageDetail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium') },
+    }])
+    setEdges((current) => [...current, ...references.filter((reference) => !current.some((edge) => edge.source === reference.nodeId && edge.target === nodeId)).map((reference) => ({ id: `agent-reference-${reference.nodeId}-${nodeId}`, source: reference.nodeId, target: nodeId, type: 'luminous' }))])
+    try {
+      const prepared = await Promise.all(references.map((reference) => prepareReferenceImageForRequest(reference.url)))
+      const images = await generateRemoteImages({ baseUrl: model.connection.baseUrl, apiKey: model.connection.apiKey, model: model.model.id }, { prompt: plan.prompt.trim(), count: Math.min(4, Math.max(1, plan.count)), referenceImages: prepared, aspectRatio, resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'), detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium') })
+      if (!images.length) throw new Error('图像模型没有返回图片')
+      const createdAt = new Date().toISOString()
+      const variants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
+      setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: '已完成' } } : node))
+      setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'completed', nodeId } : item))
+      setGenerationHistory((current) => [...current, ...variants.map((variant) => ({ id: `history-${variant.id}`, createdAt, prompt: plan.prompt, model: model.model.name, imageUrl: variant.url, fileName: variant.fileName, projectId: activeProjectId }))])
+      appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount: plan.count, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · 参考图 ${prepared.length} 张` })
+      setToastMessage(`Agent 已生成 ${images.length} 张图片`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成失败'
+      setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
+      setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: message } : item))
+      setToastMessage(message)
+    } finally {
+      agentPlanLocksRef.current.delete(planId)
+    }
+  }
+
   const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth
   const nodeCenterX = nodeOverlayRect ? nodeOverlayRect.left + nodeOverlayRect.width / 2 : shellWidth / 2
   const symmetricEditorWidth = nodeOverlayRect
     ? 2 * Math.max(130, Math.min(nodeCenterX - 16, shellWidth - nodeCenterX - 16))
     : shellWidth - 32
   const nodeEditorWidth = Math.min(680, symmetricEditorWidth)
-  const currentProjectMatches = !projectSearch.trim()
-    || canvasName.toLowerCase().includes(projectSearch.trim().toLowerCase())
+  const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
+    || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
 
   const selectedGroupNode = selectedNodeIds.length === 1
     ? nodes.find((node) => node.id === selectedNodeIds[0] && node.data.kind === 'group')
@@ -2926,14 +3752,7 @@ function App() {
       edges: selectedEdges.map((edge) => ({ ...edge, selected: false })),
     }
 
-    try {
-      const nextAssets = [...savedAssets, asset]
-      localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
-      setSavedAssets(nextAssets)
-      setToastMessage('组合已加入资产库')
-    } catch {
-      setToastMessage('资产保存失败，本机存储空间可能不足')
-    }
+    void commitSavedAssets([...savedAssets, asset], '组合已加入资产库')
   }
 
   const downloadSelectedImages = async (nodeOverride?: CanvasNode[]) => {
@@ -3051,20 +3870,16 @@ function App() {
       reader.readAsDataURL(file)
     }))).then((uploadedAssets) => {
       const nextAssets = [...savedAssets, ...uploadedAssets]
-      localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
-      setSavedAssets(nextAssets)
-      setToastMessage(`已上传 ${uploadedAssets.length} 个资产`)
-    }).catch(() => setToastMessage('资产上传失败，本机存储空间可能不足'))
+      return commitSavedAssets(nextAssets, `已上传 ${uploadedAssets.length} 个资产`)
+    }).catch((error) => setToastMessage(`资产上传失败：${error instanceof Error ? error.message : '文件读取失败'}`))
   }
 
   const deleteAsset = (assetId: string) => {
     const nextAssets = savedAssets.filter((asset) => asset.id !== assetId)
-    localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
-    setSavedAssets(nextAssets)
+    void commitSavedAssets(nextAssets, '资产已删除')
     if (selectedAssetId === assetId) setSelectedAssetId(null)
     setSelectedAssetIds((current) => current.filter((id) => id !== assetId))
     if (libraryPreview?.kind === 'asset' && libraryPreview.id === assetId) setLibraryPreview(null)
-    setToastMessage('资产已删除')
   }
 
   const downloadAssetBatch = async (assetIds: string[]) => {
@@ -3111,19 +3926,15 @@ function App() {
   const deleteAssetBatch = (assetIds: string[]) => {
     const idSet = new Set(assetIds)
     const nextAssets = savedAssets.filter((asset) => !idSet.has(asset.id))
-    localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
-    setSavedAssets(nextAssets)
+    void commitSavedAssets(nextAssets, `已删除 ${assetIds.length} 个资产`)
     setSelectedAssetIds([])
     if (selectedAssetId && idSet.has(selectedAssetId)) setSelectedAssetId(null)
     if (libraryPreview?.kind === 'asset' && idSet.has(libraryPreview.id)) setLibraryPreview(null)
-    setToastMessage(`已删除 ${assetIds.length} 个资产`)
   }
 
   const moveAssetToFolder = (assetId: string, folderId: string | null) => {
     const nextAssets = savedAssets.map((asset) => asset.id === assetId ? { ...asset, folderId } : asset)
-    localStorage.setItem('disy-saved-assets', JSON.stringify(nextAssets))
-    setSavedAssets(nextAssets)
-    setToastMessage(folderId ? '资产已移动到文件夹' : '资产已移至未归档')
+    void commitSavedAssets(nextAssets, folderId ? '资产已移动到文件夹' : '资产已移至未归档')
   }
 
   const placeAssetOnCanvas = (assetId: string, position: { x: number; y: number }) => {
@@ -3222,7 +4033,9 @@ function App() {
   const getAssetPreviewUrl = (asset: SavedAsset) => asset.data?.imageUrl
     || asset.nodes?.find((node) => Boolean(node.data.imageUrl))?.data.imageUrl
 
-  const filteredHistory = generationHistory.filter((record) => {
+  const currentGenerationHistory = generationHistory.filter((record) => record.projectId ? record.projectId === activeProjectId : activeProjectId === CURRENT_PROJECT_ID)
+  const currentOutputHistory = outputHistory.filter((record) => record.projectId ? record.projectId === activeProjectId : activeProjectId === CURRENT_PROJECT_ID)
+  const filteredHistory = currentGenerationHistory.filter((record) => {
     const query = generationHistorySearch.trim().toLowerCase()
     return !query || `${record.prompt} ${record.model} ${record.fileName}`.toLowerCase().includes(query)
   })
@@ -3236,8 +4049,8 @@ function App() {
     groups.set(key, current)
     return groups
   }, new Map<string, GenerationRecord[]>()).entries()).reverse()
-  const outputFailureCount = outputHistory.filter((record) => record.status === 'failed').length
-  const filteredOutputHistory = outputHistory.filter((record) => {
+  const outputFailureCount = currentOutputHistory.filter((record) => record.status === 'failed').length
+  const filteredOutputHistory = currentOutputHistory.filter((record) => {
     if (outputHistoryFilter === 'failed' && record.status !== 'failed') return false
     if (outputHistoryFilter === 'text' && record.kind !== 'text') return false
     if (outputHistoryFilter === 'image' && record.kind !== 'image') return false
@@ -3295,7 +4108,7 @@ function App() {
   }
 
   return (
-    <div ref={shellRef} className="disy-shell">
+    <div ref={shellRef} className={`disy-shell ${agentOpen ? 'has-agent-open' : ''}`}>
       <main className="canvas-area">
         <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
@@ -3314,13 +4127,30 @@ function App() {
           onSelectionEnd={handleSelectionEnd}
           connectionLineType={ConnectionLineType.Bezier}
           onNodeClick={(_, node) => {
+            if (agentCanvasPicking) {
+              const imageUrl = (node.data.kind === 'image' || node.data.kind === 'upload') ? node.data.imageUrl : undefined
+              if (!imageUrl) {
+                setToastMessage('请选择已经生成或上传完成的图片')
+                return
+              }
+              const reference = { nodeId: node.id, name: getNodeDisplayTitle(node.data), url: imageUrl }
+              setAgentPendingReference(reference)
+              setAgentCanvasPicking(false)
+              return
+            }
             if (canvasReferencePickerNodeId) {
               if (node.id === canvasReferencePickerNodeId) {
                 setToastMessage('请选择画布中的其他图片')
                 return
               }
-              if ((node.data.kind !== 'upload' && node.data.kind !== 'image') || !node.data.imageUrl) {
-                setToastMessage('请选择已经上传或生成完成的图片')
+              const hasTextReference = node.data.kind === 'text' && Boolean(node.data.body.trim())
+              const hasImageReference = (node.data.kind === 'upload' || node.data.kind === 'image') && Boolean(node.data.imageUrl)
+              if (!hasTextReference && !hasImageReference) {
+                setToastMessage('请选择有内容的文本或已经上传/生成的图片')
+                return
+              }
+              if (connectionCreatesCycle(node.id, canvasReferencePickerNodeId)) {
+                setToastMessage('该连接会形成循环引用')
                 return
               }
               setEdges((current) => {
@@ -3333,7 +4163,7 @@ function App() {
                   data: { referenceSelected: true },
                 }]
               })
-              setToastMessage('已加入参考图片，可继续选择')
+              setToastMessage('已加入参考素材，可继续选择')
               return
             }
             setMarqueeSelectionCommitted(false)
@@ -3342,6 +4172,7 @@ function App() {
             setImageModelMenuOpen(false)
             setImageParameterMenuOpen(false)
             setImageMentionOpen(false)
+            setTextMentionOpen(false)
             setQuantityMenuOpen(false)
             setExpandedEditorNodeId(null)
             setIsNodeDragging(false)
@@ -3682,11 +4513,11 @@ function App() {
           type="button"
           className={`output-history-pill ${outputFailureCount ? 'has-failures' : ''}`}
           onClick={() => setOutputHistoryOpen(true)}
-          aria-label={`打开输出历史，共 ${outputHistory.length} 条`}
+          aria-label={`打开输出历史，共 ${currentOutputHistory.length} 条`}
         >
           {generationLoading ? <LoaderCircle size={14} className="is-spinning" /> : <History size={14} />}
           <span>{generationLoading ? '正在生成' : '输出历史'}</span>
-          <small>{outputHistory.length}</small>
+          <small>{currentOutputHistory.length}</small>
           {outputFailureCount > 0 && <em>{outputFailureCount} 项失败</em>}
         </button>
 
@@ -3714,16 +4545,21 @@ function App() {
             />
           ) : (
             <button
-              className="canvas-name-display"
-              title="双击编辑画布名称"
+              className="canvas-name-display canvas-identity-button"
+              title="单击切换画布，双击编辑名称"
+              onClick={() => setCanvasSwitcherOpen((open) => !open)}
               onDoubleClick={() => {
                 setCanvasNameDraft(canvasName)
                 setCanvasNameEditing(true)
               }}
             >
-              {canvasName}
+              <span><small>{projectName}</small><strong>{canvasName}</strong></span>
+              <ChevronRight size={13} className={canvasSwitcherOpen ? 'is-open' : ''} />
             </button>
           )}
+          <button className="canvas-quick-create" aria-label="新建画布" title="在当前项目中新建画布" onClick={() => void addCanvasToCurrentProject()}>
+            <Plus size={15} /><span>画布</span>
+          </button>
           <button
             className={`canvas-settings-button ${projectSettingsOpen ? 'is-active' : ''}`}
             aria-label="项目设置"
@@ -3742,6 +4578,22 @@ function App() {
             {canvasSaved ? <Check size={13} /> : <span className="unsaved-dot" />}
           </button>
         </div>
+
+        <AnimatePresence>
+          {canvasSwitcherOpen && (
+            <motion.section className="canvas-switcher-menu" initial={{ opacity: 0, y: -5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -4, scale: .98 }}>
+              <header className="canvas-switcher-header"><span><strong>{projectName}</strong><small>{workspaceCanvases.length} 张画布</small></span><label className="card-scale-control" title="调整画布卡片大小"><input type="range" min="0.8" max="1.4" step="0.1" value={canvasCardScale} onChange={(event) => setCanvasCardScale(Number(event.target.value))} /></label><button onClick={() => setCanvasSwitcherOpen(false)}><X size={14} /></button></header>
+              <div className="canvas-switcher-list">
+                {workspaceCanvases.map((canvas, index) => <div key={canvas.id} className={`canvas-switcher-row ${canvas.id === activeCanvasId ? 'is-active' : ''}`} style={{ '--canvas-card-scale': canvasCardScale } as React.CSSProperties}><button className={`canvas-switcher-item ${canvas.id === activeCanvasId ? 'is-active' : ''}`} onClick={() => void openWorkspaceCanvas(canvas.id)}>
+                  <span className="canvas-switcher-preview"><i style={{ left: `${18 + (index % 3) * 15}%`, top: `${28 + (index % 2) * 18}%` }} /></span>
+                  <span><strong>{canvas.name}</strong><small>{(canvas.nodes as unknown[]).length} 个节点</small></span>
+                  {canvas.id === activeCanvasId && <Check size={14} />}
+                </button><button className="canvas-switcher-delete" aria-label={`删除画布 ${canvas.name}`} title={workspaceCanvases.length <= 1 ? '项目至少保留一张画布' : '删除画布'} disabled={workspaceCanvases.length <= 1} onClick={() => void removeCanvas(canvas.id)}><Trash2 size={13} /></button></div>)}
+              </div>
+              <footer><button className="canvas-switcher-create" onClick={() => void addCanvasToCurrentProject()}><Plus size={15} />新建画布</button></footer>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {projectSettingsOpen && (
@@ -3925,10 +4777,44 @@ function App() {
           <button aria-label="设置" data-tooltip="设置" onClick={() => setApiOpen(true)}>
             <Settings2 size={18} />
           </button>
-          <button className="rail-avatar" aria-label="Disy" data-tooltip="Disy">
+          <button className={`rail-avatar ${agentOpen ? 'is-active' : ''}`} aria-label="Disy 与您对话" data-tooltip="Disy 与您对话" aria-expanded={agentOpen} aria-controls="disy-agent-panel" onClick={() => { setAgentOpen((open) => !open); setAgentCanvasPicking(false) }}>
             <img src="/disy-logo.png" alt="" />
           </button>
         </nav>
+
+        <AnimatePresence>
+          {agentOpen && (
+            <motion.div className="agent-panel-motion" initial={{ opacity: 0, x: 28 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 28 }}>
+              <AgentPanel
+                messages={agentMessages}
+                plans={agentPlans}
+                references={agentReferences}
+                pendingReference={agentPendingReference}
+                candidates={agentImageCandidates}
+                conversations={agentConversationOptions.length ? agentConversationOptions : [{ id: agentConversationId, title: '新的对话', updatedAt: new Date().toISOString() }]}
+                activeConversationId={agentConversationId}
+                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                textModelKey={agentTextModelKey}
+                imageModelKey={agentImageModelKey}
+                busy={agentBusy}
+                onClose={() => { setAgentOpen(false); setAgentCanvasPicking(false) }}
+                onNewConversation={beginNewAgentConversation}
+                onDeleteConversation={() => void deleteCurrentAgentConversation()}
+                onSelectConversation={(id) => void selectAgentConversation(id)}
+                onTextModelChange={setAgentTextModelKey}
+                onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId, modelId] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'ready' ? { ...plan, imageConnectionId: connectionId, imageModelId: modelId } : plan)) }}
+                onReferencesChange={setAgentReferences}
+                onPendingReferenceConsumed={() => setAgentPendingReference(null)}
+                onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
+                onSend={(message) => void sendAgentMessage(message)}
+                onPlanChange={(id, prompt) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, prompt } : plan))}
+                onConfirmPlan={(id) => void confirmAgentPlan(id)}
+                onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'cancelled' } : plan))}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {nodeMenu && (
           <motion.div
@@ -3942,12 +4828,10 @@ function App() {
             <div className="menu-title">
               {nodeMenu.connectionSourceId ? '连接到新节点' : '添加到画布'}
             </div>
-            {!nodeMenu.connectionSourceId && (
-              <button onClick={() => createNode('text')}>
-                <Type size={16} />
-                <span><strong>文本</strong><small>记录灵感与提示词</small></span>
-              </button>
-            )}
+            <button onClick={() => createNode('text')}>
+              <Type size={16} />
+              <span><strong>文本</strong><small>{nodeMenu.connectionSourceId ? '引用来源生成文本' : '记录灵感与提示词'}</small></span>
+            </button>
             <button onClick={() => createNode('image')}>
               <WandSparkles size={16} />
               <span><strong>图像</strong><small>文生图 / 图生图</small></span>
@@ -4250,9 +5134,32 @@ function App() {
               >
                 <header>
                   <div><Grid3X3 size={15} /><strong>选择主图</strong><span>{imageGalleryNode.data.imageVariants?.length ?? 0} 张</span></div>
-                  <button type="button" aria-label="关闭图片选择" onClick={() => setImageGalleryNodeId(null)}><X size={17} /></button>
+                  <div className="image-variant-gallery-actions">
+                    <label className="image-variant-size-control" title="调整缩略图大小">
+                      <Minus size={12} />
+                      <input
+                        type="range"
+                        min="120"
+                        max="360"
+                        step="10"
+                        value={imageGalleryThumbnailSize}
+                        aria-label="候选图片缩放"
+                        onChange={(event) => setImageGalleryThumbnailSize(Number(event.target.value))}
+                      />
+                      <Plus size={12} />
+                    </label>
+                    <button type="button" aria-label="关闭图片选择" onClick={() => setImageGalleryNodeId(null)}><X size={17} /></button>
+                  </div>
                 </header>
-                <div className="image-variant-gallery-grid">
+                <div
+                  className="image-variant-gallery-grid"
+                  style={{ '--variant-thumbnail-size': `${imageGalleryThumbnailSize}px` } as React.CSSProperties}
+                  onWheel={(event) => {
+                    if (!event.ctrlKey && !event.metaKey) return
+                    event.preventDefault()
+                    setImageGalleryThumbnailSize((current) => Math.max(120, Math.min(360, current - Math.sign(event.deltaY) * 20)))
+                  }}
+                >
                   {imageGalleryNode.data.imageVariants?.map((variant, index) => {
                     const active = imageGalleryNode.data.activeImageVariantId === variant.id
                       || (!imageGalleryNode.data.activeImageVariantId && imageGalleryNode.data.imageUrl === variant.url)
@@ -4308,7 +5215,6 @@ function App() {
                 onWheel={(event) => event.stopPropagation()}
               >
                 <div className="image-editor-reference-row">
-                  <span className="reference-mode-icon" title="参考图片"><WandSparkles size={14} /></span>
                   <div
                     className="image-reference-thumbnails"
                     onWheel={(event) => {
@@ -4316,12 +5222,24 @@ function App() {
                       event.currentTarget.scrollLeft += event.deltaY || event.deltaX
                     }}
                   >
-                    {activeImageReferences.map((reference) => (
+                    {activeGenerationReferences.map((reference) => (
                       <button
                         type="button"
                         key={reference.id}
-                        className={`image-reference-thumbnail ${reference.selected || activeGenerationNode.data.body.includes(reference.mention) ? 'is-mentioned' : ''} ${reference.source === 'current' && !reference.selected ? 'is-disabled' : ''}`}
-                        title={reference.source === 'current' && !reference.selected ? '点击重新启用当前主图参考' : `${reference.name} · 点击插入 ${reference.mention}`}
+                        className={`image-reference-thumbnail ${(reference.selected || activeGenerationNode.data.body.includes(reference.mention)) ? 'is-mentioned' : ''} ${reference.source === 'current' && !reference.selected ? 'is-disabled' : ''} ${('kind' in reference && reference.kind === 'text' && !reference.text?.trim()) || (!('kind' in reference) && reference.source === 'connection' && !reference.url) ? 'is-disabled' : ''}`}
+                        title={reference.source === 'current' && !reference.selected ? '点击重新启用当前主图参考' : `${reference.name} · 点击插入引用`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={(event) => {
+                          if (!('kind' in reference) || reference.kind !== 'text' || !reference.text?.trim()) return
+                          const rect = event.currentTarget.getBoundingClientRect()
+                          setTextReferencePreview({
+                            name: reference.name,
+                            text: reference.text,
+                            left: Math.min(rect.left, window.innerWidth - 300),
+                            bottom: window.innerHeight - rect.top + 8,
+                          })
+                        }}
+                        onMouseLeave={() => setTextReferencePreview(null)}
                         onClick={() => {
                           if (reference.source === 'current' && !reference.selected) {
                             setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
@@ -4333,7 +5251,9 @@ function App() {
                           selectImageMention(reference)
                         }}
                       >
-                        <img src={reference.url} alt={reference.name} />
+                        {reference.url
+                          ? <img src={reference.url} alt={reference.name} />
+                          : <span className="reference-text-thumbnail"><Type size={13} /></span>}
                         <span className="image-reference-name">{reference.name}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
                         {(reference.source === 'manual' || reference.source === 'connection' || reference.source === 'current') && (
                           <span
@@ -4373,7 +5293,7 @@ function App() {
                     key={activeGenerationNode.id}
                     ref={imagePromptEditorRef}
                     value={activeGenerationNode.data.body}
-                    references={activeImageReferences}
+                    references={activeGenerationReferences}
                     onChange={handleImagePromptChange}
                     onRemoveToken={(start, end) => {
                       const nodeId = activeGenerationNode.id
@@ -4413,12 +5333,14 @@ function App() {
                   <AnimatePresence>
                     {imageMentionOpen && (
                       <motion.div className="image-mention-menu" initial={{ opacity: 0, y: 5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .98 }}>
-                        <div className="image-mention-heading"><span>@ 引用参考图</span><small>{filteredImageMentionReferences.length} 张可用</small></div>
+                        <div className="image-mention-heading"><span>@ 引用参考素材</span><small>{filteredImageMentionReferences.length} 个可用</small></div>
                         {filteredImageMentionReferences.map((reference, index) => (
                           <button type="button" key={reference.id} className={imageMentionIndex === index ? 'is-selected' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => selectImageMention(reference)}>
-                            <img src={reference.url} alt="" />
-                            <span><strong>{reference.mention}</strong><small>{reference.name}</small></span>
-                            <em>{reference.source === 'connection' ? '来自连线' : '手动上传'}</em>
+                            {reference.url
+                              ? <img src={reference.url} alt="" />
+                              : <span className="reference-text-thumbnail"><Type size={13} /></span>}
+                            <span><strong>@{reference.name}</strong><small>{reference.name}</small></span>
+                            <em>{reference.source === 'connection' ? (reference.url ? '来自图片连线' : '来自文本连线') : '手动上传'}</em>
                           </button>
                         ))}
                         {!filteredImageMentionReferences.length && <p>没有匹配的参考图</p>}
@@ -4577,21 +5499,111 @@ function App() {
                 exit={{ opacity: 0, y: 10, scale: 0.98 }}
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <textarea
-                  ref={editorTextareaRef}
-                  value={activeTextNode.data.body}
-                  maxLength={2000}
-                  placeholder="描述任何你想生成的内容"
-                  aria-label="文本提示词内容"
-                  onChange={(event) => updateActiveTextNode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                      event.preventDefault()
-                      setActiveEditorNodeId(null)
-                    }
-                    if (event.key === 'Escape') setActiveEditorNodeId(null)
-                  }}
-                />
+                <div className="image-editor-reference-row text-editor-reference-row">
+                    <div className="image-reference-thumbnails">
+                      {activeTextReferences.map((reference) => (
+                        <button
+                          type="button"
+                          key={reference.id}
+                          className={`image-reference-thumbnail ${(reference.selected || (activeTextNode.data.promptText ?? '').includes(reference.mention)) ? 'is-mentioned' : ''} ${(reference.kind === 'text' ? !reference.text?.trim() : !reference.url) ? 'is-disabled' : ''}`}
+                          title={(reference.kind === 'text' ? !reference.text?.trim() : !reference.url) ? `${reference.name} · 来源内容暂不可用` : `${reference.name} · 点击插入引用`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={(event) => {
+                            if (reference.kind !== 'text' || !reference.text?.trim()) return
+                            const rect = event.currentTarget.getBoundingClientRect()
+                            setTextReferencePreview({
+                              name: reference.name,
+                              text: reference.text,
+                              left: Math.min(rect.left, window.innerWidth - 300),
+                              bottom: window.innerHeight - rect.top + 8,
+                            })
+                          }}
+                          onMouseLeave={() => setTextReferencePreview(null)}
+                          onClick={() => selectTextMention(reference)}
+                        >
+                          {reference.url
+                            ? <img src={reference.url} alt={reference.name} />
+                            : <span className="reference-text-thumbnail"><Type size={13} /></span>}
+                          <span className="image-reference-name">{reference.name}</span>
+                          <span
+                            className="reference-remove"
+                            role="button"
+                            aria-label={`移除 ${reference.name} 并断开连接`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              removeTextReference(reference)
+                            }}
+                          ><X size={9} /></span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="add-image-reference-button"
+                      title="从画布选择参考素材"
+                      onClick={() => {
+                        setCanvasReferencePickerNodeId(activeTextNode.id)
+                        setTextMentionOpen(false)
+                      }}
+                    ><Plus size={15} /></button>
+                  </div>
+                <div className="image-prompt-field text-prompt-field">
+                  <AtomicPromptEditor
+                    key={activeTextNode.id}
+                    ref={textPromptEditorRef}
+                    value={activeTextNode.data.promptText ?? ''}
+                    references={activeTextReferences}
+                    ariaLabel="文本模型指令"
+                    placeholder="描述希望文本模型完成的任务，按 @ 引用节点"
+                    onChange={handleTextPromptChange}
+                    onRemoveToken={(start, end) => {
+                      const promptText = activeTextNode.data.promptText ?? ''
+                      updateActiveTextNode(`${promptText.slice(0, start)}${promptText.slice(end)}`)
+                      window.requestAnimationFrame(() => textPromptEditorRef.current?.focusAt(start))
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation()
+                      if (textMentionOpen && filteredTextMentionReferences.length) {
+                        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                          event.preventDefault()
+                          const direction = event.key === 'ArrowDown' ? 1 : -1
+                          setTextMentionIndex((current) => (current + direction + filteredTextMentionReferences.length) % filteredTextMentionReferences.length)
+                          return
+                        }
+                        if (event.key === 'Enter' || event.key === 'Tab') {
+                          event.preventDefault()
+                          selectTextMention(filteredTextMentionReferences[textMentionIndex] ?? filteredTextMentionReferences[0])
+                          return
+                        }
+                      }
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault()
+                        void generateFromActiveTextNode()
+                      }
+                      if (event.key === 'Escape') {
+                        if (textMentionOpen) setTextMentionOpen(false)
+                        else setActiveEditorNodeId(null)
+                      }
+                    }}
+                  />
+                  <AnimatePresence>
+                    {textMentionOpen && (
+                      <motion.div className="image-mention-menu" initial={{ opacity: 0, y: 5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .98 }}>
+                        <div className="image-mention-heading"><span>@ 引用节点</span><small>{filteredTextMentionReferences.length} 个可用</small></div>
+                        {filteredTextMentionReferences.map((reference, index) => (
+                          <button type="button" key={reference.id} className={textMentionIndex === index ? 'is-selected' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => selectTextMention(reference)}>
+                            {reference.url
+                              ? <img src={reference.url} alt="" />
+                              : <span className="reference-text-thumbnail"><Type size={13} /></span>}
+                            <span><strong>@{reference.name}</strong><small>{reference.name}</small></span>
+                            <em>{reference.kind === 'image' ? '图片参考' : '文本参考'}</em>
+                          </button>
+                        ))}
+                        {!filteredTextMentionReferences.length && <p>没有匹配的引用</p>}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
                 <footer className="text-editor-footer">
                   <div className="editor-model-control">
                     <AnimatePresence>
@@ -4678,7 +5690,7 @@ function App() {
                     <button
                       className="editor-generate-button"
                       aria-label="生成"
-                      title={generationLoading ? '正在生成' : '生成图像'}
+                      title={generationLoading ? '正在生成' : '生成文本'}
                       disabled={generationLoading}
                       onClick={() => void generateFromActiveTextNode()}
                     >
@@ -4746,6 +5758,22 @@ function App() {
         </AnimatePresence>
 
         <AnimatePresence>
+          {textReferencePreview && (
+            <motion.aside
+              className="text-reference-hover-preview"
+              style={{ left: Math.max(12, textReferencePreview.left), bottom: textReferencePreview.bottom }}
+              initial={{ opacity: 0, y: 6, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 4, scale: 0.98 }}
+            >
+              <strong>{textReferencePreview.name}</strong>
+              <p>{textReferencePreview.text}</p>
+              <span>@Text</span>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {toastMessage && (
             <motion.div
               className={`canvas-toast ${activeTextNode ? 'with-editor' : ''}`}
@@ -4775,9 +5803,9 @@ function App() {
               onClick={(event) => event.stopPropagation()}
             >
               <header className="output-history-header">
-                <div><History size={18} /><h2 id="output-history-title">输出历史</h2><span>共 {outputHistory.length} 条</span></div>
+                <div><History size={18} /><h2 id="output-history-title">输出历史</h2><span>共 {currentOutputHistory.length} 条</span></div>
                 <div>
-                  {outputHistory.length > 0 && <button type="button" className="output-history-clear" onClick={() => { setOutputHistory([]); localStorage.removeItem(OUTPUT_HISTORY_KEY); setExpandedOutputErrorId(null) }}>清空记录</button>}
+                  {currentOutputHistory.length > 0 && <button type="button" className="output-history-clear" onClick={() => { setOutputHistory((current) => current.filter((record) => record.projectId ? record.projectId !== activeProjectId : activeProjectId !== CURRENT_PROJECT_ID)); setExpandedOutputErrorId(null) }}>清空当前项目记录</button>}
                   <button type="button" aria-label="关闭输出历史" onClick={() => setOutputHistoryOpen(false)}><X size={18} /></button>
                 </div>
               </header>
@@ -4834,7 +5862,7 @@ function App() {
                     </article>
                   )
                 }) : (
-                  <div className="output-history-empty"><History size={30} /><strong>{outputHistory.length ? '没有匹配的输出记录' : '暂时没有输出记录'}</strong><span>下一次生成成功或失败后，Disy 会自动记录在这里。</span></div>
+                  <div className="output-history-empty"><History size={30} /><strong>{currentOutputHistory.length ? '没有匹配的输出记录' : '当前项目暂时没有输出记录'}</strong><span>同一项目的所有画布会共享这里的生成记录。</span></div>
                 )}
               </div>
             </motion.section>
@@ -5079,7 +6107,7 @@ function App() {
               onClick={(event) => event.stopPropagation()}
             >
               <header className="asset-library-header">
-                <div><h2 id="generation-history-title">生成历史</h2><span>{generationHistory.length}</span></div>
+                <div><h2 id="generation-history-title">生成历史</h2><span>{currentGenerationHistory.length}</span></div>
                 <div className="asset-library-size-control">
                   <span>缩略图</span><Minus size={14} />
                   <input type="range" min="96" max="190" step="2" value={historyThumbnailSize} aria-label="调整历史缩略图大小" onChange={(event) => setHistoryThumbnailSize(Number(event.target.value))} />
@@ -5088,7 +6116,7 @@ function App() {
                 </div>
               </header>
               <div className="asset-library-toolbar history-toolbar">
-                <div className="asset-library-tabs"><button type="button" className="is-active">全部记录</button><button type="button">当前项目</button></div>
+                <div className="asset-library-tabs"><button type="button" className="is-active">{projectName} · 全部画布</button></div>
                 <label className="asset-library-search"><Search size={15} /><input value={generationHistorySearch} placeholder="搜索提示词、模型或文件名" onChange={(event) => setGenerationHistorySearch(event.target.value)} /></label>
                 {selectedHistoryIds.length > 0 && (
                   <div className="library-batch-actions" role="toolbar" aria-label="生成历史批量操作">
@@ -5236,7 +6264,7 @@ function App() {
               <header className="project-modal-header">
                 <div className="project-title-group">
                   <h2 id="project-dialog-title">项目</h2>
-                  <span>1</span>
+                  <span>{workspaceProjects.length}</span>
                 </div>
                 <button className="project-close" aria-label="关闭项目窗口" onClick={() => setProjectOpen(false)}>
                   <X size={18} />
@@ -5257,19 +6285,30 @@ function App() {
                   <History size={15} />
                   最近更新
                 </button>
-                <button onClick={() => setToastMessage('项目导入功能将在下一阶段开放')}>
+                <button onClick={() => workspaceImportInputRef.current?.click()}>
                   <Upload size={15} />
                   导入项目
                 </button>
-                <button className="project-create-button" onClick={() => setToastMessage('新建项目功能将在下一阶段开放')}>
+                <button onClick={() => void exportWholeWorkspace()}>
+                  <Download size={15} />
+                  完整导出
+                </button>
+                <label className="card-scale-control project-card-scale" title="调整项目卡片大小"><Grid3X3 size={14} /><input type="range" min="0.8" max="1.35" step="0.05" value={projectCardScale} onChange={(event) => setProjectCardScale(Number(event.target.value))} /></label>
+                <button className="project-create-button" onClick={() => void createNewProject()}>
                   <Plus size={16} />
                   新建
                 </button>
               </div>
 
-              <div className="project-grid">
-                {currentProjectMatches && (
-                  <button className="project-card is-current" onClick={() => setProjectOpen(false)}>
+              <div className="project-grid" style={{ '--project-card-width': `${Math.round(260 * projectCardScale)}px`, '--project-card-height': `${Math.round(205 * projectCardScale)}px` } as React.CSSProperties}>
+                <button className="project-card project-new-card" onClick={() => void createNewProject()}>
+                  <span className="project-new-icon"><Plus size={20} /></span>
+                  <strong>新建项目</strong>
+                </button>
+                {filteredWorkspaceProjects.map((project) => {
+                  const isCurrent = project.id === activeProjectId
+                  const projectCanvases = isCurrent ? workspaceCanvases : []
+                  return <div key={project.id} className={`project-card-wrap ${isCurrent ? 'is-current' : ''}`}><button className={`project-card ${isCurrent ? 'is-current' : ''}`} onClick={() => void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectOpen(false)).catch(() => setToastMessage('项目打开失败'))}>
                     <div className="project-preview">
                       <span className="preview-node preview-node-one" />
                       <span className="preview-node preview-node-two" />
@@ -5277,24 +6316,26 @@ function App() {
                       <span className="preview-node preview-node-three" />
                     </div>
                     <div className="project-card-meta">
-                      <strong>{canvasName}</strong>
-                      <span className="current-project-badge">当前</span>
-                      <small>{nodes.length} 个节点 · 刚刚更新</small>
+                      <strong>{project.name}</strong>
+                      {isCurrent && <span className="current-project-badge">当前</span>}
+                      <small>{project.canvasIds.length} 张画布{isCurrent ? ` · ${projectCanvases.reduce((sum, canvas) => sum + (canvas.nodes as unknown[]).length, 0)} 个节点` : ''}</small>
                     </div>
-                  </button>
-                )}
-                {!currentProjectMatches && (
+                  </button><button className="project-card-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={() => void removeProject(project.id)}><Trash2 size={14} /></button></div>
+                })}
+                {!filteredWorkspaceProjects.length && (
                   <div className="project-empty-search">没有找到匹配的项目</div>
                 )}
-                <button className="project-card project-new-card" onClick={() => setToastMessage('新建项目功能将在下一阶段开放')}>
-                  <span className="project-new-icon"><Plus size={20} /></span>
-                  <strong>新建项目</strong>
-                </button>
               </div>
             </motion.section>
           </motion.div>
         )}
       </AnimatePresence>
+
+      <input ref={workspaceImportInputRef} className="image-file-input" type="file" accept=".json,.disy" aria-label="导入完整 Disy 项目" onChange={(event) => {
+        const file = event.target.files?.[0]
+        if (file) void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+        event.target.value = ''
+      }} />
 
       <AnimatePresence>
         {apiOpen && (

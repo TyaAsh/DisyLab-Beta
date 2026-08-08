@@ -11,8 +11,18 @@
   --disy-font-family: 'Manrope', 'DM Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 
   /* 品牌与状态色 */
-  --accent: #ff694b;
-  --accent-soft: rgba(255, 105, 75, .14);
+  --brand-cyan: #70e8f1;
+  --brand-blue: #70b5ff;
+  --brand-violet: #a793ff;
+  --brand-pink: #f0a8d3;
+  --brand-gradient: linear-gradient(135deg, var(--brand-cyan) 0%, var(--brand-blue) 36%, var(--brand-violet) 68%, var(--brand-pink) 100%);
+  --brand-gradient-hover: linear-gradient(135deg, #8cf2f7 0%, #8cc5ff 36%, #b9a9ff 68%, #f5badd 100%);
+  --accent: #8ab9ff;
+  --accent-strong: #6f9fff;
+  --accent-soft: rgba(126, 170, 255, .13);
+  --accent-border: rgba(143, 188, 255, .36);
+  --danger: #ff827a;
+  --danger-soft: rgba(255, 130, 122, .11);
   --success: #70d394;
 
   /* 画布与文字 */
