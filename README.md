@@ -1,9 +1,11 @@
 <p align="center">
-  <img src="./docs/assets/disylab-hero.svg" width="100%" alt="DisyLab AI 创作画布" />
+  <img src="./public/disy-logo.png" width="132" alt="DisyLab Logo" />
 </p>
 
+<h1 align="center">DisyLab</h1>
+
 <p align="center">
-  <strong>把脑洞摊开，把参考连上，把“要不再试一个”变成一条看得见的创作路径。</strong>
+  <strong>让角色、参考、提示词和每一次尝试，都留在同一张会生长的画布上。</strong>
 </p>
 
 <p align="center">
@@ -34,6 +36,8 @@
 
 > 这里是 DisyLab v0.3.0。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
 
+![DisyLab Y2K 角色视觉项目](docs/assets/y2k-canvas-overview.png)
+
 ## 在线体验
 
 访问：[https://disy-infinite.netlify.app](https://disy-infinite.netlify.app)
@@ -59,31 +63,31 @@ DisyLab 希望把这些内容重新放回一张可以持续生长的画布：
 
 ## 界面预览
 
-### 一张画布，脑洞不排队
+### 从一个角色，长出一套视觉世界
 
-提示词、参考图、角色设定和生成结果可以像星系一样铺开。你负责想象，Disy 负责让关系别走丢。
+角色设定、海报方向、材质实验和变体结果可以同时展开。每条连线都保留创作依据，不用靠记忆猜“这张图当时参考了什么”。
 
-![DisyLab 创作画布](docs/assets/canvas-showcase.png)
+![DisyLab Y2K 角色视觉画布](docs/assets/y2k-canvas-editor.png)
 
 ### 三个方向，就是三个方案
 
 Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择方案一、方案二、方案三或全部，再为每个方向分别展开确认卡；你不点确认，就不会开始生图。
 
-![Disy Agent 多方案选择](docs/assets/agent-multi-plan.png)
+![Disy Agent 多方案选择与确认](docs/assets/y2k-agent-plans.png)
 
-![选择全部后生成独立确认卡](docs/assets/agent-three-confirmations.png)
+### 好结果不只躺在画布上
 
-### 不记快捷键也没关系
+满意的角色图和海报可以收进资产库，按项目继续复用；生成历史保留每一次输出，链接失效时也会给出明确的重新关联入口。
 
-左下角的问号收好了快捷键大全与四步使用指南。节点达到 28 个后，画布会自动减少不可见内容和高开销光效渲染；不用去浏览器里寻找神秘的“变快”开关。
+![DisyLab Y2K 项目资产库](docs/assets/y2k-assets.png)
 
-![DisyLab 快捷键与使用指南](docs/assets/help-center.png)
+![DisyLab Y2K 生成历史](docs/assets/y2k-history.png)
 
-### API 不必从空白开始
+### 项目不是一张孤零零的画布
 
-新建连接时可直接选择 GRS AI、APIYI、OpenAI 或硅基流动。名称与官方 Base URL 自动填写，API Key 仍只由你输入并保存在当前浏览器会话。
+一个项目可以包含多张画布，并自动使用最近的视觉结果作为封面。灵感可以分支，但项目不会失联。
 
-![DisyLab API 厂商预设](docs/assets/api-provider-presets.png)
+![DisyLab Y2K 项目管理](docs/assets/y2k-projects.png)
 
 ## 核心能力
 
