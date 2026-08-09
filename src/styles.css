@@ -293,8 +293,8 @@ button { border: 0; cursor: pointer; }
 .api-chip.configured svg { color: var(--success); }
 
 .brand-logo {
-  width: 25px;
-  height: 25px;
+  width: 23px;
+  height: 23px;
   display: block;
   border-radius: 8px;
   object-fit: cover;
@@ -340,8 +340,8 @@ button { border: 0; cursor: pointer; }
 .tool-rail .rail-primary:hover { color: #090a09; background: #fff; }
 .rail-divider { width: 22px; height: 1px; margin: 3px 0; background: var(--line); }
 .tool-rail .rail-avatar {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   margin-top: 2px;
   padding: 0;
   overflow: visible;
@@ -1937,7 +1937,7 @@ button { border: 0; cursor: pointer; }
 }
 .agent-panel-header { min-height: 64px; padding: 11px 12px 10px 15px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .agent-panel-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
-.agent-panel-logo { width: 40px; height: 40px; flex: none; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(89, 126, 255, .25)); }
+.agent-panel-logo { width: 34px; height: 34px; flex: none; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(89, 126, 255, .22)); }
 .agent-panel-title > span { min-width: 0; display: grid; gap: 2px; }
 .agent-panel-title strong { font-size: 13px; }
 .agent-panel-title small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
