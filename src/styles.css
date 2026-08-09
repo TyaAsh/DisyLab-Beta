@@ -309,6 +309,29 @@ button { border: 0; cursor: pointer; }
 .api-chip svg { color: var(--accent); }
 .api-chip.configured { color: var(--success); }
 .api-chip.configured svg { color: var(--success); }
+.chrome-icon-button:disabled,
+.api-chip:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+.transfer-backdrop { position: fixed; inset: 0; z-index: 64; padding: 18px; display: grid; place-items: center; background: rgba(3,5,4,.76); backdrop-filter: blur(10px); }
+.transfer-modal { width: min(520px, calc(100vw - 36px)); padding: 18px; border: 1px solid color-mix(in srgb, var(--ink) 14%, var(--line)); border-radius: 20px; display: grid; gap: 14px; color: var(--ink); background: linear-gradient(145deg, #202321, #171a18 58%, #151715); box-shadow: 0 36px 120px rgba(0,0,0,.58), inset 0 1px 0 rgba(255,255,255,.04); }
+.transfer-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.transfer-modal-header h2 { margin: 0; font-size: 16px; letter-spacing: -.03em; }
+.transfer-modal-header span { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.transfer-modal-header > button { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; color: var(--muted); background: transparent; }
+.transfer-modal-header > button:hover:not(:disabled) { color: var(--ink); background: rgba(255,255,255,.07); }
+.transfer-dropzone { min-height: 188px; padding: 22px 18px; border: 1.5px dashed color-mix(in srgb, var(--ink) 18%, var(--line)); border-radius: 16px; display: grid; place-items: center; align-content: center; gap: 7px; color: var(--muted); background: color-mix(in srgb, var(--surface-soft) 42%, transparent); text-align: center; cursor: pointer; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.transfer-dropzone:hover:not(:disabled),
+.transfer-dropzone.is-active { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); color: var(--ink); background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+.transfer-dropzone:disabled { cursor: not-allowed; opacity: .6; }
+.transfer-dropzone > svg { color: var(--accent); }
+.transfer-dropzone strong { color: var(--ink); font-size: 13px; }
+.transfer-dropzone span { font-size: 10px; }
+.transfer-dropzone em { max-width: 340px; color: color-mix(in srgb, var(--muted) 88%, transparent); font-size: 9px; font-style: normal; line-height: 1.5; }
+.transfer-export-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; background: rgba(255,255,255,.02); }
+.transfer-export-card strong { display: block; font-size: 12px; }
+.transfer-export-card span { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.transfer-export-button { flex: none; height: 36px; padding: 0 14px; border-radius: 10px; display: inline-flex; align-items: center; gap: 7px; color: #0d100e; background: linear-gradient(135deg, #dce8ff, #9eb8ff); font-size: 10px; font-weight: 750; }
+.transfer-export-button:disabled { opacity: .5; cursor: not-allowed; }
 
 .brand-logo {
   width: 23px;

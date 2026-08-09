@@ -1368,6 +1368,8 @@ function App() {
   const generationLoading = activeGenerationTaskKeys.size > 0
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [transferProgress, setTransferProgress] = useState<string | null>(null)
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferDropActive, setTransferDropActive] = useState(false)
   const transferBusy = Boolean(transferProgress)
   const [showGrid, setShowGrid] = useState(true)
   const [canvasZoom, setCanvasZoom] = useState(1)
@@ -6098,6 +6100,28 @@ function App() {
 
         <div className="floating-chrome top-right-cluster">
           <button
+            type="button"
+            className="chrome-icon-button"
+            aria-label="导入项目"
+            title="导入项目或画布备份"
+            disabled={transferBusy}
+            onClick={() => setTransferOpen(true)}
+          >
+            <Upload size={16} />
+          </button>
+          <button
+            type="button"
+            className="chrome-icon-button"
+            aria-label="导出完整工作区"
+            title="导出当前工作区（含全部画布、生成历史、资产）"
+            disabled={transferBusy}
+            onClick={() => void exportWholeWorkspace().catch((error) => {
+              if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
+            })}
+          >
+            <Download size={16} />
+          </button>
+          <button
             ref={apiButtonRef}
             className={`api-chip ${apiConfigured ? 'configured' : ''}`}
             onClick={() => setApiOpen(true)}
@@ -8052,9 +8076,95 @@ function App() {
 
       <input ref={workspaceImportInputRef} className="image-file-input" type="file" accept=".json,.disy" aria-label="导入完整 Disy 项目" onChange={(event) => {
         const file = event.target.files?.[0]
-        if (file) void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+        if (file) {
+          setTransferOpen(false)
+          void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+        }
         event.target.value = ''
       }} />
+
+      <AnimatePresence>
+        {transferOpen && (
+          <motion.div
+            className="transfer-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => !transferBusy && setTransferOpen(false)}
+          >
+            <motion.section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="transfer-dialog-title"
+              className="transfer-modal"
+              initial={{ opacity: 0, y: 14, scale: .985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: .985 }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="transfer-modal-header">
+                <div>
+                  <h2 id="transfer-dialog-title">导入 / 导出</h2>
+                  <span>备份与恢复完整工作区（画布、生成历史、资产；不含 API Key）</span>
+                </div>
+                <button type="button" aria-label="关闭导入导出" disabled={transferBusy} onClick={() => setTransferOpen(false)}><X size={18} /></button>
+              </header>
+
+              <button
+                type="button"
+                className={`transfer-dropzone ${transferDropActive ? 'is-active' : ''}`}
+                disabled={transferBusy}
+                onClick={() => workspaceImportInputRef.current?.click()}
+                onDragEnter={(event) => {
+                  event.preventDefault()
+                  setTransferDropActive(true)
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'copy'
+                  setTransferDropActive(true)
+                }}
+                onDragLeave={(event) => {
+                  const related = event.relatedTarget
+                  if (related instanceof globalThis.Node && event.currentTarget.contains(related)) return
+                  setTransferDropActive(false)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setTransferDropActive(false)
+                  const file = event.dataTransfer.files?.[0]
+                  if (!file) return
+                  setTransferOpen(false)
+                  void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+                }}
+              >
+                <Upload size={28} />
+                <strong>导入项目或画布备份</strong>
+                <span>拖拽 `.disy` / `.json` 到此处，或点击选择文件</span>
+                <em>导入会先自动导出一份当前备份，再替换本机工作区</em>
+              </button>
+
+              <div className="transfer-export-card">
+                <div>
+                  <strong>导出完整工作区</strong>
+                  <span>包含全部项目与画布、生成历史、资产库；适合换机或备份</span>
+                </div>
+                <button
+                  type="button"
+                  className="transfer-export-button"
+                  disabled={transferBusy}
+                  onClick={() => void exportWholeWorkspace().then(() => setTransferOpen(false)).catch((error) => {
+                    if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
+                  })}
+                >
+                  <Download size={16} />
+                  立即导出
+                </button>
+              </div>
+            </motion.section>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {apiOpen && (
