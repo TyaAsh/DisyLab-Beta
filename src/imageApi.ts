@@ -19,10 +19,14 @@ export type GeneratedImage = {
 
 export type TextGenerationOptions = {
   referenceImages?: string[]
+  signal?: AbortSignal
 }
 
 const REFERENCE_IMAGE_TARGET_BYTES = 1_800_000
 const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
+const GRSAI_IMAGE_POLL_INTERVAL_MS = 2_500
+const GRSAI_IMAGE_POLL_TIMEOUT_MS = 15 * 60_000
+const GRSAI_MAX_CONSECUTIVE_POLL_ERRORS = 24
 
 function blobToDataUrl(blob: Blob) {
   return new Promise<string>((resolve, reject) => {
@@ -43,18 +47,22 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) 
   })
 }
 
-export async function prepareReferenceImageForRequest(source: string): Promise<string> {
+export async function prepareReferenceImageForRequest(source: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
   const trimmedSource = source.trim()
   if (!trimmedSource || !/^(?:https?:|blob:|data:image\/)/i.test(trimmedSource)) return trimmedSource
 
   let sourceBlob: Blob
   const referenceController = new AbortController()
+  const abortReferenceRead = () => referenceController.abort()
+  signal?.addEventListener('abort', abortReferenceRead, { once: true })
   const referenceTimeout = window.setTimeout(() => referenceController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
   try {
     const response = await fetch(trimmedSource, { signal: referenceController.signal })
     if (!response.ok) throw new Error(`图片读取失败（${response.status}）`)
     sourceBlob = await response.blob()
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
     throw new GenerationRequestError(
       'platform',
       error instanceof DOMException && error.name === 'AbortError' ? '参考图片读取超时' : '参考图片无法读取',
@@ -62,6 +70,7 @@ export async function prepareReferenceImageForRequest(source: string): Promise<s
     )
   } finally {
     window.clearTimeout(referenceTimeout)
+    signal?.removeEventListener('abort', abortReferenceRead)
   }
 
   if (!sourceBlob.type.startsWith('image/')) {
@@ -87,6 +96,7 @@ export async function prepareReferenceImageForRequest(source: string): Promise<s
   }
 
   try {
+    if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
     const canvas = document.createElement('canvas')
     // Preserve the exact pixel dimensions. Only encoded file size is reduced.
     canvas.width = bitmap.width
@@ -97,6 +107,7 @@ export async function prepareReferenceImageForRequest(source: string): Promise<s
 
     let compressed: Blob | null = isSupportedEditFormat ? sourceBlob : null
     for (const quality of [0.88, 0.78, 0.68, 0.58]) {
+      if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
       const candidate = await canvasToBlob(canvas, 'image/webp', quality)
       if (!compressed || candidate.size < compressed.size) compressed = candidate
       if (candidate.size <= REFERENCE_IMAGE_TARGET_BYTES) {
@@ -142,6 +153,28 @@ function normalizedApiBaseUrl(baseUrl: string) {
 
 function endpoint(baseUrl: string, path: string) {
   return `${normalizedApiBaseUrl(baseUrl)}/${path.replace(/^\//, '')}`
+}
+
+function isGrsaiBaseUrl(baseUrl: string) {
+  return /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(normalizedApiBaseUrl(baseUrl))
+}
+
+function waitForDelay(delay: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Generation interrupted', 'AbortError'))
+      return
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, delay)
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Generation interrupted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }
 
 function grsaiFallbackModels(baseUrl: string): RemoteModel[] | null {
@@ -256,143 +289,8 @@ export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'base
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 
-export async function generateRemoteImages(
-  settings: ApiRequestSettings,
-  options: {
-    prompt: string
-    count: number
-    referenceImages?: string[]
-    aspectRatio?: string
-    resolution?: '1K' | '2K' | '4K'
-    detail?: 'low' | 'medium' | 'high'
-  },
-): Promise<GeneratedImage[]> {
-  const compatibleSize = (() => {
-    const [width, height] = String(options.aspectRatio ?? '1:1').split(':').map(Number)
-    if (!Number.isFinite(width) || !Number.isFinite(height) || height === 0) return '1024x1024'
-    const ratio = width / height
-    if (ratio > 1.15) return '1536x1024'
-    if (ratio < 0.87) return '1024x1536'
-    return '1024x1024'
-  })()
-  const body: Record<string, unknown> = {
-    model: settings.model,
-    prompt: options.prompt,
-    n: options.count,
-    size: compatibleSize,
-  }
-  if (options.aspectRatio && options.aspectRatio !== 'auto') body.aspect_ratio = options.aspectRatio
-  if (options.resolution) body.resolution = options.resolution
-  if (options.detail) body.quality = options.detail
-  if (!/gpt-image/i.test(settings.model)) body.response_format = 'url'
-  const referenceImages = options.referenceImages?.filter(Boolean) ?? []
-  const useGrsaiNanoBanana = /^nano-banana(?:-|$)/i.test(settings.model)
-  const useStandardImageEdit = referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
-
-  let response: Response
-  try {
-    if (useGrsaiNanoBanana) {
-      response = await fetch(endpoint(settings.baseUrl, 'api/generate'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: settings.model,
-          prompt: options.prompt,
-          images: referenceImages,
-          aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
-          imageSize: options.resolution ?? '1K',
-          replyType: 'json',
-        }),
-      })
-    } else if (useStandardImageEdit) {
-      const form = new FormData()
-      form.append('model', settings.model)
-      form.append('prompt', options.prompt)
-      form.append('n', String(options.count))
-      form.append('size', compatibleSize)
-      if (options.detail) form.append('quality', options.detail)
-
-      for (const [index, imageSource] of referenceImages.entries()) {
-        let imageResponse: Response
-        const imageController = new AbortController()
-        const imageTimeout = window.setTimeout(() => imageController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
-        try {
-          imageResponse = await fetch(imageSource, { signal: imageController.signal })
-        } catch (error) {
-          throw new GenerationRequestError(
-            'platform',
-            error instanceof DOMException && error.name === 'AbortError' ? '参考图片读取超时' : '参考图片无法转换为模型输入',
-            `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
-          )
-        } finally {
-          window.clearTimeout(imageTimeout)
-        }
-        if (!imageResponse.ok) {
-          throw new GenerationRequestError(
-            'platform',
-            '参考图片无法转换为模型输入',
-            `图片读取失败（${imageResponse.status}）。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
-          )
-        }
-        const imageBlob = await imageResponse.blob()
-        if (!imageBlob.type.startsWith('image/')) {
-          throw new GenerationRequestError(
-            'platform',
-            '参考图片格式无法识别',
-            `第 ${index + 1} 张参考图的文件类型为 ${imageBlob.type || 'unknown'}，本次生成请求未发送。`,
-          )
-        }
-        const extension = imageBlob.type.includes('webp') ? 'webp' : imageBlob.type.includes('jpeg') ? 'jpg' : 'png'
-        // OpenAI's standard edit endpoint accepts `image` for one file and an
-        // `image[]` array for multiple files. Some compatible relays only parse
-        // the singular field, so keep the one-reference request strictly standard.
-        const imageField = referenceImages.length === 1 ? 'image' : 'image[]'
-        form.append(imageField, imageBlob, `reference-${index + 1}.${extension}`)
-      }
-
-      response = await fetch(endpoint(settings.baseUrl, 'images/edits'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${settings.apiKey}` },
-        body: form,
-      })
-    } else {
-      if (referenceImages.length) body.image_urls = referenceImages
-      response = await fetch(endpoint(settings.baseUrl, 'images/generations'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      })
-    }
-  } catch (error) {
-    if (error instanceof GenerationRequestError) throw error
-    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    throw new GenerationRequestError(
-      'network',
-      '请求可能已送达并扣费，但浏览器没有收到生成结果',
-      `${detail}。请先检查中转服务的消费记录、任务详情或生成历史，不要直接重复生成。常见原因是中转响应缺少跨域许可、连接中途断开或代理没有把图片响应返回给浏览器。`,
-    )
-  }
-  // Paid generation requests are never retried or split automatically. A rejected
-  // batch stops here so one click can produce at most one billable API request.
-  if (!response.ok) throw await createApiError(response)
-  let payload: unknown
-  try {
-    payload = await response.json()
-  } catch (error) {
-    throw new GenerationRequestError(
-      'platform',
-      '请求可能已经扣费，但 API 返回了无法识别的数据',
-      `${error instanceof Error ? error.message : String(error)}。请检查中转任务或生成历史，不要直接重试。`,
-    )
-  }
-  type ImageRow = { url: string; revisedPrompt?: string }
-  const rows: ImageRow[] = []
+function extractGeneratedImages(payload: unknown): GeneratedImage[] {
+  const rows: GeneratedImage[] = []
   const visited = new WeakSet<object>()
   const normalizeImageValue = (value: unknown) => {
     if (typeof value !== 'string') return ''
@@ -433,6 +331,253 @@ export async function generateRemoteImages(
     })
   }
   visit(payload)
+  return rows
+}
+
+async function resolveGrsaiImageResult(
+  settings: ApiRequestSettings,
+  initialPayload: unknown,
+  signal?: AbortSignal,
+) {
+  const initial = initialPayload && typeof initialPayload === 'object'
+    ? initialPayload as Record<string, unknown>
+    : {}
+  const taskId = String(initial.id ?? initial.taskId ?? initial.task_id ?? '').trim()
+  const initialStatus = String(initial.status ?? '').toLowerCase()
+  if (extractGeneratedImages(initialPayload).length) return initialPayload
+  if (/^(?:failed|failure|violation|cancelled|canceled)$/.test(initialStatus)) {
+    throw new GenerationRequestError(
+      'api',
+      initialStatus === 'violation' ? '图片生成未通过内容审核' : 'GRS AI 图像任务生成失败',
+      String(initial.error ?? initial.message ?? `任务状态：${initialStatus}`),
+      { requestId: taskId || undefined },
+    )
+  }
+  if (!taskId) return initialPayload
+
+  const startedAt = Date.now()
+  let consecutiveErrors = 0
+  let succeededWithoutResultCount = 0
+  while (Date.now() - startedAt < GRSAI_IMAGE_POLL_TIMEOUT_MS) {
+    await waitForDelay(GRSAI_IMAGE_POLL_INTERVAL_MS, signal)
+    let response: Response
+    try {
+      response = await fetch(`${endpoint(settings.baseUrl, 'api/result')}?id=${encodeURIComponent(taskId)}`, {
+        signal,
+        headers: { Authorization: `Bearer ${settings.apiKey}` },
+      })
+      if (!response.ok) {
+        const errorPayload = await response.clone().json().catch(() => null) as Record<string, unknown> | null
+        const nestedError = errorPayload?.data && typeof errorPayload.data === 'object'
+          ? errorPayload.data as Record<string, unknown>
+          : null
+        const errorRecord = nestedError ?? errorPayload
+        const errorStatus = String(errorRecord?.status ?? '').toLowerCase()
+        if (/^(?:failed|failure|violation|cancelled|canceled)$/.test(errorStatus)) {
+          throw new GenerationRequestError(
+            'api',
+            errorStatus === 'violation' ? '图片生成未通过内容审核' : 'GRS AI 图像任务生成失败',
+            String(errorRecord?.error ?? errorRecord?.message ?? `任务状态：${errorStatus}`),
+            { requestId: taskId },
+          )
+        }
+        if (response.status === 401 || response.status === 403) throw await createApiError(response)
+        throw new Error(`结果查询失败（${response.status}）`)
+      }
+      const payload = await response.json() as unknown
+      consecutiveErrors = 0
+      const images = extractGeneratedImages(payload)
+      if (images.length) return payload
+      const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+      const status = String(record.status ?? '').toLowerCase()
+      if (/^(?:failed|failure|violation|cancelled|canceled)$/.test(status)) {
+        throw new GenerationRequestError(
+          'api',
+          status === 'violation' ? '图片生成未通过内容审核' : 'GRS AI 图像任务生成失败',
+          String(record.error ?? record.message ?? `任务状态：${status}`),
+          { requestId: taskId },
+        )
+      }
+      if (/^(?:succeeded|success|completed|complete)$/.test(status)) {
+        succeededWithoutResultCount += 1
+        // A successful status can arrive just before the result URL is replicated.
+        if (succeededWithoutResultCount >= 20) {
+          throw new GenerationRequestError(
+            'platform',
+            'GRS AI 显示生成成功，但暂未返回图片地址',
+            `任务 ${taskId} 已成功。Disy 已额外查询多次，但结果地址仍为空；请稍后从 GRS AI 日志找回，避免重复扣费。`,
+            { requestId: taskId },
+          )
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      if (error instanceof GenerationRequestError) throw error
+      consecutiveErrors += 1
+      if (consecutiveErrors >= GRSAI_MAX_CONSECUTIVE_POLL_ERRORS) {
+        throw new GenerationRequestError(
+          'network',
+          'GRS AI 任务已提交，但结果查询暂时中断',
+          `任务 ID：${taskId}。连续 ${consecutiveErrors} 次查询失败，任务仍可能在服务端成功完成；请勿直接重试。`,
+          { requestId: taskId },
+        )
+      }
+    }
+  }
+  throw new GenerationRequestError(
+    'network',
+    'GRS AI 任务仍在生成或结果查询超时',
+    `任务 ID：${taskId}。Disy 已持续查询 15 分钟，任务仍可能稍后成功；请勿直接重复生成。`,
+    { requestId: taskId },
+  )
+}
+
+export async function generateRemoteImages(
+  settings: ApiRequestSettings,
+  options: {
+    prompt: string
+    count: number
+    referenceImages?: string[]
+    aspectRatio?: string
+    resolution?: '1K' | '2K' | '4K'
+    detail?: 'low' | 'medium' | 'high'
+    signal?: AbortSignal
+  },
+): Promise<GeneratedImage[]> {
+  const compatibleSize = (() => {
+    const [width, height] = String(options.aspectRatio ?? '1:1').split(':').map(Number)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || height === 0) return '1024x1024'
+    const ratio = width / height
+    if (ratio > 1.15) return '1536x1024'
+    if (ratio < 0.87) return '1024x1536'
+    return '1024x1024'
+  })()
+  const body: Record<string, unknown> = {
+    model: settings.model,
+    prompt: options.prompt,
+    n: options.count,
+    size: compatibleSize,
+  }
+  if (options.aspectRatio && options.aspectRatio !== 'auto') body.aspect_ratio = options.aspectRatio
+  if (options.resolution) body.resolution = options.resolution
+  if (options.detail) body.quality = options.detail
+  if (!/gpt-image/i.test(settings.model)) body.response_format = 'url'
+  const referenceImages = options.referenceImages?.filter(Boolean) ?? []
+  const useGrsaiUnifiedImage = isGrsaiBaseUrl(settings.baseUrl)
+  const useStandardImageEdit = !useGrsaiUnifiedImage && referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
+
+  let response: Response
+  try {
+    if (useGrsaiUnifiedImage) {
+      response = await fetch(endpoint(settings.baseUrl, 'api/generate'), {
+        method: 'POST',
+        signal: options.signal,
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          prompt: options.prompt,
+          images: referenceImages,
+          aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
+          imageSize: options.resolution ?? '1K',
+          // Async mode returns a task ID immediately. Polling that ID avoids losing
+          // successful images when a long-lived synchronous connection is interrupted.
+          replyType: 'async',
+        }),
+      })
+    } else if (useStandardImageEdit) {
+      const form = new FormData()
+      form.append('model', settings.model)
+      form.append('prompt', options.prompt)
+      form.append('n', String(options.count))
+      form.append('size', compatibleSize)
+      if (options.detail) form.append('quality', options.detail)
+
+      for (const [index, imageSource] of referenceImages.entries()) {
+        let imageResponse: Response
+        const imageController = new AbortController()
+        const abortImageRead = () => imageController.abort()
+        options.signal?.addEventListener('abort', abortImageRead, { once: true })
+        const imageTimeout = window.setTimeout(() => imageController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
+        try {
+          imageResponse = await fetch(imageSource, { signal: imageController.signal })
+        } catch (error) {
+          if (options.signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
+          throw new GenerationRequestError(
+            'platform',
+            error instanceof DOMException && error.name === 'AbortError' ? '参考图片读取超时' : '参考图片无法转换为模型输入',
+            `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
+          )
+        } finally {
+          window.clearTimeout(imageTimeout)
+          options.signal?.removeEventListener('abort', abortImageRead)
+        }
+        if (!imageResponse.ok) {
+          throw new GenerationRequestError(
+            'platform',
+            '参考图片无法转换为模型输入',
+            `图片读取失败（${imageResponse.status}）。为避免产生无效计费，本次请求尚未发送到图像生成接口。`,
+          )
+        }
+        const imageBlob = await imageResponse.blob()
+        if (!imageBlob.type.startsWith('image/')) {
+          throw new GenerationRequestError(
+            'platform',
+            '参考图片格式无法识别',
+            `第 ${index + 1} 张参考图的文件类型为 ${imageBlob.type || 'unknown'}，本次生成请求未发送。`,
+          )
+        }
+        const extension = imageBlob.type.includes('webp') ? 'webp' : imageBlob.type.includes('jpeg') ? 'jpg' : 'png'
+        // GPT Image edit APIs represent an image array by repeating the same
+        // multipart `image` field. The upload order is the prompt's 图1/图2/... order.
+        form.append('image', imageBlob, `reference-${index + 1}.${extension}`)
+      }
+
+      response = await fetch(endpoint(settings.baseUrl, 'images/edits'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${settings.apiKey}` },
+        body: form,
+        signal: options.signal,
+      })
+    } else {
+      if (referenceImages.length) body.image_urls = referenceImages
+      response = await fetch(endpoint(settings.baseUrl, 'images/generations'), {
+        method: 'POST',
+        signal: options.signal,
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+    }
+  } catch (error) {
+    if (error instanceof GenerationRequestError) throw error
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    throw new GenerationRequestError(
+      'network',
+      '请求可能已送达并扣费，但浏览器没有收到生成结果',
+      `${detail}。请先检查中转服务的消费记录、任务详情或生成历史，不要直接重复生成。常见原因是中转响应缺少跨域许可、连接中途断开或代理没有把图片响应返回给浏览器。`,
+    )
+  }
+  // Paid generation requests are never retried or split automatically. A rejected
+  // batch stops here so one click can produce at most one billable API request.
+  if (!response.ok) throw await createApiError(response)
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch (error) {
+    throw new GenerationRequestError(
+      'platform',
+      '请求可能已经扣费，但 API 返回了无法识别的数据',
+      `${error instanceof Error ? error.message : String(error)}。请检查中转任务或生成历史，不要直接重试。`,
+    )
+  }
+  if (useGrsaiUnifiedImage) payload = await resolveGrsaiImageResult(settings, payload, options.signal)
+  const rows = extractGeneratedImages(payload)
   if (!rows.length) {
     throw new GenerationRequestError(
       'platform',
@@ -464,6 +609,7 @@ export async function generateRemoteText(
   try {
     response = await fetch(endpoint(settings.baseUrl, 'chat/completions'), {
       method: 'POST',
+      signal: options.signal,
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
         'Content-Type': 'application/json',
@@ -475,6 +621,7 @@ export async function generateRemoteText(
       }),
     })
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw createNetworkError(error)
   }
   if (!response.ok) throw await createApiError(response)

@@ -1,11 +1,12 @@
 const DATABASE_NAME = 'disy-infinite-local'
-const DATABASE_VERSION = 3
+const DATABASE_VERSION = 4
 const LEGACY_PROJECT_STORE = 'projects'
 const ASSET_STORE = 'assets'
 const WORKSPACE_PROJECT_STORE = 'workspace-projects'
 const CANVAS_STORE = 'canvases'
 const WORKSPACE_DATA_STORE = 'workspace-data'
 const AGENT_SESSION_STORE = 'agent-sessions'
+const HISTORY_MEDIA_STORE = 'history-media'
 const ASSET_LIBRARY_ID = 'library'
 const WORKSPACE_DATA_ID = 'workspace'
 
@@ -69,6 +70,13 @@ export type AgentSessionRecord = {
   createdAt: string
   updatedAt: string
   [key: string]: unknown
+}
+
+export type HistoryMediaRecord = {
+  id: string
+  blob: Blob
+  fileName: string
+  createdAt: string
 }
 
 export type WorkspaceAuxiliaryData = {
@@ -145,6 +153,9 @@ function openDatabase() {
         const sessions = database.createObjectStore(AGENT_SESSION_STORE, { keyPath: 'id' })
         sessions.createIndex('canvasId', 'canvasId')
         sessions.createIndex('projectId', 'projectId')
+      }
+      if (!database.objectStoreNames.contains(HISTORY_MEDIA_STORE)) {
+        database.createObjectStore(HISTORY_MEDIA_STORE, { keyPath: 'id' })
       }
 
       // v2 and older stored one canvas as one "project". Copy it during the
@@ -494,6 +505,28 @@ function removeSecrets(value: unknown): unknown {
     if (!SECRET_KEY_PATTERN.test(key)) clean[key] = removeSecrets(child)
   }
   return clean
+}
+
+export async function saveHistoryMedia(record: HistoryMediaRecord) {
+  await runTransaction<void>([HISTORY_MEDIA_STORE], 'readwrite', (transaction) => {
+    transaction.objectStore(HISTORY_MEDIA_STORE).put(record)
+  })
+}
+
+export async function loadHistoryMedia(id: string) {
+  const database = await openDatabase()
+  try {
+    const record = await requestResult(database.transaction(HISTORY_MEDIA_STORE, 'readonly').objectStore(HISTORY_MEDIA_STORE).get(id))
+    return (record as HistoryMediaRecord | undefined) ?? null
+  } finally {
+    database.close()
+  }
+}
+
+export async function deleteHistoryMedia(id: string) {
+  await runTransaction<void>([HISTORY_MEDIA_STORE], 'readwrite', (transaction) => {
+    transaction.objectStore(HISTORY_MEDIA_STORE).delete(id)
+  })
 }
 
 export async function exportWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {

@@ -95,6 +95,7 @@ type Props = {
   onPickFromCanvas: () => void
   onSend: (message: string, invocationText: string) => void
   onPlanChange: (id: string, patch: Partial<Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count'>>) => void
+  onSelectPlanOptions: (groupPlanIds: string[], selectedPlanIds: string[]) => void
   onConfirmPlan: (id: string) => void
   onCancelPlan: (id: string) => void
   onLocateCanvasNode: (nodeId: string) => void
@@ -196,7 +197,8 @@ export function AgentPanel(props: Props) {
     image.src = reference.url
     image.alt = ''
     const label = document.createElement('b')
-    label.textContent = reference.name
+    const existingIndex = props.references.findIndex((item) => item.nodeId === reference.nodeId)
+    label.textContent = `图${existingIndex >= 0 ? existingIndex + 1 : props.references.length + 1} · ${reference.name}`
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.setAttribute('aria-label', '移除引用')
@@ -261,6 +263,15 @@ export function AgentPanel(props: Props) {
     addReference(props.pendingReference)
     props.onPendingReferenceConsumed()
   }, [props.pendingReference])
+  useEffect(() => {
+    const referenceNumberById = new Map(props.references.map((reference, index) => [reference.nodeId, index + 1]))
+    editorRef.current?.querySelectorAll<HTMLElement>('.agent-inline-reference').forEach((chip) => {
+      const reference = props.references.find((item) => item.nodeId === chip.dataset.referenceId)
+      const number = reference ? referenceNumberById.get(reference.nodeId) : undefined
+      const label = chip.querySelector('b')
+      if (label && reference && number) label.textContent = `图${number} · ${reference.name}`
+    })
+  }, [props.references])
   useEffect(() => {
     const container = messagesRef.current
     if (!container) return
@@ -355,9 +366,9 @@ export function AgentPanel(props: Props) {
         <header><span><ImagePlus size={15} />图像生成确认</span><em>{statusLabel}</em></header>
         <textarea value={plan.prompt} disabled={disabled} onChange={(event) => props.onPlanChange(plan.id, { prompt: event.target.value })} aria-label="编辑图像方案提示词" />
         <div className="agent-plan-summary"><SlidersHorizontal size={12} />{plan.aspectRatio} · {plan.resolution} · {props.detailOptions.find((option) => option.value === plan.detail)?.label ?? plan.detail} · {plan.count} 张</div>
-        {!!plan.referenceNodeIds.length && <div className="agent-plan-references">{plan.referenceNodeIds.map((nodeId) => {
+        {!!plan.referenceNodeIds.length && <div className="agent-plan-references">{plan.referenceNodeIds.map((nodeId, index) => {
           const reference = plan.references?.find((item) => item.nodeId === nodeId) || props.candidates.find((item) => item.nodeId === nodeId) || props.references.find((item) => item.nodeId === nodeId)
-          return reference ? <button type="button" className="agent-plan-reference" key={nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>{reference.name}</span><Focus size={12} /></button> : null
+          return reference ? <button type="button" className="agent-plan-reference" key={nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button> : null
         })}</div>}
         {!!(plan.invokedStylePresets?.length || plan.invokedStyleReferences?.length) && <div className="agent-plan-invoked-styles">
           {(plan.invokedStylePresets?.length ? plan.invokedStylePresets : [{
@@ -375,6 +386,28 @@ export function AgentPanel(props: Props) {
       </section>
     )
   }
+  const renderProposedPlans = (plans: AgentImagePlan[]) => {
+    if (!plans.length) return null
+    const planIds = plans.map((plan) => plan.id)
+    return (
+      <section className="agent-plan-choice" key={`choice-${planIds.join('-')}`}>
+        <header><span><Sparkles size={14} />选择创作方向</span><em>{plans.length} 个方案</em></header>
+        <p>先选择你想继续的方向，我会为每个选择分别准备确认卡；确认后才会创建节点并生成。</p>
+        <div>
+          {plans.map((plan, index) => (
+            <button type="button" key={plan.id} onClick={() => props.onSelectPlanOptions(planIds, [plan.id])}>
+              <strong>{plan.label || `方案${index + 1}`}</strong>
+              <span>{plan.prompt}</span>
+            </button>
+          ))}
+          <button type="button" className="is-all" onClick={() => props.onSelectPlanOptions(planIds, planIds)}>
+            <strong>全部方案</strong>
+            <span>为以上 {plans.length} 个方向分别创建确认卡</span>
+          </button>
+        </div>
+      </section>
+    )
+  }
   const messageIds = new Set(props.messages.map((message) => message.id))
   const plansByMessage = new Map<string, AgentImagePlan[]>()
   props.plans.forEach((plan) => {
@@ -382,6 +415,12 @@ export function AgentPanel(props: Props) {
     plansByMessage.set(plan.assistantMessageId, [...(plansByMessage.get(plan.assistantMessageId) ?? []), plan])
   })
   const orphanPlans = props.plans.filter((plan) => !plan.assistantMessageId || !messageIds.has(plan.assistantMessageId))
+  const renderAttachedPlans = (plans: AgentImagePlan[]) => (
+    <>
+      {renderProposedPlans(plans.filter((plan) => plan.status === 'proposed'))}
+      {plans.filter((plan) => plan.status !== 'proposed').map(renderPlan)}
+    </>
+  )
   return (
     <aside id="disy-agent-panel" className="agent-panel" aria-label="Disy 对话 Agent">
       <header className="agent-panel-header">
@@ -407,12 +446,12 @@ export function AgentPanel(props: Props) {
           {props.messages.map((message) => <Fragment key={message.id}>
             <article className={`agent-message is-${message.role}`}>
               <p>{message.content}</p>
-              {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title="定位到画布节点"><img src={reference.url} alt="" /><span>{reference.name}</span><Focus size={12} /></button>)}</div>}
+              {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference, index) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title="定位到画布节点"><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button>)}</div>}
             </article>
-            {(plansByMessage.get(message.id) ?? []).map(renderPlan)}
+            {renderAttachedPlans(plansByMessage.get(message.id) ?? [])}
           </Fragment>)}
           {props.busy && <div className="agent-thinking"><LoaderCircle size={14} className="is-spinning" /> 正在构思…</div>}
-          {orphanPlans.map(renderPlan)}
+          {renderAttachedPlans(orphanPlans)}
         </div>
         {!!offscreenReadyIds.length && <button type="button" className="agent-pending-locate" onClick={locatePendingPlan} title="定位待确认的图像方案"><ChevronsUp size={16} /><span>{offscreenReadyIds.length}</span></button>}
       </div>

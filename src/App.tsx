@@ -1,11 +1,13 @@
-import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   ArrowUp,
   ArrowUpRight,
   Bold,
+  BookOpen,
   Box,
   Check,
+  CircleHelp,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -20,6 +22,7 @@ import {
   Info,
   Italic,
   KeyRound,
+  Keyboard,
   Library,
   List,
   ListOrdered,
@@ -29,6 +32,7 @@ import {
   Minus,
   MessageCircle,
   PanelsTopLeft,
+  Pause,
   Pencil,
   Plus,
   Pilcrow,
@@ -70,7 +74,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
-import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
@@ -106,6 +110,7 @@ type CanvasNode = Node<{
   referenceImageUrl?: string
   referenceImageName?: string
   referenceImages?: ImageReference[]
+  referenceOrder?: string[]
   useCurrentImageAsReference?: boolean
   imageAspectRatio?: ImageAspectRatio
   imageResolution?: ImageResolution
@@ -182,6 +187,8 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
+const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement) => void>(() => undefined)
+const ActiveGenerationNodesContext = createContext<ReadonlySet<string>>(new Set())
 
 type NodeMenuState = {
   x: number
@@ -223,6 +230,7 @@ type GenerationRecord = {
   imageUrl: string
   fileName: string
   projectId?: string
+  mediaId?: string
 }
 
 type LibraryPreview = {
@@ -249,6 +257,7 @@ type OutputHistoryRecord = {
   outputCount: number
   projectId?: string
   preview?: string
+  recoveredCount?: number
   error?: {
     category: GenerationErrorCategory
     summary: string
@@ -274,6 +283,12 @@ const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
   video: '视频',
   audio: '音频',
 }
+const API_PROVIDER_PRESETS = [
+  { id: 'grsai', name: 'GRS AI', baseUrl: 'https://grsai.dakka.com.cn/v1', detail: '国内直连 · 图像与文本' },
+  { id: 'apiyi', name: 'APIYI', baseUrl: 'https://api.apiyi.com/v1', detail: 'OpenAI 兼容聚合平台' },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: '官方 GPT 与图像模型' },
+  { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', detail: '国内开源模型平台' },
+] as const
 
 function readSavedAssets() {
   try {
@@ -323,6 +338,11 @@ function readOutputHistory() {
 type NodeClipboard = {
   data: CanvasNode['data']
   style?: CanvasNode['style']
+}
+
+type CanvasHistorySnapshot = {
+  nodes: CanvasNode[]
+  edges: Edge[]
 }
 
 type SelectionToolbarRect = {
@@ -768,6 +788,22 @@ function getCanvasPreviewUrl(canvas: Pick<WorkspaceCanvas, 'nodes'>) {
   return previewNode?.data.imageUrl
 }
 
+function uniqueNamedImageReferences<T extends { name: string; url: string }>(references: T[]) {
+  return Array.from(new Map(references.map((reference) => [reference.url, reference])).values())
+}
+
+function buildNumberedReferenceGuide(references: Array<{ name: string; url: string }>) {
+  if (!references.length) return ''
+  return [
+    '参考图片编号（严格按输入图片上传顺序对应）：',
+    ...references.map((reference, index) => {
+      const number = index + 1
+      return `图${number} / 图片${number} / 参考图${number} = 第 ${number} 张输入图片（@${reference.name}）`
+    }),
+    '提示词中出现“图1、图2、图3”等称呼时，必须按以上编号理解，不得交换图片顺序。',
+  ].join('\n')
+}
+
 function resolveStylePresets(presets: StylePresetRecord[], invocationText: string) {
   const normalizedText = invocationText.toLocaleLowerCase()
   const matchedPresets = presets.filter((preset) => {
@@ -778,6 +814,25 @@ function resolveStylePresets(presets: StylePresetRecord[], invocationText: strin
     matchedPresets.flatMap((preset) => preset.references).map((reference) => [reference.url, reference]),
   ).values())
   return { matchedPresets, references }
+}
+
+const mediaSignatureCache = new Map<string, string>()
+
+function mediaSignature(value: string) {
+  const cached = mediaSignatureCache.get(value)
+  if (cached) return cached
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  const signature = `${value.length}:${(hash >>> 0).toString(36)}`
+  mediaSignatureCache.set(value, signature)
+  if (mediaSignatureCache.size > 256) {
+    const oldest = mediaSignatureCache.keys().next().value
+    if (oldest !== undefined) mediaSignatureCache.delete(oldest)
+  }
+  return signature
 }
 
 function buildCanvasSignature(
@@ -795,7 +850,7 @@ function buildCanvasSignature(
       references: preset.references.map((reference) => ({
         id: reference.id,
         name: reference.name,
-        url: `${reference.url.length}:${reference.url.slice(0, 36)}`,
+        url: mediaSignature(reference.url),
       })),
     })),
     promptSuffix,
@@ -807,20 +862,16 @@ function buildCanvasSignature(
       measured: node.measured,
       data: {
         ...node.data,
-        imageUrl: node.data.imageUrl
-          ? `${node.data.imageUrl.length}:${node.data.imageUrl.slice(0, 36)}`
-          : undefined,
+        imageUrl: node.data.imageUrl ? mediaSignature(node.data.imageUrl) : undefined,
         imageVariants: node.data.imageVariants?.map((variant) => ({
           ...variant,
-          url: `${variant.url.length}:${variant.url.slice(0, 36)}`,
+          url: mediaSignature(variant.url),
         })),
-        referenceImageUrl: node.data.referenceImageUrl
-          ? `${node.data.referenceImageUrl.length}:${node.data.referenceImageUrl.slice(0, 36)}`
-          : undefined,
+        referenceImageUrl: node.data.referenceImageUrl ? mediaSignature(node.data.referenceImageUrl) : undefined,
         referenceImages: node.data.referenceImages?.map((reference) => ({
           id: reference.id,
           name: reference.name,
-          url: `${reference.url.length}:${reference.url.slice(0, 36)}`,
+          url: mediaSignature(reference.url),
         })),
       },
     })),
@@ -943,11 +994,56 @@ function LuminousEdge({
 
 const edgeTypes = { luminous: LuminousEdge }
 const CURRENT_PROJECT_ID = 'default-project'
+const MAX_CONCURRENT_GENERATION_TASKS = 10
 
 const initialNodes: CanvasNode[] = []
 const initialEdges: Edge[] = []
 
-function NodeCard({
+function duplicateNodeData(data: CanvasNode['data']): CanvasNode['data'] {
+  const duplicate = structuredClone(data)
+  if (duplicate.status === '生成中') duplicate.status = duplicate.imageUrl ? '已完成' : '待生成'
+  return duplicate
+}
+
+function duplicateCanvasNode(node: CanvasNode, id: string, position: { x: number; y: number }, selected: boolean): CanvasNode {
+  const measuredWidth = node.measured?.width
+  const measuredHeight = node.measured?.height
+  return {
+    ...node,
+    id,
+    position,
+    selected,
+    dragging: false,
+    measured: undefined,
+    style: {
+      ...node.style,
+      ...(measuredWidth ? { width: measuredWidth } : {}),
+      ...(measuredHeight ? { height: measuredHeight } : {}),
+    },
+    data: duplicateNodeData(node.data),
+  }
+}
+
+function createCanvasHistorySnapshot(nodes: CanvasNode[], edges: Edge[]): CanvasHistorySnapshot {
+  return {
+    nodes: nodes.map((node) => ({
+      ...node,
+      data: node.data,
+      position: { ...node.position },
+      style: node.style ? { ...node.style } : node.style,
+      selected: false,
+      dragging: false,
+      measured: undefined,
+    })),
+    edges: edges.map((edge) => ({ ...edge, data: edge.data, selected: false })),
+  }
+}
+
+function canvasHistorySignature(snapshot: CanvasHistorySnapshot) {
+  return buildCanvasSignature(snapshot.nodes, snapshot.edges, '', [], '', false)
+}
+
+const NodeCard = memo(function NodeCard({
   id,
   data,
   selected,
@@ -964,6 +1060,9 @@ function NodeCard({
   const updateNodeText = useContext(NodeTextUpdateContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
+  const openExtensionMenu = useContext(NodeExtensionMenuContext)
+  const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
+  const isActivelyGenerating = activeGenerationNodeIds.has(id)
   const [inlineEditing, setInlineEditing] = useState(false)
   const [inlineDraft, setInlineDraft] = useState(data.body)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1007,7 +1106,13 @@ function NodeCard({
         type="source"
         position={Position.Right}
         className="handle handle-source node-extension"
-        title="延伸节点"
+        title={data.kind === 'image' || data.kind === 'upload' ? '引用该图片生成' : '延伸节点'}
+        onClick={(event) => {
+          if (data.kind !== 'image' && data.kind !== 'upload') return
+          event.preventDefault()
+          event.stopPropagation()
+          openExtensionMenu(id, event.currentTarget)
+        }}
       >
         <span className="extension-button" aria-hidden="true">
           <Plus size={18} strokeWidth={1.8} />
@@ -1058,7 +1163,7 @@ function NodeCard({
 
   return (
     <div
-      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'image' ? 'image-generation-node' : ''} ${data.kind === 'image' && data.status === '生成中' ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
+      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'image' ? 'image-generation-node' : ''} ${data.kind === 'image' && isActivelyGenerating ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
       style={data.kind === 'text'
         ? { width: width || 275, height: height || 126 }
         : data.kind === 'image'
@@ -1120,7 +1225,7 @@ function NodeCard({
               )}
             </>
           ) : (
-            data.status === '生成中'
+            isActivelyGenerating
               ? <LoaderCircle className="image-node-generation-icon is-spinning" size={24} aria-label="正在生成图片" />
               : <Sparkles className="image-node-generation-icon" size={22} aria-label="等待生成图片" />
           )}
@@ -1175,7 +1280,7 @@ function NodeCard({
         )
       )}
 
-      {data.status === '生成中' && (
+      {isActivelyGenerating && (
         <div className="node-status">
           <span className="status-dot" />
           {data.status}
@@ -1185,7 +1290,7 @@ function NodeCard({
       {nodeHandles}
     </div>
   )
-}
+})
 
 const nodeTypes = {
   disy: ({ id, data, selected, width, height }: NodeProps<CanvasNode>) => (
@@ -1222,6 +1327,9 @@ function App() {
   const [libraryPreviewDirection, setLibraryPreviewDirection] = useState(1)
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm | null>(null)
   const [generationHistory, setGenerationHistory] = useState<GenerationRecord[]>(readGenerationHistory)
+  const [brokenHistoryIds, setBrokenHistoryIds] = useState<string[]>([])
+  const historyMediaObjectUrlsRef = useRef(new Map<string, string>())
+  const historyArchiveAttemptedRef = useRef(new Set<string>())
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
   const [generationHistorySearch, setGenerationHistorySearch] = useState('')
   const [historyThumbnailSize, setHistoryThumbnailSize] = useState(132)
@@ -1246,7 +1354,8 @@ function App() {
   const [textMentionRange, setTextMentionRange] = useState<{ start: number; end: number } | null>(null)
   const [textReferencePreview, setTextReferencePreview] = useState<{ name: string; text: string; left: number; bottom: number } | null>(null)
   const [canvasReferencePickerNodeId, setCanvasReferencePickerNodeId] = useState<string | null>(null)
-  const [generationLoading, setGenerationLoading] = useState(false)
+  const [activeGenerationTaskKeys, setActiveGenerationTaskKeys] = useState<Set<string>>(new Set())
+  const generationLoading = activeGenerationTaskKeys.size > 0
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [showGrid, setShowGrid] = useState(true)
   const [canvasZoom, setCanvasZoom] = useState(1)
@@ -1260,13 +1369,18 @@ function App() {
   const [expandedEditorNodeId, setExpandedEditorNodeId] = useState<string | null>(null)
   const [generationCount, setGenerationCount] = useState(1)
   const [quantityMenuOpen, setQuantityMenuOpen] = useState(false)
+  const [generationControlMenuNodeId, setGenerationControlMenuNodeId] = useState<string | null>(null)
+  const [draggedImageReferenceId, setDraggedImageReferenceId] = useState<string | null>(null)
+  const [imageReferenceDropTargetId, setImageReferenceDropTargetId] = useState<string | null>(null)
   const [isNodeDragging, setIsNodeDragging] = useState(false)
+  const altDragDuplicateRef = useRef<{ originalId: string; duplicateId: string; originalPosition: { x: number; y: number } } | null>(null)
   const [nodeOverlayRect, setNodeOverlayRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [selectionToolbarRect, setSelectionToolbarRect] = useState<SelectionToolbarRect | null>(null)
   const [marqueeSelectionCommitted, setMarqueeSelectionCommitted] = useState(false)
   const [groupColorMenuOpen, setGroupColorMenuOpen] = useState(false)
   const [apiOpen, setApiOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectSearch, setProjectSearch] = useState('')
   const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' } | null>(null)
@@ -1274,7 +1388,7 @@ function App() {
   const [workspaceCanvases, setWorkspaceCanvases] = useState<WorkspaceCanvas[]>([])
   const [activeProjectId, setActiveProjectId] = useState(CURRENT_PROJECT_ID)
   const [activeCanvasId, setActiveCanvasId] = useState(`${CURRENT_PROJECT_ID}--canvas-default`)
-  const [projectName, setProjectName] = useState('Disy Infinite')
+  const [projectName, setProjectName] = useState('DisyLab')
   const [canvasSwitcherOpen, setCanvasSwitcherOpen] = useState(false)
   const [projectCardScale, setProjectCardScale] = useState(1)
   const [canvasCardScale, setCanvasCardScale] = useState(1)
@@ -1289,8 +1403,8 @@ function App() {
   const [agentCanvasPicking, setAgentCanvasPicking] = useState(false)
   const [agentTextModelKey, setAgentTextModelKey] = useState('')
   const [agentImageModelKey, setAgentImageModelKey] = useState('')
-  const [canvasName, setCanvasName] = useState('Disy Infinite')
-  const [canvasNameDraft, setCanvasNameDraft] = useState('Disy Infinite')
+  const [canvasName, setCanvasName] = useState('DisyLab')
+  const [canvasNameDraft, setCanvasNameDraft] = useState('DisyLab')
   const [canvasNameEditing, setCanvasNameEditing] = useState(false)
   const [canvasSaved, setCanvasSaved] = useState(true)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
@@ -1342,7 +1456,8 @@ function App() {
   const internalNodePastePreferredRef = useRef(false)
   const pasteSequenceRef = useRef(0)
   const modelFetchRequestRef = useRef(0)
-  const generationRequestLockRef = useRef(false)
+  const generationTaskControllersRef = useRef(new Map<string, AbortController>())
+  const generationTaskStopReasonRef = useRef(new Map<string, 'paused' | 'stopped'>())
   const agentPlanLocksRef = useRef(new Set<string>())
   const agentSaveTimerRef = useRef<number | null>(null)
   const aspectTweenRef = useRef<{ kill: () => void } | null>(null)
@@ -1350,9 +1465,59 @@ function App() {
   const previewWheelLockRef = useRef(false)
   const latestSelectedNodeIdsRef = useRef<string[]>([])
   const latestSelectedEdgeIdsRef = useRef<string[]>([])
+  const undoStackRef = useRef<CanvasHistorySnapshot[]>([])
+  const redoStackRef = useRef<CanvasHistorySnapshot[]>([])
+  const currentHistorySnapshotRef = useRef<CanvasHistorySnapshot | null>(null)
+  const historyCaptureTimerRef = useRef<number | null>(null)
+  const historyReadyRef = useRef(false)
   const { fitView: fitCanvas, screenToFlowPosition, zoomTo } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
+  const resetCanvasHistory = useCallback((nextNodes: CanvasNode[], nextEdges: Edge[]) => {
+    if (historyCaptureTimerRef.current !== null) window.clearTimeout(historyCaptureTimerRef.current)
+    historyCaptureTimerRef.current = null
+    undoStackRef.current = []
+    redoStackRef.current = []
+    currentHistorySnapshotRef.current = createCanvasHistorySnapshot(nextNodes, nextEdges)
+    historyReadyRef.current = true
+  }, [])
+  const beginGenerationTask = (taskKey: string) => {
+    if (generationTaskControllersRef.current.has(taskKey)) {
+      setToastMessage('这个任务已经在生成中')
+      return null
+    }
+    if (generationTaskControllersRef.current.size >= MAX_CONCURRENT_GENERATION_TASKS) {
+      setToastMessage(`最多同时进行 ${MAX_CONCURRENT_GENERATION_TASKS} 个生成任务，请等待任一任务完成`)
+      return null
+    }
+    const controller = new AbortController()
+    generationTaskControllersRef.current.set(taskKey, controller)
+    setActiveGenerationTaskKeys(new Set(generationTaskControllersRef.current.keys()))
+    return controller
+  }
+  const finishGenerationTask = (taskKey: string) => {
+    generationTaskControllersRef.current.delete(taskKey)
+    generationTaskStopReasonRef.current.delete(taskKey)
+    setActiveGenerationTaskKeys(new Set(generationTaskControllersRef.current.keys()))
+  }
+  const interruptGenerationTask = (nodeId: string, mode: 'paused' | 'stopped') => {
+    const taskKey = `image:${nodeId}`
+    const controller = generationTaskControllersRef.current.get(taskKey)
+    if (!controller) {
+      setGenerationControlMenuNodeId(null)
+      setToastMessage('该节点当前没有正在进行的生成任务')
+      return
+    }
+    const action = mode === 'paused' ? '暂停' : '停止'
+    if (!window.confirm(`${action}只能终止 Disy 当前的等待和尚未发送的后续请求。\n\n已经提交给服务商的图片仍可能继续生成并扣除积分，无法保证退款或不扣费。确认${action}吗？`)) return
+    generationTaskStopReasonRef.current.set(taskKey, mode)
+    controller.abort()
+    setNodes((current) => current.map((node) => node.id === nodeId
+      ? { ...node, data: { ...node.data, status: mode === 'paused' ? '已暂停' : '已停止' } }
+      : node))
+    setGenerationControlMenuNodeId(null)
+    setToastMessage(mode === 'paused' ? '任务已暂停；再次生成会从头发起请求' : '任务已停止')
+  }
 
   canvasSavedRef.current = canvasSaved
 
@@ -1418,6 +1583,15 @@ function App() {
   }, [apiOpen, apiSettings.connections, editingConnectionId])
 
   useEffect(() => {
+    if (!helpOpen) return
+    const closeHelp = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setHelpOpen(false)
+    }
+    window.addEventListener('keydown', closeHelp)
+    return () => window.removeEventListener('keydown', closeHelp)
+  }, [helpOpen])
+
+  useEffect(() => {
     if (!projectOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -1467,12 +1641,55 @@ function App() {
 
   useEffect(() => {
     try {
-      if (generationHistory.length) localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(generationHistory.filter((record) => !record.imageUrl.startsWith('data:'))))
+      const persistentHistory = generationHistory
+        .filter((record) => record.mediaId || !record.imageUrl.startsWith('data:'))
+        .map((record) => record.mediaId ? { ...record, imageUrl: '' } : record)
+      if (persistentHistory.length) localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(persistentHistory))
       else localStorage.removeItem(GENERATION_HISTORY_KEY)
     } catch {
       // Base64 results remain available in this session when the quota is too small.
     }
   }, [generationHistory])
+
+  useEffect(() => {
+    const missingMedia = generationHistory.filter((record) => record.mediaId && !record.imageUrl)
+    if (!missingMedia.length) return
+    let cancelled = false
+    void Promise.all(missingMedia.map(async (record) => {
+      const media = await loadHistoryMedia(record.mediaId!)
+      if (!media) return null
+      const url = URL.createObjectURL(media.blob)
+      historyMediaObjectUrlsRef.current.set(record.mediaId!, url)
+      return { id: record.id, url }
+    })).then((loaded) => {
+      if (cancelled) {
+        loaded.forEach((item) => {
+          if (item) URL.revokeObjectURL(item.url)
+        })
+        return
+      }
+      const urlByRecordId = new Map(loaded.filter((item): item is { id: string; url: string } => Boolean(item)).map((item) => [item.id, item.url]))
+      const loadedIds = new Set(urlByRecordId.keys())
+      const unavailableIds = missingMedia.filter((record) => !loadedIds.has(record.id)).map((record) => record.id)
+      if (unavailableIds.length) {
+        setBrokenHistoryIds((current) => Array.from(new Set([...current, ...unavailableIds])))
+      }
+      if (urlByRecordId.size) {
+        setGenerationHistory((current) => current.map((record) => {
+          const imageUrl = urlByRecordId.get(record.id)
+          return imageUrl ? { ...record, imageUrl } : record
+        }))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [generationHistory])
+
+  useEffect(() => () => {
+    historyMediaObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    historyMediaObjectUrlsRef.current.clear()
+  }, [])
 
   useEffect(() => {
     const pruneExpiredOutputHistory = () => {
@@ -1571,11 +1788,12 @@ function App() {
         return node
       })
       const restoredEdges = canvas.edges as Edge[]
+      resetCanvasHistory(restoredNodes, restoredEdges)
       setNodes(restoredNodes)
       setEdges(restoredEdges)
       setActiveCanvasId(canvas.id)
       setActiveProjectId(canvas.projectId)
-      setProjectName(owner?.name ?? 'Disy Infinite')
+      setProjectName(owner?.name ?? 'DisyLab')
       setCanvasName(canvas.name)
       setCanvasNameDraft(canvas.name)
       const restoredStylePresets = getCanvasStylePresets(canvas)
@@ -1596,7 +1814,7 @@ function App() {
       await loadLocalProject(CURRENT_PROJECT_ID)
       let projects = await listWorkspaceProjects()
       if (!projects.length) {
-        const created = await createWorkspaceProject('Disy Infinite')
+        const created = await createWorkspaceProject('DisyLab')
         projects = [created.project]
       }
       if (cancelled) return
@@ -1627,7 +1845,93 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [setEdges, setNodes])
+  }, [resetCanvasHistory, setEdges, setNodes])
+
+  useEffect(() => {
+    if (!historyReadyRef.current) return
+    if (historyCaptureTimerRef.current !== null) window.clearTimeout(historyCaptureTimerRef.current)
+    historyCaptureTimerRef.current = window.setTimeout(() => {
+      const nextSnapshot = createCanvasHistorySnapshot(nodes, edges)
+      const previous = currentHistorySnapshotRef.current
+      if (previous && canvasHistorySignature(previous) !== canvasHistorySignature(nextSnapshot)) {
+        undoStackRef.current = [...undoStackRef.current.slice(-79), previous]
+        redoStackRef.current = []
+      }
+      currentHistorySnapshotRef.current = nextSnapshot
+      historyCaptureTimerRef.current = null
+    }, 220)
+    return () => {
+      if (historyCaptureTimerRef.current !== null) window.clearTimeout(historyCaptureTimerRef.current)
+    }
+  }, [edges, nodes])
+
+  useEffect(() => {
+    const flushPendingHistory = () => {
+      if (historyCaptureTimerRef.current !== null) window.clearTimeout(historyCaptureTimerRef.current)
+      historyCaptureTimerRef.current = null
+      const actual = createCanvasHistorySnapshot(nodes, edges)
+      const previous = currentHistorySnapshotRef.current
+      if (previous && canvasHistorySignature(previous) !== canvasHistorySignature(actual)) {
+        undoStackRef.current = [...undoStackRef.current.slice(-79), previous]
+        redoStackRef.current = []
+      }
+      currentHistorySnapshotRef.current = actual
+      return actual
+    }
+    const applySnapshot = (snapshot: CanvasHistorySnapshot) => {
+      currentHistorySnapshotRef.current = snapshot
+      setNodes(snapshot.nodes.map((node) => ({
+        ...node,
+        position: { ...node.position },
+        style: node.style ? { ...node.style } : node.style,
+      })))
+      setEdges(snapshot.edges.map((edge) => ({ ...edge })))
+      setActiveEditorNodeId(null)
+      setActiveImageNodeId(null)
+      setActiveGenerationNodeId(null)
+      setExpandedEditorNodeId(null)
+      setNodeOverlayRect(null)
+      setNodeMenu(null)
+      setNodeContextMenu(null)
+      setGenerationControlMenuNodeId(null)
+    }
+    const onHistoryShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      const key = event.key.toLowerCase()
+      const wantsUndo = key === 'z' && !event.shiftKey
+      const wantsRedo = key === 'y' || (key === 'z' && event.shiftKey)
+      if (!wantsUndo && !wantsRedo) return
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
+      event.preventDefault()
+      if (generationLoading || agentBusy) {
+        setToastMessage('生成任务进行中，完成或停止后才能撤销画布操作')
+        return
+      }
+      const actual = flushPendingHistory()
+      if (wantsUndo) {
+        const previous = undoStackRef.current.pop()
+        if (!previous) {
+          setToastMessage('没有可以撤销的操作')
+          return
+        }
+        redoStackRef.current = [...redoStackRef.current.slice(-79), actual]
+        applySnapshot(previous)
+        setToastMessage('已撤销上一步操作')
+        return
+      }
+      const next = redoStackRef.current.pop()
+      if (!next) {
+        setToastMessage('没有可以重做的操作')
+        return
+      }
+      undoStackRef.current = [...undoStackRef.current.slice(-79), actual]
+      applySnapshot(next)
+      setToastMessage('已重做操作')
+    }
+    window.addEventListener('keydown', onHistoryShortcut)
+    return () => window.removeEventListener('keydown', onHistoryShortcut)
+  }, [agentBusy, edges, generationLoading, nodes, setEdges, setNodes])
 
   useEffect(() => {
     let cancelled = false
@@ -1650,20 +1954,23 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const signature = buildCanvasSignature(
-      nodes,
-      edges,
-      canvasName,
-      stylePresets,
-      projectPromptSuffix,
-      projectSettingsLocked,
-    )
-    if (savedCanvasSignatureRef.current === null) {
-      savedCanvasSignatureRef.current = signature
-      setCanvasSaved(true)
-      return
-    }
-    setCanvasSaved(signature === savedCanvasSignatureRef.current)
+    const timer = window.setTimeout(() => {
+      const signature = buildCanvasSignature(
+        nodes,
+        edges,
+        canvasName,
+        stylePresets,
+        projectPromptSuffix,
+        projectSettingsLocked,
+      )
+      if (savedCanvasSignatureRef.current === null) {
+        savedCanvasSignatureRef.current = signature
+        setCanvasSaved(true)
+        return
+      }
+      setCanvasSaved(signature === savedCanvasSignatureRef.current)
+    }, 160)
+    return () => window.clearTimeout(timer)
   }, [canvasName, edges, nodes, projectPromptSuffix, projectSettingsLocked, stylePresets])
 
   useEffect(() => {
@@ -1752,6 +2059,7 @@ function App() {
   const closeAllMenus = useCallback(() => {
     setNodeMenu(null)
     setNodeContextMenu(null)
+    setGenerationControlMenuNodeId(null)
   }, [])
 
   const measureNodeOverlay = useCallback((nodeId?: string | null) => {
@@ -2022,12 +2330,14 @@ function App() {
         : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
 
     const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
+    const focusConnectedImage = Boolean(connectionSourceId && kind === 'image')
     setNodes((current) => [
-      ...current,
+      ...(focusConnectedImage ? current.map((node) => ({ ...node, selected: false })) : current),
       {
         id,
         type: 'disy',
         position: positionOverride ?? menuPosition,
+        selected: focusConnectedImage,
         ...(kind === 'text'
           ? { style: { width: 275, height: 126 } }
           : kind === 'image'
@@ -2061,6 +2371,12 @@ function App() {
           current,
         ),
       )
+    }
+    if (focusConnectedImage) {
+      setActiveEditorNodeId(null)
+      setActiveImageNodeId(null)
+      setActiveGenerationNodeId(id)
+      window.requestAnimationFrame(() => measureNodeOverlay(id))
     }
     closeNodeMenu()
   }
@@ -2106,6 +2422,33 @@ function App() {
       y: rect.top + rect.height / 2,
     })
     setNodeMenu({ x, y, flowX: flowPosition.x, flowY: flowPosition.y })
+  }
+
+  const openNodeExtensionMenu = (nodeId: string, anchor: HTMLElement) => {
+    closeContextMenu()
+    const anchorRect = anchor.getBoundingClientRect()
+    const nodeRect = anchor.closest<HTMLElement>('.react-flow__node')?.getBoundingClientRect() ?? anchorRect
+    const menuWidth = 238
+    const menuHeight = 154
+    const openRight = anchorRect.right + menuWidth + 24 <= window.innerWidth
+    const x = openRight
+      ? anchorRect.right + 12
+      : anchorRect.left - menuWidth - 12
+    const y = Math.max(12, Math.min(anchorRect.top - 18, window.innerHeight - menuHeight - 12))
+    const nextNodeCenter = {
+      x: openRight
+        ? Math.min(window.innerWidth - 150, nodeRect.right + 178)
+        : Math.max(150, nodeRect.left - 178),
+      y: Math.max(130, Math.min(window.innerHeight - 130, nodeRect.top + nodeRect.height / 2)),
+    }
+    const flowPosition = screenToFlowPosition(nextNodeCenter)
+    setNodeMenu({
+      x: Math.max(12, Math.min(x, window.innerWidth - menuWidth - 12)),
+      y,
+      flowX: flowPosition.x,
+      flowY: flowPosition.y,
+      connectionSourceId: nodeId,
+    })
   }
 
   const updateActiveTextNode = (promptText: string) => {
@@ -2190,8 +2533,8 @@ function App() {
     closeNodeMenu()
     setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })))
     setNodeContextMenu({
-      x: Math.min(event.clientX, window.innerWidth - 254),
-      y: Math.min(event.clientY, window.innerHeight - 224),
+      x: Math.max(12, Math.min(event.clientX, window.innerWidth - 254)),
+      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 270)),
       nodeId: node.id,
     })
   }
@@ -2200,7 +2543,7 @@ function App() {
     const measuredWidth = node.measured?.width
     const measuredHeight = node.measured?.height
     setNodeClipboard({
-      data: { ...node.data },
+      data: duplicateNodeData(node.data),
       style: {
         ...node.style,
         ...(measuredWidth ? { width: measuredWidth } : {}),
@@ -2213,7 +2556,7 @@ function App() {
     if (closeMenu) closeContextMenu()
   }, [closeContextMenu])
 
-  const pasteClipboardNode = useCallback((anchor?: CanvasNode, closeMenu = false) => {
+  const pasteClipboardNode = useCallback((anchor?: Pick<CanvasNode, 'position'>, closeMenu = false) => {
     if (!nodeClipboard) return
     pasteSequenceRef.current += 1
     const offset = 30 + Math.min(pasteSequenceRef.current - 1, 6) * 10
@@ -2229,14 +2572,17 @@ function App() {
         position: { x: basePosition.x + offset, y: basePosition.y + offset },
         selected: true,
         style: nodeClipboard.style ? { ...nodeClipboard.style } : undefined,
-        data: { ...nodeClipboard.data },
+        data: duplicateNodeData(nodeClipboard.data),
       },
     ])
-    setActiveEditorNodeId(null)
+    setActiveEditorNodeId(nodeClipboard.data.kind === 'text' ? id : null)
+    setActiveImageNodeId(nodeClipboard.data.kind === 'upload' && nodeClipboard.data.imageUrl ? id : null)
+    setActiveGenerationNodeId(nodeClipboard.data.kind === 'image' ? id : null)
     setExpandedEditorNodeId(null)
+    window.requestAnimationFrame(() => measureNodeOverlay(id))
     setToastMessage('已粘贴节点副本')
     if (closeMenu) closeContextMenu()
-  }, [closeContextMenu, nodeClipboard, screenToFlowPosition, setNodes])
+  }, [closeContextMenu, measureNodeOverlay, nodeClipboard, screenToFlowPosition, setNodes])
 
   const copyContextNode = () => {
     if (!nodeContextMenu) return
@@ -2248,6 +2594,29 @@ function App() {
     if (!nodeContextMenu || !nodeClipboard) return
     const anchor = nodes.find((item) => item.id === nodeContextMenu.nodeId)
     pasteClipboardNode(anchor, true)
+  }
+
+  const duplicateContextNode = () => {
+    if (!nodeContextMenu) return
+    const source = nodes.find((node) => node.id === nodeContextMenu.nodeId)
+    if (!source || source.data.kind === 'group') return
+    copyNodeToClipboard(source)
+    const id = `${source.data.kind}-duplicate-${crypto.randomUUID()}`
+    const duplicate = duplicateCanvasNode(source, id, {
+      x: source.position.x + 36,
+      y: source.position.y + 36,
+    }, true)
+    setNodes((current) => [
+      ...current.map((node) => ({ ...node, selected: false })),
+      duplicate,
+    ])
+    setActiveEditorNodeId(duplicate.data.kind === 'text' ? id : null)
+    setActiveImageNodeId(duplicate.data.kind === 'upload' && duplicate.data.imageUrl ? id : null)
+    setActiveGenerationNodeId(duplicate.data.kind === 'image' ? id : null)
+    setExpandedEditorNodeId(null)
+    closeContextMenu()
+    window.requestAnimationFrame(() => measureNodeOverlay(id))
+    setToastMessage('已创建节点副本')
   }
 
   useEffect(() => {
@@ -2444,6 +2813,17 @@ function App() {
     window.setTimeout(() => firstApiInputRef.current?.focus(), 20)
   }
 
+  const applyApiProviderPreset = (preset: (typeof API_PROVIDER_PRESETS)[number]) => {
+    modelFetchRequestRef.current += 1
+    setModelsLoading(false)
+    setEditingConnectionId('new')
+    setApiDraft({ name: preset.name, baseUrl: preset.baseUrl, apiKey: '' })
+    setDraftModels([])
+    setModelsError('')
+    setApiError('')
+    window.setTimeout(() => firstApiInputRef.current?.focus(), 20)
+  }
+
   const selectApiConnection = (connection: ApiConnection) => {
     modelFetchRequestRef.current += 1
     setModelsLoading(false)
@@ -2611,7 +2991,6 @@ function App() {
   const workspaceMutationBlocked = () => agentBusy
   const destructiveWorkspaceMutationBlocked = () => generationLoading
     || agentBusy
-    || generationRequestLockRef.current
     || agentPlanLocksRef.current.size > 0
     || agentPlans.some((plan) => plan.status === 'running')
 
@@ -2636,6 +3015,7 @@ function App() {
     const restoredNodes = (canvas.nodes as CanvasNode[]).map((node) => node.data.kind === 'image'
       ? { ...node, style: { ...node.style, ...getImageGenerationNodeSize(node.data.imageAspectRatio ?? '1:1') } }
       : node.data.kind === 'text' && node.data.promptText === undefined ? { ...node, data: { ...node.data, promptText: node.data.body } } : node)
+    resetCanvasHistory(restoredNodes, canvas.edges as Edge[])
     setNodes(restoredNodes)
     setEdges(canvas.edges as Edge[])
     setActiveProjectId(projectId)
@@ -2716,7 +3096,9 @@ function App() {
     setAgentConversationId(session.id)
     setAgentMessages((session.messages as AgentMessage[] | undefined) ?? [])
     const plans = (session.plans as AgentImagePlan[] | undefined) ?? []
-    setAgentPlans(plans)
+    setAgentPlans(plans.map((plan) => plan.status === 'running'
+      ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' }
+      : plan))
     setAgentReferences([])
     setAgentPendingReference(null)
     setAgentCanvasPicking(false)
@@ -2900,7 +3282,7 @@ function App() {
       saveApiSettings({
         connections: importedApiSettings.connections.map((connection) => ({
           ...connection,
-          apiKey: apiSettings.connections.find((current) => current.id === connection.id)?.apiKey ?? '',
+          apiKey: '',
         })),
         selectedTextModel: importedApiSettings.selectedTextModel,
         selectedImageModel: importedApiSettings.selectedImageModel,
@@ -2933,6 +3315,11 @@ function App() {
   const activeGenerationNode = nodes.find(
     (node) => node.id === activeGenerationNodeId && node.data.kind === 'image',
   )
+  const activeGeneratingNodeIds = new Set(Array.from(activeGenerationTaskKeys)
+    .filter((taskKey) => taskKey.startsWith('image:'))
+    .map((taskKey) => taskKey.slice('image:'.length)))
+  const activeImageGenerationRunning = Boolean(activeGenerationNode && activeGeneratingNodeIds.has(activeGenerationNode.id))
+  const activeTextGenerationRunning = Boolean(activeTextNode && activeGenerationTaskKeys.has(`text:${activeTextNode.id}`))
   const activeTextReferences = useMemo<ActiveNodeReference[]>(() => {
     if (!activeEditorNodeId) return []
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
@@ -3040,6 +3427,20 @@ function App() {
       references.push({ ...reference, source: 'manual', selected: true })
     })
 
+    const persistedOrder = generationNode?.data.referenceOrder ?? []
+    if (persistedOrder.length) {
+      const orderById = new Map(persistedOrder.map((id, index) => [id, index]))
+      const fallbackOrderById = new Map(references.map((reference, index) => [reference.id, index]))
+      references.sort((left, right) => {
+        const leftOrder = orderById.get(left.id)
+        const rightOrder = orderById.get(right.id)
+        if (leftOrder !== undefined && rightOrder !== undefined) return leftOrder - rightOrder
+        if (leftOrder !== undefined) return -1
+        if (rightOrder !== undefined) return 1
+        return (fallbackOrderById.get(left.id) ?? 0) - (fallbackOrderById.get(right.id) ?? 0)
+      })
+    }
+
     const duplicateCounts = new Map<string, number>()
     return references.map((reference, index) => {
       const baseLabel = getReferenceLabel(reference.name, index)
@@ -3076,9 +3477,24 @@ function App() {
       : reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
   ))
   const selectedAvailableImageReferences = selectedImageReferences.filter((reference): reference is ActiveImageReference & { url: string } => Boolean(reference.url))
+  const selectedImageReferenceNumberById = new Map(selectedAvailableImageReferences.map((reference, index) => [reference.id, index + 1]))
   const selectedGenerationTextReferences = activeGenerationTextReferences.filter((reference) => (
     reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
   ))
+  const reorderImageReferences = (sourceId: string, targetId: string) => {
+    if (!activeGenerationNode || sourceId === targetId) return
+    const nextOrder = activeImageReferences.map((reference) => reference.id)
+    const sourceIndex = nextOrder.indexOf(sourceId)
+    const targetIndex = nextOrder.indexOf(targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [moved] = nextOrder.splice(sourceIndex, 1)
+    nextOrder.splice(targetIndex, 0, moved)
+    setNodes((current) => current.map((node) => node.id === activeGenerationNode.id
+      ? { ...node, data: { ...node.data, referenceOrder: nextOrder } }
+      : node))
+    setDraggedImageReferenceId(null)
+    setImageReferenceDropTargetId(null)
+  }
   const activeImageAspectRatio = activeGenerationNode?.data.imageAspectRatio ?? '1:1'
   const activeImageResolution = activeGenerationNode?.data.imageResolution ?? '1K'
   const activeImageDetail = activeGenerationNode?.data.imageDetail ?? 'medium'
@@ -3463,6 +3879,98 @@ function App() {
     setExpandedOutputErrorId((current) => current === recordId ? null : current)
   }
 
+  const archiveHistoryRecord = async (record: GenerationRecord): Promise<GenerationRecord> => {
+    if (record.mediaId || !record.imageUrl) return record
+    const response = await fetch(record.imageUrl)
+    if (!response.ok) throw new Error(`图片归档失败（${response.status}）`)
+    const blob = await response.blob()
+    const mediaId = `history-media-${crypto.randomUUID()}`
+    await saveHistoryMedia({ id: mediaId, blob, fileName: record.fileName, createdAt: record.createdAt })
+    const imageUrl = URL.createObjectURL(blob)
+    historyMediaObjectUrlsRef.current.set(mediaId, imageUrl)
+    return { ...record, mediaId, imageUrl }
+  }
+
+  const archiveGenerationRecords = async (records: GenerationRecord[]) => Promise.all(records.map(async (record) => {
+    try {
+      return await archiveHistoryRecord(record)
+    } catch {
+      // Keep the provider URL as a fallback when its CDN disallows browser downloads.
+      return record
+    }
+  }))
+
+  const ensureHistoryRecordArchived = (record: GenerationRecord) => {
+    if (record.mediaId || historyArchiveAttemptedRef.current.has(record.id)) return
+    historyArchiveAttemptedRef.current.add(record.id)
+    void archiveHistoryRecord(record).then((archived) => {
+      if (!archived.mediaId) return
+      setGenerationHistory((current) => current.map((item) => item.id === record.id ? archived : item))
+    }).catch(() => {
+      // The visible provider URL remains usable for this session when CORS blocks archiving.
+    })
+  }
+
+  const repairGenerationHistoryImage = async (record: GenerationRecord, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setToastMessage('请选择图片文件')
+      return
+    }
+    try {
+      if (record.mediaId) {
+        const oldUrl = historyMediaObjectUrlsRef.current.get(record.mediaId)
+        if (oldUrl) URL.revokeObjectURL(oldUrl)
+        historyMediaObjectUrlsRef.current.delete(record.mediaId)
+        await deleteHistoryMedia(record.mediaId)
+      }
+      const mediaId = `history-media-${crypto.randomUUID()}`
+      await saveHistoryMedia({ id: mediaId, blob: file, fileName: file.name || record.fileName, createdAt: record.createdAt })
+      const imageUrl = URL.createObjectURL(file)
+      historyMediaObjectUrlsRef.current.set(mediaId, imageUrl)
+      setGenerationHistory((current) => current.map((item) => item.id === record.id
+        ? { ...item, mediaId, imageUrl, fileName: file.name || item.fileName }
+        : item))
+      setBrokenHistoryIds((current) => current.filter((id) => id !== record.id))
+      setToastMessage('历史图片已重新关联并保存到本机')
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `重新关联失败：${error.message}` : '重新关联图片失败')
+    }
+  }
+
+  const recoverOutputImages = async (record: OutputHistoryRecord, files: File[]) => {
+    const images = files.filter((file) => file.type.startsWith('image/'))
+    if (!images.length) {
+      setToastMessage('请选择从服务商记录中下载的图片')
+      return
+    }
+    const createdAt = new Date().toISOString()
+    try {
+      const recovered = await Promise.all(images.map(async (file, index): Promise<GenerationRecord> => {
+        const mediaId = `history-media-${crypto.randomUUID()}`
+        await saveHistoryMedia({ id: mediaId, blob: file, fileName: file.name, createdAt })
+        const imageUrl = URL.createObjectURL(file)
+        historyMediaObjectUrlsRef.current.set(mediaId, imageUrl)
+        return {
+          id: `history-recovered-${crypto.randomUUID()}`,
+          createdAt,
+          prompt: record.prompt,
+          model: record.modelName,
+          imageUrl,
+          fileName: file.name || `disy-recovered-${Date.now()}-${index + 1}.png`,
+          projectId: record.projectId,
+          mediaId,
+        }
+      }))
+      setGenerationHistory((current) => [...recovered, ...current])
+      setOutputHistory((current) => current.map((item) => item.id === record.id
+        ? { ...item, recoveredCount: (item.recoveredCount ?? 0) + recovered.length }
+        : item))
+      setToastMessage(`已找回 ${recovered.length} 张图片，并放入生成历史`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `找回失败：${error.message}` : '找回图片失败')
+    }
+  }
+
   const toOutputHistoryError = (error: unknown): NonNullable<OutputHistoryRecord['error']> => {
     const normalized = normalizeGenerationError(error)
     return {
@@ -3475,7 +3983,12 @@ function App() {
   }
 
   const generateFromActiveTextNode = async () => {
-    if (!activeTextNode || generationLoading || generationRequestLockRef.current) return
+    if (!activeTextNode) return
+    const taskKey = `text:${activeTextNode.id}`
+    if (generationTaskControllersRef.current.has(taskKey)) {
+      setToastMessage('这个文本节点已经在生成中')
+      return
+    }
     const rawPromptText = activeTextNode.data.promptText ?? ''
     const promptText = activeTextReferences.reduce((value, reference) => {
       const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
@@ -3486,9 +3999,10 @@ function App() {
     const textReferenceGuide = selectedTextReferences.length
       ? `参考文本：\n${selectedTextReferences.map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
       : ''
-    const imageReferenceGuide = selectedVisualReferences.length
-      ? `参考图片对应关系：${selectedVisualReferences.map((reference, index) => `@${reference.name} 是第 ${index + 1} 张输入图片`).join('；')}`
-      : ''
+    const imageReferenceGuide = buildNumberedReferenceGuide(selectedVisualReferences.map((reference) => ({
+      name: reference.name,
+      url: reference.url!,
+    })))
     const prompt = [promptText, textReferenceGuide, imageReferenceGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
     if (!prompt) {
       setToastMessage('请先输入文本提示词')
@@ -3510,18 +4024,18 @@ function App() {
       return
     }
 
-    generationRequestLockRef.current = true
-    setGenerationLoading(true)
+    const controller = beginGenerationTask(taskKey)
+    if (!controller) return
     setModelMenuOpen(false)
     const textGenerationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
     const textGenerationNodeId = activeTextNode.id
     try {
-      const referenceImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!)))
+      const referenceImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!, controller.signal)))
       const output = await generateRemoteText({
         baseUrl: selectedTextModel.connection.baseUrl,
         apiKey: selectedTextModel.connection.apiKey,
         model: selectedTextModel.model.id,
-      }, prompt, { referenceImages })
+      }, prompt, { referenceImages, signal: controller.signal })
       await patchCanvasNodesAtOrigin(textGenerationOrigin, (current) => current.map((node) => node.id === textGenerationNodeId
         ? { ...node, data: { ...node.data, body: output, status: selectedTextModel.model.name } }
         : node))
@@ -3538,6 +4052,10 @@ function App() {
       }, textGenerationOrigin.projectId)
       setToastMessage('文本节点已更新')
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setToastMessage('文本生成已停止')
+        return
+      }
       const historyError = toOutputHistoryError(error)
       appendOutputHistory({
         kind: 'text',
@@ -3552,13 +4070,18 @@ function App() {
       }, textGenerationOrigin.projectId)
       setToastMessage(historyError.summary)
     } finally {
-      generationRequestLockRef.current = false
-      setGenerationLoading(false)
+      finishGenerationTask(taskKey)
     }
   }
 
   const generateFromActiveImageNode = async () => {
-    if (!activeGenerationNode || generationLoading || generationRequestLockRef.current) return
+    if (!activeGenerationNode) return
+    const generationNodeId = activeGenerationNode.id
+    const taskKey = `image:${generationNodeId}`
+    if (generationTaskControllersRef.current.has(taskKey)) {
+      setGenerationControlMenuNodeId(generationNodeId)
+      return
+    }
     const promptText = activeGenerationReferences.reduce((value, reference) => {
       if (!('kind' in reference)) return value
       const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
@@ -3568,9 +4091,13 @@ function App() {
       setToastMessage('请先输入图像提示词')
       return
     }
-    const mentionGuide = selectedAvailableImageReferences.length
-      ? `参考图片对应关系：${selectedAvailableImageReferences.map((reference, index) => `@${reference.name} 是第 ${index + 1} 张输入图片`).join('；')}`
-      : ''
+    const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), activeGenerationNode.data.body)
+    const styleInvocation = resolveStylePresets(stylePresets, invocationText)
+    const orderedImageReferences = uniqueNamedImageReferences([
+      ...selectedAvailableImageReferences.map((reference) => ({ name: reference.name, url: reference.url })),
+      ...styleInvocation.references.map((reference) => ({ name: reference.name, url: reference.url })),
+    ])
+    const mentionGuide = buildNumberedReferenceGuide(orderedImageReferences)
     const textReferenceGuide = selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).length
       ? `参考文本：\n${selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
       : ''
@@ -3586,29 +4113,23 @@ function App() {
       setApiOpen(true)
       return
     }
-    const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), activeGenerationNode.data.body)
-    const styleInvocation = resolveStylePresets(stylePresets, invocationText)
-    const requestedReferenceUrls = Array.from(new Set([
-      ...selectedAvailableImageReferences.map((reference) => reference.url),
-      ...styleInvocation.references.map((reference) => reference.url),
-    ].filter((url): url is string => Boolean(url))))
+    const requestedReferenceUrls = orderedImageReferences.map((reference) => reference.url)
     if (requestedReferenceUrls.length > 16) {
       setToastMessage(`参考图最多 16 张，当前已选择 ${requestedReferenceUrls.length} 张`)
       return
     }
 
-    generationRequestLockRef.current = true
-    setGenerationLoading(true)
+    const controller = beginGenerationTask(taskKey)
+    if (!controller) return
     setImageModelMenuOpen(false)
-    const generationNodeId = activeGenerationNode.id
     const generationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
     setNodes((current) => current.map((node) => node.id === generationNodeId
       ? { ...node, data: { ...node.data, status: '生成中', imageModelConnectionId: activeNodeImageModel.connection.id, imageModelId: activeNodeImageModel.model.id, imageModelName: activeNodeImageModel.model.name } }
       : node))
     try {
-      const referenceImages = await Promise.all(requestedReferenceUrls.map(prepareReferenceImageForRequest))
-      const requestMode = /^nano-banana(?:-|$)/i.test(activeNodeImageModel.model.id)
-        ? 'api/generate'
+      const referenceImages = await Promise.all(requestedReferenceUrls.map((url) => prepareReferenceImageForRequest(url, controller.signal)))
+      const requestMode = /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(activeNodeImageModel.connection.baseUrl.trim())
+        ? 'api/generate + api/result'
         : referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(activeNodeImageModel.model.id)
           ? 'images/edits'
           : 'images/generations'
@@ -3619,6 +4140,7 @@ function App() {
       // failure stops the remaining queue so unsupported gateways cannot keep charging.
       while (images.length < generationCount) {
         try {
+          if (controller.signal.aborted) throw new DOMException('Generation interrupted', 'AbortError')
           const remaining = generationCount - images.length
           const batch = await generateRemoteImages({
             baseUrl: activeNodeImageModel.connection.baseUrl,
@@ -3631,6 +4153,7 @@ function App() {
             aspectRatio: activeImageAspectRatio,
             resolution: activeImageResolution,
             detail: activeImageDetail,
+            signal: controller.signal,
           })
           if (!batch.length) throw new Error('图像模型没有返回图片')
           images.push(...batch.slice(0, remaining))
@@ -3672,11 +4195,15 @@ function App() {
             fileName: primaryVariant.fileName,
             imageVariants: [...previousVariants, ...newVariants],
             activeImageVariantId: primaryVariant.id,
-            status: stoppedError ? '生成失败' : '已完成',
+            status: stoppedError
+              ? (stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
+                  ? (generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止')
+                  : '生成失败')
+              : '已完成',
           },
         }
       }))
-      const records: GenerationRecord[] = newVariants.map((variant) => ({
+      const records = await archiveGenerationRecords(newVariants.map((variant): GenerationRecord => ({
         id: `history-${variant.id}`,
         createdAt: new Date().toISOString(),
         prompt,
@@ -3684,7 +4211,7 @@ function App() {
         imageUrl: variant.url,
         fileName: variant.fileName,
         projectId: generationOrigin.projectId,
-      }))
+      })))
       setGenerationHistory((current) => {
         const next = [...current, ...records]
         try {
@@ -3708,7 +4235,7 @@ function App() {
         outputCount: images.length,
         preview: `${activeImageAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]} · 参考图 ${referenceImages.length} 张 · ${requestMode}`,
       }, generationOrigin.projectId)
-      if (stoppedError) {
+      if (stoppedError && !(stoppedError instanceof DOMException && stoppedError.name === 'AbortError')) {
         appendOutputHistory({
           kind: 'image',
           status: 'failed',
@@ -3723,14 +4250,25 @@ function App() {
         }, generationOrigin.projectId)
       }
       setToastMessage(stoppedError
-        ? `生成失败，已停止后续请求${images.length ? `；已保留 ${images.length} 张成功结果` : ''}`
+        ? stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
+          ? `${generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '任务已暂停' : '任务已停止'}${images.length ? `；已保留 ${images.length} 张成功结果` : ''}`
+          : `生成失败，已停止后续请求${images.length ? `；已保留 ${images.length} 张成功结果` : ''}`
         : `已生成 ${images.length} 张图像`)
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const stoppedStatus = generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止'
+        await patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => node.id === generationNodeId
+          ? { ...node, data: { ...node.data, status: stoppedStatus } }
+          : node))
+        return
+      }
       const historyError = toOutputHistoryError(error)
       const attemptedReferenceCount = requestedReferenceUrls.length
-      const attemptedRequestMode = attemptedReferenceCount > 0 && /(?:gpt-image|chatgpt-image)/i.test(activeNodeImageModel.model.id)
-        ? 'images/edits'
-        : 'images/generations'
+      const attemptedRequestMode = /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(activeNodeImageModel.connection.baseUrl.trim())
+        ? 'api/generate + api/result'
+        : attemptedReferenceCount > 0 && /(?:gpt-image|chatgpt-image)/i.test(activeNodeImageModel.model.id)
+          ? 'images/edits'
+          : 'images/generations'
       await patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => node.id === generationNodeId
         ? { ...node, data: { ...node.data, status: '生成失败' } }
         : node))
@@ -3748,8 +4286,7 @@ function App() {
       }, generationOrigin.projectId)
       setToastMessage(historyError.summary)
     } finally {
-      generationRequestLockRef.current = false
-      setGenerationLoading(false)
+      finishGenerationTask(taskKey)
     }
   }
 
@@ -3822,32 +4359,36 @@ function App() {
     try {
       const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlan，等待界面展示确认卡并由用户点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlan":{"prompt":"可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}}。如果不需要生图，省略 imagePlan。对话参考图名称：${agentReferences.map((item) => item.name).join('、') || '无'}。${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      const agentReferenceGuide = buildNumberedReferenceGuide(agentReferences)
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。如果只需一个方向，imagePlans 也只放一项；如果你在 reply 中提出方案一、方案二、方案三等多个方向，必须在 imagePlans 中一一对应拆成独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       const raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
       const parsed = parseAgentReply(raw)
       const assistantMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: parsed.reply || '我已经整理好了。', createdAt: new Date().toISOString() }
       setAgentMessages((current) => [...current, assistantMessage])
-      if (parsed.imagePlan) {
+      const parsedPlans = parsed.imagePlans ?? (parsed.imagePlan ? [parsed.imagePlan] : [])
+      if (parsedPlans.length) {
         const [imageConnectionId, imageModelId] = agentImageModelKey.split('::')
         const createdAt = new Date().toISOString()
-        setAgentPlans((current) => [...current, {
+        const needsChoice = parsedPlans.length > 1
+        setAgentPlans((current) => [...current, ...parsedPlans.map((draft, index): AgentImagePlan => ({
           id: `agent-plan-${crypto.randomUUID()}`,
-          status: 'ready',
-          prompt: parsed.imagePlan!.prompt,
+          status: needsChoice ? 'proposed' : 'ready',
+          label: draft.label || `方案${index + 1}`,
+          prompt: draft.prompt,
           referenceNodeIds: sentReferences.map((item) => item.nodeId),
           references: sentReferences,
           invokedStyleReferences,
           styleInvocationWord: styleInvocationWords.length ? styleInvocationWords.join('、') : undefined,
           invokedStylePresets,
-          aspectRatio: parsed.imagePlan!.aspectRatio,
-          resolution: parsed.imagePlan!.resolution,
-          detail: parsed.imagePlan!.detail,
-          count: parsed.imagePlan!.count,
+          aspectRatio: draft.aspectRatio,
+          resolution: draft.resolution,
+          detail: draft.detail,
+          count: draft.count,
           imageConnectionId,
           imageModelId,
           assistantMessageId: assistantMessage.id,
           createdAt,
-        }])
+        }))])
       }
       setAgentReferences([])
     } catch (error) {
@@ -3855,6 +4396,15 @@ function App() {
     } finally {
       setAgentBusy(false)
     }
+  }
+
+  const selectAgentPlanOptions = (groupPlanIds: string[], selectedPlanIds: string[]) => {
+    const groupSet = new Set(groupPlanIds)
+    const selectedSet = new Set(selectedPlanIds)
+    setAgentPlans((current) => current
+      .filter((plan) => !groupSet.has(plan.id) || selectedSet.has(plan.id))
+      .map((plan) => selectedSet.has(plan.id) && plan.status === 'proposed' ? { ...plan, status: 'ready' as const } : plan))
+    setToastMessage(selectedPlanIds.length > 1 ? `已展开 ${selectedPlanIds.length} 个独立方案，请分别确认` : '方案已展开，请确认后生成')
   }
 
   const confirmAgentPlan = async (planId: string) => {
@@ -3873,16 +4423,22 @@ function App() {
       setToastMessage('部分参考图已被删除或失效，请重新发起方案')
       return
     }
-    const referenceUrls = Array.from(new Set([
-      ...references.map((reference) => reference.url),
-      ...(plan.invokedStyleReferences ?? []).map((reference) => reference.url),
-    ]))
+    const orderedPlanReferences = uniqueNamedImageReferences([
+      ...references.map((reference) => ({ name: reference.name, url: reference.url })),
+      ...(plan.invokedStyleReferences ?? []).map((reference) => ({ name: reference.name, url: reference.url })),
+    ])
+    const referenceUrls = orderedPlanReferences.map((reference) => reference.url)
+    const numberedReferenceGuide = buildNumberedReferenceGuide(orderedPlanReferences)
+    const requestPrompt = [plan.prompt.trim(), numberedReferenceGuide].filter(Boolean).join('\n\n')
     if (referenceUrls.length > 16) {
       setToastMessage(`参考图最多 16 张，当前共 ${referenceUrls.length} 张`)
       return
     }
-    agentPlanLocksRef.current.add(planId)
     const nodeId = `agent-image-${crypto.randomUUID()}`
+    const taskKey = `image:${nodeId}`
+    const controller = beginGenerationTask(taskKey)
+    if (!controller) return
+    agentPlanLocksRef.current.add(planId)
     const origin = { projectId: activeProjectId, canvasId: activeCanvasId, sessionId: agentConversationId }
     const flowPosition = screenToFlowPosition({ x: Math.max(360, window.innerWidth - (agentOpen ? 720 : 420)), y: 230 })
     const aspectRatio = (IMAGE_ASPECT_OPTIONS.some((option) => option.value === plan.aspectRatio) ? plan.aspectRatio : '1:1') as ImageAspectRatio
@@ -3908,16 +4464,12 @@ function App() {
     const createdEdges: Edge[] = references
       .filter((reference) => canvasReferenceIds.has(reference.nodeId) && !edges.some((edge) => edge.source === reference.nodeId && edge.target === nodeId))
       .map((reference) => ({ id: `agent-reference-${reference.nodeId}-${nodeId}`, source: reference.nodeId, target: nodeId, type: 'luminous' }))
-    const nextNodes = [...nodes, generatedNode]
-    const nextEdges = [...edges, ...createdEdges]
     const nextPlans = agentPlans.map((item) => item.id === planId ? { ...item, status: 'running' as const, nodeId } : item)
-    setAgentPlans(nextPlans)
-    setNodes(nextNodes)
-    setEdges(nextEdges)
+    setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'running' as const, nodeId } : item))
+    setNodes((current) => current.some((node) => node.id === nodeId) ? current : [...current, generatedNode])
+    setEdges((current) => [...current, ...createdEdges.filter((edge) => !current.some((item) => item.id === edge.id))])
     try {
-      await Promise.all([
-        persistCurrentCanvasSnapshot(nextNodes, nextEdges),
-        saveAgentSession({
+      await saveAgentSession({
           id: origin.sessionId,
           projectId: origin.projectId,
           canvasId: origin.canvasId,
@@ -3928,25 +4480,70 @@ function App() {
           selectedImageModelId: agentImageModelKey,
           createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        }),
-      ])
-      const prepared = await Promise.all(referenceUrls.map(prepareReferenceImageForRequest))
-      const images = await generateRemoteImages({ baseUrl: model.connection.baseUrl, apiKey: model.connection.apiKey, model: model.model.id }, { prompt: plan.prompt.trim(), count: Math.min(4, Math.max(1, plan.count)), referenceImages: prepared, aspectRatio, resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'), detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium') })
-      if (!images.length) throw new Error('图像模型没有返回图片')
+        })
+      const prepared = await Promise.all(referenceUrls.map((url) => prepareReferenceImageForRequest(url, controller.signal)))
+      const requestedCount = Math.min(4, Math.max(1, plan.count))
+      const images: Awaited<ReturnType<typeof generateRemoteImages>> = []
+      let stoppedError: unknown = null
+      while (images.length < requestedCount) {
+        try {
+          if (controller.signal.aborted) throw new DOMException('Generation interrupted', 'AbortError')
+          const batch = await generateRemoteImages(
+            { baseUrl: model.connection.baseUrl, apiKey: model.connection.apiKey, model: model.model.id },
+            {
+              prompt: requestPrompt,
+              count: 1,
+              referenceImages: prepared,
+              aspectRatio,
+              resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
+              detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
+              signal: controller.signal,
+            },
+          )
+          if (!batch.length) throw new Error('图像模型没有返回图片')
+          images.push(batch[0])
+        } catch (error) {
+          stoppedError = error
+          break
+        }
+      }
+      if (!images.length) throw stoppedError ?? new Error('图像模型没有返回图片')
       const createdAt = new Date().toISOString()
       const variants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
-      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: '已完成' } } : node))
-      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'completed', nodeId, collapsed: true } : item))
-      setGenerationHistory((current) => [...current, ...variants.map((variant) => ({ id: `history-${variant.id}`, createdAt, prompt: plan.prompt, model: model.model.name, imageUrl: variant.url, fileName: variant.fileName, projectId: origin.projectId }))])
+      const wasInterrupted = stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
+      const completedStatus = wasInterrupted
+        ? (generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止')
+        : '已完成'
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: completedStatus } } : node))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: wasInterrupted ? 'cancelled' : 'completed', nodeId, collapsed: true } : item))
+      const historyRecords = await archiveGenerationRecords(variants.map((variant): GenerationRecord => ({
+        id: `history-${variant.id}`,
+        createdAt,
+        prompt: plan.prompt,
+        model: model.model.name,
+        imageUrl: variant.url,
+        fileName: variant.fileName,
+        projectId: origin.projectId,
+      })))
+      setGenerationHistory((current) => [...current, ...historyRecords])
       appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount: plan.count, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · 参考图 ${prepared.length} 张` }, origin.projectId)
-      setToastMessage(`Agent 已生成 ${images.length} 张图片`)
+      setToastMessage(stoppedError
+        ? `${wasInterrupted ? completedStatus : '后续生成已停止'}；已保留 ${images.length} 张成功图片`
+        : `Agent 已生成 ${images.length} 张图片`)
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const stoppedStatus = generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止'
+        await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: stoppedStatus } } : node))
+        await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'cancelled', nodeId } : item))
+        return
+      }
       const message = error instanceof Error ? error.message : '生成失败'
       await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
       await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: message } : item))
       setToastMessage(message)
     } finally {
       agentPlanLocksRef.current.delete(planId)
+      finishGenerationTask(taskKey)
     }
   }
 
@@ -3967,6 +4564,7 @@ function App() {
   const imageNodeEditorTop = resolveNodeEditorTop(236)
   const textNodeEditorTop = resolveNodeEditorTop(224)
   const imageEditorPlacedAbove = Boolean(nodeOverlayRect && imageNodeEditorTop < nodeOverlayRect.top)
+  const imageQuickToolbarPlacedBelow = Boolean(nodeOverlayRect && nodeOverlayRect.top < 58)
   const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
     || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
   const latestProjectCoverById = new Map<string, GenerationRecord>()
@@ -4006,6 +4604,7 @@ function App() {
   }, [])
 
   const selectionToolbarAllowed = marqueeSelectionCommitted || Boolean(selectedGroupNode)
+  const automaticPerformanceMode = nodes.length >= 28
 
   useEffect(() => {
     if (!selectionToolbarAllowed || !selectedNodeIds.length || isNodeDragging) {
@@ -4026,8 +4625,9 @@ function App() {
       const left = Math.min(...rects.map((rect) => rect.left))
       const right = Math.max(...rects.map((rect) => rect.right))
       const top = Math.min(...rects.map((rect) => rect.top))
+      const toolbarHalfWidth = Math.min(190, Math.max(120, (window.innerWidth - 16) / 2))
       setSelectionToolbarRect({
-        left: Math.min(window.innerWidth - 190, Math.max(190, (left + right) / 2)),
+        left: Math.min(window.innerWidth - toolbarHalfWidth, Math.max(toolbarHalfWidth, (left + right) / 2)),
         top: Math.max(68, top - 12),
       })
     })
@@ -4429,6 +5029,13 @@ function App() {
   }
 
   const deleteGenerationRecord = (recordId: string) => {
+    const deleted = generationHistory.find((record) => record.id === recordId)
+    if (deleted?.mediaId) {
+      const objectUrl = historyMediaObjectUrlsRef.current.get(deleted.mediaId)
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      historyMediaObjectUrlsRef.current.delete(deleted.mediaId)
+      void deleteHistoryMedia(deleted.mediaId)
+    }
     const nextHistory = generationHistory.filter((record) => record.id !== recordId)
     localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(nextHistory))
     setGenerationHistory(nextHistory)
@@ -4439,6 +5046,13 @@ function App() {
 
   const deleteHistoryBatch = (recordIds: string[]) => {
     const idSet = new Set(recordIds)
+    generationHistory.forEach((record) => {
+      if (!idSet.has(record.id) || !record.mediaId) return
+      const objectUrl = historyMediaObjectUrlsRef.current.get(record.mediaId)
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      historyMediaObjectUrlsRef.current.delete(record.mediaId)
+      void deleteHistoryMedia(record.mediaId)
+    })
     const nextHistory = generationHistory.filter((record) => !idSet.has(record.id))
     localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(nextHistory))
     setGenerationHistory(nextHistory)
@@ -4547,11 +5161,13 @@ function App() {
   }
 
   return (
-    <div ref={shellRef} className={`disy-shell ${agentOpen ? 'has-agent-open' : ''}`}>
+    <div ref={shellRef} className={`disy-shell ${agentOpen ? 'has-agent-open' : ''} ${automaticPerformanceMode ? 'is-performance-mode' : ''} ${isNodeDragging ? 'is-node-dragging' : ''}`}>
       <main className="canvas-area">
+        <ActiveGenerationNodesContext.Provider value={activeGeneratingNodeIds}>
         <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
+              <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
           <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -4620,11 +5236,42 @@ function App() {
             setActiveGenerationNodeId(node.data.kind === 'image' ? node.id : null)
             window.requestAnimationFrame(() => measureNodeOverlay(node.id))
           }}
-          onNodeDragStart={(_, node) => {
+          onNodeDragStart={(event, node) => {
             setIsNodeDragging(true)
+            if (!event.altKey || node.data.kind === 'group' || altDragDuplicateRef.current) return
+            const duplicateId = `${node.data.kind}-alt-duplicate-${crypto.randomUUID()}`
+            altDragDuplicateRef.current = {
+              originalId: node.id,
+              duplicateId,
+              originalPosition: { ...node.position },
+            }
+            const stationaryDuplicate = duplicateCanvasNode(node, duplicateId, { ...node.position }, false)
+            setNodes((current) => [...current, stationaryDuplicate])
           }}
           onNodeDragStop={(_, node) => {
             setIsNodeDragging(false)
+            const altDuplicate = altDragDuplicateRef.current
+            if (altDuplicate?.originalId === node.id) {
+              const droppedPosition = { ...node.position }
+              setNodes((current) => current.map((item) => {
+                if (item.id === altDuplicate.originalId) {
+                  return { ...item, position: altDuplicate.originalPosition, selected: false, dragging: false }
+                }
+                if (item.id === altDuplicate.duplicateId) {
+                  return { ...item, position: droppedPosition, selected: true, dragging: false }
+                }
+                return { ...item, selected: false }
+              }))
+              setActiveEditorNodeId(node.data.kind === 'text' ? altDuplicate.duplicateId : null)
+              setActiveImageNodeId(node.data.kind === 'upload' && node.data.imageUrl ? altDuplicate.duplicateId : null)
+              setActiveGenerationNodeId(node.data.kind === 'image' ? altDuplicate.duplicateId : null)
+              setExpandedEditorNodeId(null)
+              altDragDuplicateRef.current = null
+              window.requestAnimationFrame(() => measureNodeOverlay(altDuplicate.duplicateId))
+              setToastMessage('已通过 Alt 拖拽创建节点副本')
+              return
+            }
+            altDragDuplicateRef.current = null
             if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId) measureNodeOverlay(node.id)
           }}
           onNodeContextMenu={openNodeContextMenu}
@@ -4696,6 +5343,7 @@ function App() {
           defaultEdgeOptions={{
             type: 'luminous',
           }}
+          onlyRenderVisibleElements={automaticPerformanceMode}
         >
           {showGrid && (
             <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--canvas-dot)" />
@@ -4712,9 +5360,11 @@ function App() {
             ariaLabel="画布小地图，可拖拽导航"
           />
           </ReactFlow>
+              </NodeExtensionMenuContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
         </ImagePreviewOpenContext.Provider>
+        </ActiveGenerationNodesContext.Provider>
 
         <AnimatePresence>
           {canvasReferencePickerNodeId && (
@@ -4955,7 +5605,7 @@ function App() {
           aria-label={`打开输出历史，共 ${currentOutputHistory.length} 条`}
         >
           {generationLoading ? <LoaderCircle size={14} className="is-spinning" /> : <History size={14} />}
-          <span>{generationLoading ? '正在生成' : '输出历史'}</span>
+          <span>{generationLoading ? `正在生成 ${activeGenerationTaskKeys.size}/${MAX_CONCURRENT_GENERATION_TASKS}` : '输出历史'}</span>
           <small>{currentOutputHistory.length}</small>
           {outputFailureCount > 0 && <em>{outputFailureCount} 项失败</em>}
         </button>
@@ -5323,6 +5973,72 @@ function App() {
           </button>
         </nav>
 
+        <button
+          type="button"
+          className="help-launcher"
+          aria-label="打开快捷键大全和使用指南"
+          data-tooltip="快捷键大全 · 使用指南"
+          onClick={() => setHelpOpen(true)}
+        >
+          <CircleHelp size={21} />
+        </button>
+
+        <AnimatePresence>
+          {helpOpen && (
+            <motion.div className="modal-backdrop help-center-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => setHelpOpen(false)}>
+              <motion.section
+                className="help-center-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="快捷键大全和使用指南"
+                initial={{ opacity: 0, y: 14, scale: .98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: .985 }}
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <header className="help-center-header">
+                  <div><span><CircleHelp size={18} /></span><div><strong>Disy 使用指南</strong><small>让灵感在画布上自由连接</small></div></div>
+                  <button type="button" aria-label="关闭使用指南" onClick={() => setHelpOpen(false)}><X size={18} /></button>
+                </header>
+                <div className="help-center-scroll">
+                  <section className="help-guide-section">
+                    <div className="help-section-heading"><BookOpen size={15} /><div><strong>从想法到图像</strong><small>四步完成一次可追溯的创作</small></div></div>
+                    <div className="help-guide-grid">
+                      {[
+                        ['01', '放入素材', '双击空白处，添加文字、图片或图像生成节点。'],
+                        ['02', '建立关系', '连线或在节点编辑器中选择参考图，图1、图2按当前顺序识别。'],
+                        ['03', '确认方案', '和 Disy Agent 对话；多方案先选择，再逐一确认，不会直接扣费。'],
+                        ['04', '沉淀结果', '生成结果保留在节点版本、生成历史与输出历史中。'],
+                      ].map(([step, title, detail]) => <article key={step}><span>{step}</span><div><strong>{title}</strong><p>{detail}</p></div></article>)}
+                    </div>
+                  </section>
+                  <section className="help-shortcut-section">
+                    <div className="help-section-heading"><Keyboard size={15} /><div><strong>快捷键大全</strong><small>输入框聚焦时保留系统文字快捷键</small></div></div>
+                    <div className="help-shortcut-grid">
+                      {[
+                        ['Ctrl + Z', '撤销画布操作'],
+                        ['Ctrl + Shift + Z / Ctrl + Y', '重做画布操作'],
+                        ['Ctrl + C / Ctrl + V', '复制、粘贴节点或系统图片'],
+                        ['Alt + 拖拽', '创建独立节点副本'],
+                        ['Delete / Backspace', '删除选中的节点或连线'],
+                        ['Ctrl + S', '立即保存当前画布'],
+                        ['Ctrl + 滚轮', '缩放画布'],
+                        ['双击空白处', '快速添加节点'],
+                        ['右键', '打开节点或画布菜单'],
+                        ['Esc', '关闭当前弹窗或菜单'],
+                      ].map(([keys, action]) => <div key={keys}><kbd>{keys}</kbd><span>{action}</span></div>)}
+                    </div>
+                  </section>
+                  <aside className={`help-performance-note ${automaticPerformanceMode ? 'is-active' : ''}`}>
+                    <Sparkles size={15} />
+                    <div><strong>{automaticPerformanceMode ? '画布性能模式已自动开启' : '画布性能模式会自动开启'}</strong><small>节点达到 28 个后，Disy 会减少不可见节点和高开销光效渲染；无需修改浏览器设置。</small></div>
+                  </aside>
+                </div>
+              </motion.section>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence>
           {agentOpen && (
             <motion.div className="agent-panel-motion" initial={{ opacity: 0, x: 28 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 28 }}>
@@ -5354,6 +6070,7 @@ function App() {
                 onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
                 onSend={(message, invocationText) => void sendAgentMessage(message, invocationText)}
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
+                onSelectPlanOptions={selectAgentPlanOptions}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
                 onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'cancelled' } : plan))}
                 onLocateCanvasNode={locateAgentCanvasNode}
@@ -5372,13 +6089,25 @@ function App() {
             animate={{ opacity: 1, scale: 1, y: 0 }}
           >
             <div className="menu-title">
-              {nodeMenu.connectionSourceId ? '连接到新节点' : '添加到画布'}
+              {nodeMenu.connectionSourceId ? '引用该节点生成' : '添加到画布'}
             </div>
+            {!nodeMenu.connectionSourceId && nodeClipboard && (
+              <>
+                <button onClick={() => {
+                  pasteClipboardNode({ position: { x: nodeMenu.flowX - 30, y: nodeMenu.flowY - 30 } })
+                  closeNodeMenu()
+                }}>
+                  <Copy size={16} />
+                  <span><strong>粘贴节点</strong><small>放到右键位置</small></span>
+                </button>
+                <div className="context-divider" />
+              </>
+            )}
             <button onClick={() => createNode('text')}>
               <Type size={16} />
               <span><strong>文本</strong><small>{nodeMenu.connectionSourceId ? '引用来源生成文本' : '记录灵感与提示词'}</small></span>
             </button>
-            <button onClick={() => createNode('image')}>
+            <button className={nodeMenu.connectionSourceId ? 'is-primary' : undefined} onClick={() => createNode('image')}>
               <WandSparkles size={16} />
               <span><strong>图像</strong><small>文生图 / 图生图</small></span>
             </button>
@@ -5407,7 +6136,10 @@ function App() {
             </button>
             <div className="context-divider" />
             <button onClick={copyContextNode}>
-              <span>复制</span><kbd>Ctrl C</kbd>
+              <span>复制到剪贴板</span><kbd>Ctrl C</kbd>
+            </button>
+            <button onClick={duplicateContextNode}>
+              <span>复制节点副本</span><kbd>Alt 拖拽</kbd>
             </button>
             <button disabled={!nodeClipboard} onClick={pasteContextNode}>
               <span>粘贴</span><kbd>Ctrl V</kbd>
@@ -5422,10 +6154,10 @@ function App() {
         <AnimatePresence>
           {activeImageNode && nodeOverlayRect && !isNodeDragging && !previewImageNode && (
             <motion.div
-              className="node-quick-toolbar image-node-quick-toolbar nodrag nowheel"
+              className={`node-quick-toolbar ${imageQuickToolbarPlacedBelow ? 'is-below' : ''} image-node-quick-toolbar nodrag nowheel`}
               style={{
                 left: Math.min(window.innerWidth - 150, Math.max(150, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
-                top: nodeOverlayRect.top - 10,
+                top: imageQuickToolbarPlacedBelow ? nodeOverlayRect.top + nodeOverlayRect.height + 10 : nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -5768,13 +6500,42 @@ function App() {
                       event.currentTarget.scrollLeft += event.deltaY || event.deltaX
                     }}
                   >
-                    {activeGenerationReferences.map((reference) => (
-                      <button
+                    {activeGenerationReferences.map((reference) => {
+                      const isImageReference = activeImageReferences.some((item) => item.id === reference.id)
+                      return <button
                         type="button"
                         key={reference.id}
-                        className={`image-reference-thumbnail ${(reference.selected || activeGenerationNode.data.body.includes(reference.mention)) ? 'is-mentioned' : ''} ${reference.source === 'current' && !reference.selected ? 'is-disabled' : ''} ${('kind' in reference && reference.kind === 'text' && !reference.text?.trim()) || (!('kind' in reference) && reference.source === 'connection' && !reference.url) ? 'is-disabled' : ''}`}
-                        title={reference.source === 'current' && !reference.selected ? '点击重新启用当前主图参考' : `${reference.name} · 点击插入引用`}
-                        onMouseDown={(event) => event.preventDefault()}
+                        draggable={isImageReference}
+                        className={`image-reference-thumbnail ${(reference.selected || activeGenerationNode.data.body.includes(reference.mention)) ? 'is-mentioned' : ''} ${reference.source === 'current' && !reference.selected ? 'is-disabled' : ''} ${('kind' in reference && reference.kind === 'text' && !reference.text?.trim()) || (!('kind' in reference) && reference.source === 'connection' && !reference.url) ? 'is-disabled' : ''} ${draggedImageReferenceId === reference.id ? 'is-dragging' : ''} ${imageReferenceDropTargetId === reference.id ? 'is-drop-target' : ''}`}
+                        title={isImageReference ? `${reference.name} · 拖拽调整顺序，点击插入引用` : `${reference.name} · 点击插入引用`}
+                        onMouseDown={(event) => {
+                          if (!isImageReference) event.preventDefault()
+                        }}
+                        onDragStart={(event) => {
+                          if (!isImageReference) return
+                          event.stopPropagation()
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('application/x-disy-reference-order', reference.id)
+                          setDraggedImageReferenceId(reference.id)
+                        }}
+                        onDragOver={(event) => {
+                          if (!isImageReference || !draggedImageReferenceId || draggedImageReferenceId === reference.id) return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          event.dataTransfer.dropEffect = 'move'
+                          setImageReferenceDropTargetId(reference.id)
+                        }}
+                        onDrop={(event) => {
+                          if (!isImageReference) return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          const sourceId = event.dataTransfer.getData('application/x-disy-reference-order') || draggedImageReferenceId
+                          if (sourceId) reorderImageReferences(sourceId, reference.id)
+                        }}
+                        onDragEnd={() => {
+                          setDraggedImageReferenceId(null)
+                          setImageReferenceDropTargetId(null)
+                        }}
                         onMouseEnter={(event) => {
                           if (!('kind' in reference) || reference.kind !== 'text' || !reference.text?.trim()) return
                           const rect = event.currentTarget.getBoundingClientRect()
@@ -5800,7 +6561,7 @@ function App() {
                         {reference.url
                           ? <img src={reference.url} alt={reference.name} />
                           : <span className="reference-text-thumbnail"><Type size={13} /></span>}
-                        <span className="image-reference-name">{reference.name}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
+                        <span className="image-reference-name">{selectedImageReferenceNumberById.has(reference.id) ? `图${selectedImageReferenceNumberById.get(reference.id)} · ` : ''}{reference.name}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
                         {(reference.source === 'manual' || reference.source === 'connection' || reference.source === 'current') && (
                           <span
                             className="reference-remove"
@@ -5813,7 +6574,7 @@ function App() {
                           ><X size={9} /></span>
                         )}
                       </button>
-                    ))}
+                    })}
                   </div>
                   <button
                     type="button"
@@ -6022,9 +6783,26 @@ function App() {
                         {generationCount}×
                       </button>
                     </div>
-                    <button className="editor-generate-button image-generate-button" aria-label="生成图像" title={generationLoading ? '正在生成' : '生成图像'} disabled={generationLoading} onClick={() => void generateFromActiveImageNode()}>
-                      {generationLoading ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} strokeWidth={2.2} />}
-                    </button>
+                    <div className="generation-run-control">
+                      <AnimatePresence>
+                        {activeImageGenerationRunning && generationControlMenuNodeId === activeGenerationNode.id && (
+                          <motion.div className="generation-control-menu" initial={{ opacity: 0, y: 5, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .96 }}>
+                            <button type="button" onClick={() => interruptGenerationTask(activeGenerationNode.id, 'paused')}><Pause size={13} />暂停任务</button>
+                            <button type="button" className="is-stop" onClick={() => interruptGenerationTask(activeGenerationNode.id, 'stopped')}><X size={13} />停止任务</button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      <button
+                        className="editor-generate-button image-generate-button"
+                        aria-label={activeImageGenerationRunning ? '暂停或停止生成任务' : '生成图像'}
+                        title={activeImageGenerationRunning ? '暂停或停止' : '生成图像'}
+                        onClick={() => activeImageGenerationRunning
+                          ? setGenerationControlMenuNodeId((current) => current === activeGenerationNode.id ? null : activeGenerationNode.id)
+                          : void generateFromActiveImageNode()}
+                      >
+                        {activeImageGenerationRunning ? <Pause size={17} /> : <ArrowUp size={17} strokeWidth={2.2} />}
+                      </button>
+                    </div>
                   </div>
                 </footer>
               </motion.section>
@@ -6241,11 +7019,11 @@ function App() {
                     <button
                       className="editor-generate-button"
                       aria-label="生成"
-                      title={generationLoading ? '正在生成' : '生成文本'}
-                      disabled={generationLoading}
+                      title={activeTextGenerationRunning ? '正在生成' : '生成文本'}
+                      disabled={activeTextGenerationRunning}
                       onClick={() => void generateFromActiveTextNode()}
                     >
-                      {generationLoading ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} strokeWidth={2.2} />}
+                      {activeTextGenerationRunning ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} strokeWidth={2.2} />}
                     </button>
                   </div>
                 </footer>
@@ -6399,6 +7177,24 @@ function App() {
                           <div className="output-error-block">
                             <div><Info size={13} /><span>判断：{categoryLabel}出现问题。{record.error.summary}</span></div>
                             <button type="button" onClick={() => setExpandedOutputErrorId((current) => current === record.id ? null : record.id)}>{expandedOutputErrorId === record.id ? '收起详细错误' : '查看详细错误'}</button>
+                            {record.kind === 'image' && record.error.category === 'network' && (
+                              <div className="output-recovery-actions">
+                                <span>{record.recoveredCount ? `已找回 ${record.recoveredCount} 张` : '先到服务商任务/消费记录下载已生成图片'}</span>
+                                <label>
+                                  <Upload size={13} />导入找回图片
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    multiple
+                                    onChange={(event) => {
+                                      const files = Array.from(event.currentTarget.files ?? [])
+                                      event.currentTarget.value = ''
+                                      void recoverOutputImages(record, files)
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            )}
                             <AnimatePresence>
                               {expandedOutputErrorId === record.id && (
                                 <motion.div className="output-error-detail" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
@@ -6730,7 +7526,34 @@ function App() {
                           }}
                         >
                           <div className="asset-library-thumbnail">
-                            <img src={record.imageUrl} alt={record.prompt} draggable={false} />
+                            <img
+                              src={record.imageUrl}
+                              alt={record.prompt}
+                              draggable={false}
+                              onLoad={() => {
+                                setBrokenHistoryIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : current)
+                                ensureHistoryRecordArchived(record)
+                              }}
+                              onError={() => setBrokenHistoryIds((current) => current.includes(record.id) ? current : [...current, record.id])}
+                            />
+                            {brokenHistoryIds.includes(record.id) && (
+                              <div className="history-image-broken" draggable={false} onClick={(event) => event.stopPropagation()}>
+                                <Info size={16} />
+                                <span>原图片链接已失效</span>
+                                <label>
+                                  <Upload size={12} />重新上传
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(event) => {
+                                      const file = event.currentTarget.files?.[0]
+                                      event.currentTarget.value = ''
+                                      if (file) void repairGenerationHistoryImage(record, file)
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            )}
                             <button
                               type="button"
                               className={`asset-select-toggle ${selectedHistoryIds.includes(record.id) ? 'is-selected' : ''}`}
@@ -6989,6 +7812,16 @@ function App() {
                     <div><strong>{editingConnectionId === 'new' ? '新建连接' : apiDraft.name || 'API 连接'}</strong><span>{editingConnectionId === 'new' ? '配置一个新的 OpenAI 兼容接口' : '编辑连接与启用模型'}</span></div>
                     {editingConnectionId !== 'new' && <button type="button" className="api-delete-connection" onClick={removeCurrentApiConnection}><Trash2 size={14} />删除连接</button>}
                   </div>
+
+                  {editingConnectionId === 'new' && <div className="api-provider-presets">
+                    <div><strong>从常用厂商开始</strong><span>自动填写连接名称与接口地址</span></div>
+                    <div>{API_PROVIDER_PRESETS.map((preset) => (
+                      <button type="button" key={preset.id} className={apiDraft.baseUrl === preset.baseUrl ? 'is-active' : ''} onClick={() => applyApiProviderPreset(preset)}>
+                        <b>{preset.name.slice(0, 2)}</b>
+                        <span><strong>{preset.name}</strong><small>{preset.detail}</small></span>
+                      </button>
+                    ))}</div>
+                  </div>}
 
                   <div className="api-fields-grid">
                     <label>
