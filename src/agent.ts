@@ -3,6 +3,7 @@ export type AgentMessage = {
   role: 'user' | 'assistant'
   content: string
   createdAt: string
+  references?: AgentImageReference[]
 }
 
 export type AgentImageReference = {
@@ -11,17 +12,37 @@ export type AgentImageReference = {
   url: string
 }
 
+export type AgentStyleReference = {
+  id: string
+  name: string
+  url: string
+}
+
+export type AgentInvokedStylePreset = {
+  id: string
+  name: string
+  keyword: string
+  references: AgentStyleReference[]
+}
+
 export type AgentImagePlan = {
   id: string
   status: 'ready' | 'running' | 'completed' | 'failed' | 'cancelled'
   prompt: string
   referenceNodeIds: string[]
+  references?: AgentImageReference[]
+  invokedStyleReferences?: AgentStyleReference[]
+  styleInvocationWord?: string
+  invokedStylePresets?: AgentInvokedStylePreset[]
   aspectRatio: string
   resolution: string
   detail: string
   count: number
   imageConnectionId?: string
   imageModelId?: string
+  assistantMessageId?: string
+  createdAt?: string
+  collapsed?: boolean
   nodeId?: string
   error?: string
 }

@@ -29,6 +29,7 @@ import {
   Minus,
   MessageCircle,
   PanelsTopLeft,
+  Pencil,
   Plus,
   Pilcrow,
   Search,
@@ -69,7 +70,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
-import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, replaceWorkspace, saveAgentSession, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
@@ -109,6 +110,9 @@ type CanvasNode = Node<{
   imageAspectRatio?: ImageAspectRatio
   imageResolution?: ImageResolution
   imageDetail?: ImageDetail
+  imageModelConnectionId?: string
+  imageModelId?: string
+  imageModelName?: string
   groupColor?: string
 }>
 
@@ -229,6 +233,8 @@ type LibraryPreview = {
 type DeleteConfirm =
   | { kind: 'asset' | 'history'; id: string; label: string }
   | { kind: 'assets' | 'history-batch'; ids: string[]; label: string }
+  | { kind: 'style-reference'; id: string; presetId: string; label: string }
+  | { kind: 'style-preset'; presetId: string; label: string }
 
 type OutputHistoryRecord = {
   id: string
@@ -255,6 +261,7 @@ type OutputHistoryRecord = {
 const ASSET_FOLDERS_KEY = 'disy-asset-folders'
 const GENERATION_HISTORY_KEY = 'disy-generation-history'
 const OUTPUT_HISTORY_KEY = 'disy-output-history-v1'
+const ACTIVE_PROJECT_KEY = 'disy-active-project-id'
 const OUTPUT_HISTORY_RETENTION_MS = 24 * 60 * 60 * 1000
 const DEFAULT_ASSET_FOLDERS: AssetFolder[] = [
   { id: 'people', name: '人物', preset: true },
@@ -724,23 +731,73 @@ function MarkdownPreview({ content }: { content: string }) {
   return <>{blocks}</>
 }
 
+function getCanvasStylePresets(canvas: Pick<WorkspaceCanvas, 'styleReferenceName' | 'styleReferenceUrl' | 'styleReferences' | 'styleReferenceEnabled' | 'styleReferenceKeyword' | 'stylePresets'>): StylePresetRecord[] {
+  if (Array.isArray(canvas.stylePresets)) {
+    return canvas.stylePresets.map((preset, index) => ({
+      id: preset.id || `style-preset-${index + 1}`,
+      name: preset.name?.trim() || `风格预设 ${index + 1}`,
+      keyword: preset.keyword ?? '',
+      enabled: preset.enabled !== false,
+      collapsed: Boolean(preset.collapsed),
+      references: Array.isArray(preset.references) ? preset.references.slice(0, 5) : [],
+    }))
+  }
+  const references = canvas.styleReferences?.length
+    ? canvas.styleReferences.slice(0, 5)
+    : canvas.styleReferenceUrl
+      ? [{
+          id: 'legacy-style-reference',
+          name: canvas.styleReferenceName || '风格参考图',
+          url: canvas.styleReferenceUrl,
+        }]
+      : []
+  return [{
+    id: 'default-style-preset',
+    name: '默认风格',
+    keyword: canvas.styleReferenceKeyword ?? 'Disy',
+    enabled: canvas.styleReferenceEnabled ?? true,
+    collapsed: false,
+    references,
+  }]
+}
+
+function getCanvasPreviewUrl(canvas: Pick<WorkspaceCanvas, 'nodes'>) {
+  const previewNode = [...(canvas.nodes as CanvasNode[])].reverse().find((node) => (
+    (node.data.kind === 'image' || node.data.kind === 'upload') && Boolean(node.data.imageUrl)
+  ))
+  return previewNode?.data.imageUrl
+}
+
+function resolveStylePresets(presets: StylePresetRecord[], invocationText: string) {
+  const normalizedText = invocationText.toLocaleLowerCase()
+  const matchedPresets = presets.filter((preset) => {
+    const keyword = preset.keyword.trim()
+    return preset.enabled && preset.references.length > 0 && keyword.length > 0 && normalizedText.includes(keyword.toLocaleLowerCase())
+  })
+  const references = Array.from(new Map(
+    matchedPresets.flatMap((preset) => preset.references).map((reference) => [reference.url, reference]),
+  ).values())
+  return { matchedPresets, references }
+}
+
 function buildCanvasSignature(
   nodes: CanvasNode[],
   edges: Edge[],
   name: string,
-  styleReferenceName: string,
-  styleReferenceUrl: string,
-  styleReferenceEnabled: boolean,
+  stylePresets: StylePresetRecord[],
   promptSuffix: string,
   settingsLocked: boolean,
 ) {
   return JSON.stringify({
     name,
-    styleReferenceName,
-    styleReferenceUrl: styleReferenceUrl
-      ? `${styleReferenceUrl.length}:${styleReferenceUrl.slice(0, 36)}`
-      : '',
-    styleReferenceEnabled,
+    stylePresets: stylePresets.map((preset) => ({
+      ...preset,
+      references: preset.references.map((reference) => ({
+        id: reference.id,
+        name: reference.name,
+        url: `${reference.url.length}:${reference.url.slice(0, 36)}`,
+      })),
+    })),
     promptSuffix,
     settingsLocked,
     nodes: nodes.map((node) => ({
@@ -1212,6 +1269,7 @@ function App() {
   const [apiOpen, setApiOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectSearch, setProjectSearch] = useState('')
+  const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' } | null>(null)
   const [workspaceProjects, setWorkspaceProjects] = useState<WorkspaceProject[]>([])
   const [workspaceCanvases, setWorkspaceCanvases] = useState<WorkspaceCanvas[]>([])
   const [activeProjectId, setActiveProjectId] = useState(CURRENT_PROJECT_ID)
@@ -1237,9 +1295,14 @@ function App() {
   const [canvasSaved, setCanvasSaved] = useState(true)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [projectSettingsLocked, setProjectSettingsLocked] = useState(false)
-  const [styleReferenceName, setStyleReferenceName] = useState('')
-  const [styleReferenceUrl, setStyleReferenceUrl] = useState('')
-  const [styleReferenceEnabled, setStyleReferenceEnabled] = useState(true)
+  const [stylePresets, setStylePresets] = useState<StylePresetRecord[]>([{
+    id: 'default-style-preset',
+    name: '默认风格',
+    keyword: 'Disy',
+    enabled: true,
+    collapsed: false,
+    references: [],
+  }])
   const [projectPromptSuffix, setProjectPromptSuffix] = useState('')
   const [editingConnectionId, setEditingConnectionId] = useState<string>(apiSettings.connections[0]?.id ?? 'new')
   const [apiDraft, setApiDraft] = useState({ name: '', baseUrl: '', apiKey: '' })
@@ -1248,10 +1311,15 @@ function App() {
   const [apiError, setApiError] = useState('')
 
   const shellRef = useRef<HTMLDivElement>(null)
+  const nodeMenuButtonRef = useRef<HTMLButtonElement>(null)
   const firstApiInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
   const canvasNameInputRef = useRef<HTMLInputElement>(null)
   const styleReferenceInputRef = useRef<HTMLInputElement>(null)
+  const styleReferenceUploadTargetRef = useRef<{ presetId: string; referenceId?: string } | null>(null)
+  const activeProjectIdRef = useRef(activeProjectId)
+  const activeCanvasIdRef = useRef(activeCanvasId)
+  const agentConversationIdRef = useRef(agentConversationId)
   const savedCanvasSignatureRef = useRef<string | null>(null)
   const canvasSavedRef = useRef(true)
   const autoSaveActionRef = useRef<() => void>(() => undefined)
@@ -1264,13 +1332,19 @@ function App() {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceNodeIdRef = useRef<string | null>(null)
+  activeProjectIdRef.current = activeProjectId
+  activeCanvasIdRef.current = activeCanvasId
+  agentConversationIdRef.current = agentConversationId
   const assetUploadInputRef = useRef<HTMLInputElement>(null)
   const workspaceImportInputRef = useRef<HTMLInputElement>(null)
   const uploadPositionRef = useRef<{ x: number; y: number } | null>(null)
+  const canvasPastePositionRef = useRef<{ x: number; y: number } | null>(null)
+  const internalNodePastePreferredRef = useRef(false)
   const pasteSequenceRef = useRef(0)
   const modelFetchRequestRef = useRef(0)
   const generationRequestLockRef = useRef(false)
   const agentPlanLocksRef = useRef(new Set<string>())
+  const agentSaveTimerRef = useRef<number | null>(null)
   const aspectTweenRef = useRef<{ kill: () => void } | null>(null)
   const galleryWheelLockRef = useRef(false)
   const previewWheelLockRef = useRef(false)
@@ -1346,11 +1420,14 @@ function App() {
   useEffect(() => {
     if (!projectOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setProjectOpen(false)
+      if (event.key === 'Escape') {
+        if (projectRename?.source === 'modal') setProjectRename(null)
+        setProjectOpen(false)
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [projectOpen])
+  }, [projectOpen, projectRename])
 
   useEffect(() => {
     if (!assetLibraryOpen) return
@@ -1501,18 +1578,15 @@ function App() {
       setProjectName(owner?.name ?? 'Disy Infinite')
       setCanvasName(canvas.name)
       setCanvasNameDraft(canvas.name)
-      setStyleReferenceName(canvas.styleReferenceName)
-      setStyleReferenceUrl(canvas.styleReferenceUrl ?? '')
-      setStyleReferenceEnabled(canvas.styleReferenceEnabled ?? true)
+      const restoredStylePresets = getCanvasStylePresets(canvas)
+      setStylePresets(restoredStylePresets)
       setProjectPromptSuffix(canvas.promptSuffix)
       setProjectSettingsLocked(canvas.settingsLocked)
       savedCanvasSignatureRef.current = buildCanvasSignature(
         restoredNodes,
         restoredEdges,
         canvas.name,
-        canvas.styleReferenceName,
-        canvas.styleReferenceUrl ?? '',
-        canvas.styleReferenceEnabled ?? true,
+        restoredStylePresets,
         canvas.promptSuffix,
         canvas.settingsLocked,
       )
@@ -1526,7 +1600,9 @@ function App() {
         projects = [created.project]
       }
       if (cancelled) return
-      const owner = projects[0]
+      const preferredProjectId = localStorage.getItem(ACTIVE_PROJECT_KEY)
+      const owner = projects.find((project) => project.id === preferredProjectId) ?? projects[0]
+      localStorage.setItem(ACTIVE_PROJECT_KEY, owner.id)
       const canvases = await listWorkspaceCanvases(owner.id)
       const canvas = canvases.find((item) => item.id === owner.activeCanvasId) ?? canvases[0]
       if (!canvas || cancelled) return
@@ -1578,9 +1654,7 @@ function App() {
       nodes,
       edges,
       canvasName,
-      styleReferenceName,
-      styleReferenceUrl,
-      styleReferenceEnabled,
+      stylePresets,
       projectPromptSuffix,
       projectSettingsLocked,
     )
@@ -1590,7 +1664,7 @@ function App() {
       return
     }
     setCanvasSaved(signature === savedCanvasSignatureRef.current)
-  }, [canvasName, edges, nodes, projectPromptSuffix, projectSettingsLocked, styleReferenceEnabled, styleReferenceName, styleReferenceUrl])
+  }, [canvasName, edges, nodes, projectPromptSuffix, projectSettingsLocked, stylePresets])
 
   useEffect(() => {
     if (!toastMessage) return
@@ -1599,26 +1673,57 @@ function App() {
   }, [toastMessage])
 
   useEffect(() => {
+    if (!canvasSwitcherOpen) return
+    const closeCanvasSwitcher = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.canvas-identity-button, .canvas-switcher-menu')) return
+      if (projectRename?.source === 'switcher') setProjectRename(null)
+      setCanvasSwitcherOpen(false)
+    }
+    const closeCanvasSwitcherWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (projectRename?.source === 'switcher') setProjectRename(null)
+        setCanvasSwitcherOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', closeCanvasSwitcher, true)
+    window.addEventListener('keydown', closeCanvasSwitcherWithEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeCanvasSwitcher, true)
+      window.removeEventListener('keydown', closeCanvasSwitcherWithEscape)
+    }
+  }, [canvasSwitcherOpen, projectRename])
+
+  const persistCurrentAgentConversation = useCallback(async () => {
     if (!activeProjectId || !activeCanvasId) return
-    const timer = window.setTimeout(() => {
-      const now = new Date().toISOString()
-      const title = agentMessages[0]?.content.slice(0, 36) || '新的对话'
-      void saveAgentSession({
-        id: agentConversationId,
-        projectId: activeProjectId,
-        canvasId: activeCanvasId,
-        title,
-        messages: agentMessages,
-        plans: agentPlans,
-        selectedChatModelId: agentTextModelKey,
-        selectedImageModelId: agentImageModelKey,
-        createdAt: agentMessages[0]?.createdAt ?? now,
-        updatedAt: now,
-      }).catch(() => undefined)
-      setAgentConversationOptions((current) => [{ id: agentConversationId, title, updatedAt: now }, ...current.filter((item) => item.id !== agentConversationId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
-    }, 500)
-    return () => window.clearTimeout(timer)
+    const now = new Date().toISOString()
+    const title = agentMessages[0]?.content.slice(0, 36) || '新的对话'
+    await saveAgentSession({
+      id: agentConversationId,
+      projectId: activeProjectId,
+      canvasId: activeCanvasId,
+      title,
+      messages: agentMessages,
+      plans: agentPlans,
+      selectedChatModelId: agentTextModelKey,
+      selectedImageModelId: agentImageModelKey,
+      createdAt: agentMessages[0]?.createdAt ?? now,
+      updatedAt: now,
+    })
+    setAgentConversationOptions((current) => [{ id: agentConversationId, title, updatedAt: now }, ...current.filter((item) => item.id !== agentConversationId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
   }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey])
+
+  useEffect(() => {
+    if (!activeProjectId || !activeCanvasId) return
+    agentSaveTimerRef.current = window.setTimeout(() => {
+      agentSaveTimerRef.current = null
+      void persistCurrentAgentConversation().catch(() => undefined)
+    }, 500)
+    return () => {
+      if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
+      agentSaveTimerRef.current = null
+    }
+  }, [activeCanvasId, activeProjectId, persistCurrentAgentConversation])
 
   useEffect(() => {
     if (!imageParameterMenuOpen) return
@@ -1749,21 +1854,25 @@ function App() {
     try {
       const imageUrls = await Promise.all(files.map(readFile))
       const timestamp = Date.now()
-      const uploadedNodes: CanvasNode[] = files.map((file, index) => ({
-        id: `upload-${timestamp}-${index}`,
-        type: 'disy',
-        position: {
-          x: position.x + index * 34,
-          y: position.y + index * 34,
-        },
-        data: {
-          kind: 'upload',
-          title: file.name,
-          body: '',
-          fileName: file.name,
-          imageUrl: imageUrls[index],
-        },
-      }))
+      const uploadedNodes: CanvasNode[] = files.map((file, index) => {
+        const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+        const fileName = file.name || `clipboard-image-${timestamp}-${index + 1}.${extension}`
+        return {
+          id: `upload-${timestamp}-${index}`,
+          type: 'disy',
+          position: {
+            x: position.x + index * 34,
+            y: position.y + index * 34,
+          },
+          data: {
+            kind: 'upload',
+            title: fileName,
+            body: '',
+            fileName,
+            imageUrl: imageUrls[index],
+          },
+        }
+      })
       setNodes((current) => [...current, ...uploadedNodes])
       setToastMessage(files.length > 1 ? `已上传 ${files.length} 张图片` : '图片已加入画布')
     } catch {
@@ -1776,6 +1885,32 @@ function App() {
     closeAllMenus()
     imageInputRef.current?.click()
   }, [closeAllMenus])
+
+  useEffect(() => {
+    const rememberCanvasPointer = (event: PointerEvent) => {
+      const target = event.target
+      canvasPastePositionRef.current = target instanceof Element && target.closest('.react-flow')
+        ? { x: event.clientX, y: event.clientY }
+        : null
+    }
+    const clearPasteContext = () => {
+      internalNodePastePreferredRef.current = false
+      canvasPastePositionRef.current = null
+    }
+    const clearHiddenContext = () => {
+      if (document.hidden) clearPasteContext()
+    }
+    window.addEventListener('pointermove', rememberCanvasPointer, { passive: true })
+    window.addEventListener('pointerdown', rememberCanvasPointer, { passive: true })
+    window.addEventListener('blur', clearPasteContext)
+    document.addEventListener('visibilitychange', clearHiddenContext)
+    return () => {
+      window.removeEventListener('pointermove', rememberCanvasPointer)
+      window.removeEventListener('pointerdown', rememberCanvasPointer)
+      window.removeEventListener('blur', clearPasteContext)
+      document.removeEventListener('visibilitychange', clearHiddenContext)
+    }
+  }, [])
 
   const connectionCreatesCycle = useCallback((sourceId: string, targetId: string) => {
     if (sourceId === targetId) return true
@@ -1878,6 +2013,13 @@ function App() {
       upload: '上传一张参考图。',
     }
     const id = `${kind}-${Date.now()}`
+    const menuAnchor = { x: nodeMenu?.flowX ?? 360, y: nodeMenu?.flowY ?? 260 }
+    const imageSize = getImageGenerationNodeSize('1:1')
+    const menuPosition = kind === 'text'
+      ? { x: menuAnchor.x - 137.5, y: menuAnchor.y - 63 }
+      : kind === 'image'
+        ? { x: menuAnchor.x - imageSize.width / 2, y: menuAnchor.y - imageSize.height / 2 }
+        : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
 
     const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
     setNodes((current) => [
@@ -1885,7 +2027,7 @@ function App() {
       {
         id,
         type: 'disy',
-        position: positionOverride ?? { x: nodeMenu?.flowX ?? 360, y: nodeMenu?.flowY ?? 260 },
+        position: positionOverride ?? menuPosition,
         ...(kind === 'text'
           ? { style: { width: 275, height: 126 } }
           : kind === 'image'
@@ -1944,8 +2086,8 @@ function App() {
     closeContextMenu()
     const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
     setNodeMenu({
-      x: event.clientX,
-      y: event.clientY,
+      x: Math.max(12, Math.min(event.clientX, window.innerWidth - 250)),
+      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 238)),
       flowX: flowPosition.x,
       flowY: flowPosition.y,
     })
@@ -1953,8 +2095,17 @@ function App() {
 
   const openNodeMenuFromButton = () => {
     closeContextMenu()
-    const flowPosition = screenToFlowPosition({ x: 370, y: 210 })
-    setNodeMenu({ x: 82, y: 112, flowX: flowPosition.x, flowY: flowPosition.y })
+    const rect = nodeMenuButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const menuWidth = 238
+    const menuHeight = 226
+    const x = Math.min(rect.right + 12, window.innerWidth - menuWidth - 12)
+    const y = Math.max(12, Math.min(rect.top - 6, window.innerHeight - menuHeight - 12))
+    const flowPosition = screenToFlowPosition({
+      x: Math.min(window.innerWidth - 160, rect.right + menuWidth + 34),
+      y: rect.top + rect.height / 2,
+    })
+    setNodeMenu({ x, y, flowX: flowPosition.x, flowY: flowPosition.y })
   }
 
   const updateActiveTextNode = (promptText: string) => {
@@ -2057,6 +2208,7 @@ function App() {
       },
     })
     pasteSequenceRef.current = 0
+    internalNodePastePreferredRef.current = true
     setToastMessage('已复制节点')
     if (closeMenu) closeContextMenu()
   }, [closeContextMenu])
@@ -2101,26 +2253,63 @@ function App() {
   useEffect(() => {
     const onClipboardShortcut = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      const target = event.target
-      if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
-
       const key = event.key.toLowerCase()
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) {
+        if (key === 'c') internalNodePastePreferredRef.current = false
+        return
+      }
+
       if (key === 'c') {
         const selectedNode = nodes.find((node) => node.selected)
-        if (!selectedNode) return
+        if (!selectedNode) {
+          internalNodePastePreferredRef.current = false
+          return
+        }
         event.preventDefault()
         copyNodeToClipboard(selectedNode)
       }
-      if (key === 'v' && nodeClipboard) {
+    }
+    const onNativeCopy = () => { internalNodePastePreferredRef.current = false }
+
+    window.addEventListener('keydown', onClipboardShortcut)
+    window.addEventListener('copy', onNativeCopy)
+    return () => {
+      window.removeEventListener('keydown', onClipboardShortcut)
+      window.removeEventListener('copy', onNativeCopy)
+    }
+  }, [copyNodeToClipboard, nodeClipboard, nodes, pasteClipboardNode])
+
+  useEffect(() => {
+    const onSystemPaste = (event: ClipboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
+      const pointer = canvasPastePositionRef.current
+      if (!pointer) return
+
+      if (internalNodePastePreferredRef.current && nodeClipboard) {
         event.preventDefault()
         const selectedNode = nodes.find((node) => node.selected)
         pasteClipboardNode(selectedNode)
+        return
+      }
+
+      const imageFiles = Array.from(event.clipboardData?.items ?? [])
+        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file))
+
+      if (imageFiles.length) {
+        event.preventDefault()
+        internalNodePastePreferredRef.current = false
+        const position = screenToFlowPosition(pointer)
+        void addImageFiles(imageFiles, { x: position.x - 130, y: position.y - 110 })
       }
     }
 
-    window.addEventListener('keydown', onClipboardShortcut)
-    return () => window.removeEventListener('keydown', onClipboardShortcut)
-  }, [copyNodeToClipboard, nodeClipboard, nodes, pasteClipboardNode])
+    window.addEventListener('paste', onSystemPaste)
+    return () => window.removeEventListener('paste', onSystemPaste)
+  }, [addImageFiles, nodeClipboard, nodes, pasteClipboardNode, screenToFlowPosition])
 
   useEffect(() => {
     const onDeleteShortcut = (event: KeyboardEvent) => {
@@ -2285,6 +2474,10 @@ function App() {
 
   const saveCanvasState = async (nameOverride = canvasName, silent = false) => {
     const normalizedName = nameOverride.trim() || '未命名画布'
+    const primaryStylePreset = stylePresets.find((preset) => preset.enabled && preset.references.length)
+      ?? stylePresets.find((preset) => preset.references.length)
+      ?? stylePresets[0]
+    const legacyStyleReferences = primaryStylePreset?.references ?? []
     try {
       await saveWorkspaceCanvas({
         id: activeCanvasId,
@@ -2292,9 +2485,12 @@ function App() {
         name: normalizedName,
         nodes,
         edges,
-        styleReferenceName,
-        styleReferenceUrl,
-        styleReferenceEnabled,
+        styleReferenceName: legacyStyleReferences[0]?.name ?? '',
+        styleReferenceUrl: legacyStyleReferences[0]?.url,
+        styleReferences: legacyStyleReferences,
+        styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+        styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
+        stylePresets,
         promptSuffix: projectPromptSuffix,
         settingsLocked: projectSettingsLocked,
         createdAt: workspaceCanvases.find((canvas) => canvas.id === activeCanvasId)?.createdAt ?? new Date().toISOString(),
@@ -2306,14 +2502,24 @@ function App() {
         nodes,
         edges,
         normalizedName,
-        styleReferenceName,
-        styleReferenceUrl,
-        styleReferenceEnabled,
+        stylePresets,
         projectPromptSuffix,
         projectSettingsLocked,
       )
       setCanvasSaved(true)
-      setWorkspaceCanvases((current) => current.map((canvas) => canvas.id === activeCanvasId ? { ...canvas, name: normalizedName, nodes, edges, updatedAt: new Date().toISOString() } : canvas))
+      setWorkspaceCanvases((current) => current.map((canvas) => canvas.id === activeCanvasId ? {
+        ...canvas,
+        name: normalizedName,
+        nodes,
+        edges,
+        styleReferenceName: legacyStyleReferences[0]?.name ?? '',
+        styleReferenceUrl: legacyStyleReferences[0]?.url,
+        styleReferences: legacyStyleReferences,
+        styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+        styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
+        stylePresets,
+        updatedAt: new Date().toISOString(),
+      } : canvas))
       if (!silent) setToastMessage('项目已保存到本机')
     } catch {
       setCanvasSaved(false)
@@ -2321,8 +2527,72 @@ function App() {
     }
   }
 
+  const persistCurrentCanvasSnapshot = async (snapshotNodes: CanvasNode[], snapshotEdges: Edge[]) => {
+    const primaryStylePreset = stylePresets.find((preset) => preset.enabled && preset.references.length)
+      ?? stylePresets.find((preset) => preset.references.length)
+      ?? stylePresets[0]
+    const legacyStyleReferences = primaryStylePreset?.references ?? []
+    await saveWorkspaceCanvas({
+      id: activeCanvasId,
+      projectId: activeProjectId,
+      name: canvasName.trim() || '未命名画布',
+      nodes: snapshotNodes,
+      edges: snapshotEdges,
+      styleReferenceName: legacyStyleReferences[0]?.name ?? '',
+      styleReferenceUrl: legacyStyleReferences[0]?.url,
+      styleReferences: legacyStyleReferences,
+      styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+      styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
+      stylePresets,
+      promptSuffix: projectPromptSuffix,
+      settingsLocked: projectSettingsLocked,
+      createdAt: workspaceCanvases.find((canvas) => canvas.id === activeCanvasId)?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
   autoSaveActionRef.current = () => {
     void saveCanvasState(canvasName, true)
+  }
+
+  const patchCanvasNodesAtOrigin = async (
+    origin: { projectId: string; canvasId: string },
+    patch: (current: CanvasNode[]) => CanvasNode[],
+  ) => {
+    if (activeProjectIdRef.current === origin.projectId && activeCanvasIdRef.current === origin.canvasId) {
+      setNodes(patch)
+      return
+    }
+    const canvas = await loadWorkspaceCanvas(origin.canvasId)
+    if (!canvas || canvas.projectId !== origin.projectId) return
+    await saveWorkspaceCanvas({
+      ...canvas,
+      nodes: patch(canvas.nodes as CanvasNode[]),
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
+  const patchAgentPlansAtOrigin = async (
+    origin: { projectId: string; canvasId: string; sessionId: string },
+    patch: (current: AgentImagePlan[]) => AgentImagePlan[],
+  ) => {
+    if (
+      activeProjectIdRef.current === origin.projectId
+      && activeCanvasIdRef.current === origin.canvasId
+      && agentConversationIdRef.current === origin.sessionId
+    ) {
+      setAgentPlans(patch)
+      return
+    }
+    const sessions = await listAgentSessions(origin.canvasId)
+    const session = sessions.find((item) => item.id === origin.sessionId)
+    if (!session || session.projectId !== origin.projectId) return
+    await saveAgentSession({
+      ...session,
+      messages: (session.messages as AgentMessage[] | undefined) ?? [],
+      plans: patch((session.plans as AgentImagePlan[] | undefined) ?? []),
+      updatedAt: new Date().toISOString(),
+    })
   }
 
   useEffect(() => {
@@ -2338,7 +2608,9 @@ function App() {
     void saveCanvasState(canvasNameDraft)
   }
 
-  const workspaceMutationBlocked = () => generationLoading
+  const workspaceMutationBlocked = () => agentBusy
+  const destructiveWorkspaceMutationBlocked = () => generationLoading
+    || agentBusy
     || generationRequestLockRef.current
     || agentPlanLocksRef.current.size > 0
     || agentPlans.some((plan) => plan.status === 'running')
@@ -2348,7 +2620,12 @@ function App() {
       setToastMessage('正在生成内容，完成后才能切换画布')
       throw new Error('Generation in progress')
     }
-    if (!skipCurrentSave) await saveCanvasState(canvasName, true)
+    if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
+    agentSaveTimerRef.current = null
+    if (!skipCurrentSave) {
+      await saveCanvasState(canvasName, true)
+      await persistCurrentAgentConversation()
+    }
     const [canvas, project, canvases, sessions] = await Promise.all([
       loadWorkspaceCanvas(canvasId),
       listWorkspaceProjects().then((items) => items.find((item) => item.id === projectId)),
@@ -2362,17 +2639,19 @@ function App() {
     setNodes(restoredNodes)
     setEdges(canvas.edges as Edge[])
     setActiveProjectId(projectId)
+    localStorage.setItem(ACTIVE_PROJECT_KEY, projectId)
     setActiveCanvasId(canvas.id)
     setProjectName(project.name)
     setWorkspaceCanvases(canvases)
     setCanvasName(canvas.name)
     setCanvasNameDraft(canvas.name)
-    setStyleReferenceName(canvas.styleReferenceName)
-    setStyleReferenceUrl(canvas.styleReferenceUrl ?? '')
-    setStyleReferenceEnabled(canvas.styleReferenceEnabled ?? true)
+    const restoredStylePresets = getCanvasStylePresets(canvas)
+    setStylePresets(restoredStylePresets)
     setProjectPromptSuffix(canvas.promptSuffix)
     setProjectSettingsLocked(canvas.settingsLocked)
     const session = sessions[0]
+    setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
+    setAgentConversationId(session?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
     setAgentMessages((session?.messages as AgentMessage[] | undefined) ?? [])
     const interruptedPlans = (session?.plans as AgentImagePlan[] | undefined) ?? []
     const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
@@ -2386,7 +2665,7 @@ function App() {
     const nextProject = { ...project, activeCanvasId: canvas.id, updatedAt: new Date().toISOString() }
     await saveWorkspaceProject(nextProject)
     setWorkspaceProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item))
-    savedCanvasSignatureRef.current = buildCanvasSignature(restoredNodes, canvas.edges as Edge[], canvas.name, canvas.styleReferenceName, canvas.styleReferenceUrl ?? '', canvas.styleReferenceEnabled ?? true, canvas.promptSuffix, canvas.settingsLocked)
+    savedCanvasSignatureRef.current = buildCanvasSignature(restoredNodes, canvas.edges as Edge[], canvas.name, restoredStylePresets, canvas.promptSuffix, canvas.settingsLocked)
     setCanvasSaved(true)
   }
 
@@ -2403,11 +2682,14 @@ function App() {
     setToastMessage('已创建新画布')
   }
 
-  const beginNewAgentConversation = () => {
-    if (agentBusy || agentPlanLocksRef.current.size > 0) {
-      setToastMessage('Agent 正在处理，完成后再新建对话')
+  const beginNewAgentConversation = async () => {
+    if (agentBusy) {
+      setToastMessage('Agent 正在回复，完成后再新建对话')
       return
     }
+    if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
+    agentSaveTimerRef.current = null
+    await persistCurrentAgentConversation()
     const now = new Date().toISOString()
     const id = `${activeProjectId}--${activeCanvasId}--agent-${crypto.randomUUID()}`
     setAgentConversationId(id)
@@ -2421,17 +2703,20 @@ function App() {
 
   const selectAgentConversation = async (id: string) => {
     if (id === agentConversationId) return
-    if (agentBusy || agentPlanLocksRef.current.size > 0) {
-      setToastMessage('Agent 正在处理，完成后再切换对话')
+    if (agentBusy) {
+      setToastMessage('Agent 正在回复，完成后再切换对话')
       return
     }
+    if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
+    agentSaveTimerRef.current = null
+    await persistCurrentAgentConversation()
     const sessions = await listAgentSessions(activeCanvasId)
     const session = sessions.find((item) => item.id === id)
     if (!session) return
     setAgentConversationId(session.id)
     setAgentMessages((session.messages as AgentMessage[] | undefined) ?? [])
     const plans = (session.plans as AgentImagePlan[] | undefined) ?? []
-    setAgentPlans(plans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+    setAgentPlans(plans)
     setAgentReferences([])
     setAgentPendingReference(null)
     setAgentCanvasPicking(false)
@@ -2445,6 +2730,8 @@ function App() {
       return
     }
     if (!window.confirm('确认删除当前对话？')) return
+    if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
+    agentSaveTimerRef.current = null
     await deleteAgentSession(agentConversationId)
     const sessions = (await listAgentSessions(activeCanvasId)).filter((session) => session.id !== agentConversationId)
     setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
@@ -2469,7 +2756,7 @@ function App() {
   }
 
   const removeCanvas = async (canvasId: string) => {
-    if (workspaceMutationBlocked()) {
+    if (destructiveWorkspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能删除画布')
       return
     }
@@ -2498,8 +2785,23 @@ function App() {
     setToastMessage('新项目已创建')
   }
 
+  const commitProjectRename = async (projectId: string, draft: string) => {
+    const normalizedName = draft.trim() || '未命名项目'
+    const source = projectRename?.id === projectId ? projectRename.source : 'modal'
+    setProjectRename((current) => current?.id === projectId ? null : current)
+    try {
+      const renamed = await renameWorkspaceProject(projectId, normalizedName)
+      setWorkspaceProjects((current) => current.map((project) => project.id === projectId ? renamed : project))
+      if (projectId === activeProjectId) setProjectName(renamed.name)
+      setToastMessage('项目名称已更新')
+    } catch {
+      setProjectRename({ id: projectId, draft, source })
+      setToastMessage('项目重命名失败')
+    }
+  }
+
   const removeProject = async (projectId: string) => {
-    if (workspaceMutationBlocked()) {
+    if (destructiveWorkspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能删除项目')
       return
     }
@@ -2577,7 +2879,7 @@ function App() {
   }
 
   const importWholeWorkspace = async (file: File) => {
-    if (workspaceMutationBlocked()) {
+    if (destructiveWorkspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能导入项目')
       return
     }
@@ -3027,6 +3329,7 @@ function App() {
     if (!activeTextNode) return
     try {
       await navigator.clipboard.writeText(activeTextNode.data.body)
+      internalNodePastePreferredRef.current = false
       setToastMessage('已复制全部内容')
     } catch {
       setToastMessage('复制失败，请重试')
@@ -3106,6 +3409,20 @@ function App() {
     connection.id === apiSettings.selectedImageModel?.connectionId
     && model.id === apiSettings.selectedImageModel?.modelId
   )) ?? enabledImageModels[0]
+  const activeGenerationPlan = activeGenerationNode
+    ? agentPlans.find((plan) => plan.nodeId === activeGenerationNode.id)
+    : undefined
+  const activeNodeImageConnectionId = activeGenerationNode?.data.imageModelConnectionId ?? activeGenerationPlan?.imageConnectionId
+  const activeNodeImageModelId = activeGenerationNode?.data.imageModelId ?? activeGenerationPlan?.imageModelId
+  const configuredActiveNodeImageModel = activeNodeImageConnectionId && activeNodeImageModelId
+    ? enabledImageModels.find(({ connection, model }) => (
+        connection.id === activeNodeImageConnectionId
+        && model.id === activeNodeImageModelId
+      ))
+    : undefined
+  const activeNodeImageModel = configuredActiveNodeImageModel ?? selectedImageModel
+  const displayedActiveNodeImageModel = configuredActiveNodeImageModel
+    ?? (activeNodeImageModelId ? undefined : selectedImageModel)
   const hasCatalogTextModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'text'))
   const hasCatalogImageModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'image'))
 
@@ -3114,12 +3431,12 @@ function App() {
     if (!agentImageModelKey && enabledImageModels[0]) setAgentImageModelKey(`${enabledImageModels[0].connection.id}::${enabledImageModels[0].model.id}`)
   }, [agentImageModelKey, agentTextModelKey, enabledImageModels, enabledTextModels])
 
-  const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt' | 'projectId'>) => {
+  const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt' | 'projectId'>, projectId = activeProjectId) => {
     const nextRecord: OutputHistoryRecord = {
       ...record,
       id: `output-${Date.now()}-${crypto.randomUUID()}`,
       createdAt: new Date().toISOString(),
-      projectId: activeProjectId,
+      projectId,
     }
     setOutputHistory((current) => {
       const cutoff = Date.now() - OUTPUT_HISTORY_RETENTION_MS
@@ -3196,6 +3513,8 @@ function App() {
     generationRequestLockRef.current = true
     setGenerationLoading(true)
     setModelMenuOpen(false)
+    const textGenerationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
+    const textGenerationNodeId = activeTextNode.id
     try {
       const referenceImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!)))
       const output = await generateRemoteText({
@@ -3203,7 +3522,7 @@ function App() {
         apiKey: selectedTextModel.connection.apiKey,
         model: selectedTextModel.model.id,
       }, prompt, { referenceImages })
-      setNodes((current) => current.map((node) => node.id === activeTextNode.id
+      await patchCanvasNodesAtOrigin(textGenerationOrigin, (current) => current.map((node) => node.id === textGenerationNodeId
         ? { ...node, data: { ...node.data, body: output, status: selectedTextModel.model.name } }
         : node))
       appendOutputHistory({
@@ -3216,7 +3535,7 @@ function App() {
         requestedCount: generationCount,
         outputCount: 1,
         preview: output.slice(0, 240),
-      })
+      }, textGenerationOrigin.projectId)
       setToastMessage('文本节点已更新')
     } catch (error) {
       const historyError = toOutputHistoryError(error)
@@ -3230,7 +3549,7 @@ function App() {
         requestedCount: generationCount,
         outputCount: 0,
         error: historyError,
-      })
+      }, textGenerationOrigin.projectId)
       setToastMessage(historyError.summary)
     } finally {
       generationRequestLockRef.current = false
@@ -3256,20 +3575,22 @@ function App() {
       ? `参考文本：\n${selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
       : ''
     const prompt = [promptText, textReferenceGuide, mentionGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
-    if (!selectedImageModel) {
+    if (!activeNodeImageModel) {
       setToastMessage(hasCatalogImageModels ? '已有图像模型但尚未启用，请到 API 设置中勾选' : '请先添加并启用图像模型')
       setApiOpen(true)
       return
     }
-    if (!selectedImageModel.connection.apiKey) {
+    if (!activeNodeImageModel.connection.apiKey) {
       setToastMessage('当前连接缺少 API Key，请重新填写')
-      setEditingConnectionId(selectedImageModel.connection.id)
+      setEditingConnectionId(activeNodeImageModel.connection.id)
       setApiOpen(true)
       return
     }
+    const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), activeGenerationNode.data.body)
+    const styleInvocation = resolveStylePresets(stylePresets, invocationText)
     const requestedReferenceUrls = Array.from(new Set([
       ...selectedAvailableImageReferences.map((reference) => reference.url),
-      styleReferenceEnabled ? styleReferenceUrl : '',
+      ...styleInvocation.references.map((reference) => reference.url),
     ].filter((url): url is string => Boolean(url))))
     if (requestedReferenceUrls.length > 16) {
       setToastMessage(`参考图最多 16 张，当前已选择 ${requestedReferenceUrls.length} 张`)
@@ -3280,14 +3601,15 @@ function App() {
     setGenerationLoading(true)
     setImageModelMenuOpen(false)
     const generationNodeId = activeGenerationNode.id
+    const generationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
     setNodes((current) => current.map((node) => node.id === generationNodeId
-      ? { ...node, data: { ...node.data, status: '生成中' } }
+      ? { ...node, data: { ...node.data, status: '生成中', imageModelConnectionId: activeNodeImageModel.connection.id, imageModelId: activeNodeImageModel.model.id, imageModelName: activeNodeImageModel.model.name } }
       : node))
     try {
       const referenceImages = await Promise.all(requestedReferenceUrls.map(prepareReferenceImageForRequest))
-      const requestMode = /^nano-banana(?:-|$)/i.test(selectedImageModel.model.id)
+      const requestMode = /^nano-banana(?:-|$)/i.test(activeNodeImageModel.model.id)
         ? 'api/generate'
-        : referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
+        : referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(activeNodeImageModel.model.id)
           ? 'images/edits'
           : 'images/generations'
       const images: Awaited<ReturnType<typeof generateRemoteImages>> = []
@@ -3299,9 +3621,9 @@ function App() {
         try {
           const remaining = generationCount - images.length
           const batch = await generateRemoteImages({
-            baseUrl: selectedImageModel.connection.baseUrl,
-            apiKey: selectedImageModel.connection.apiKey,
-            model: selectedImageModel.model.id,
+            baseUrl: activeNodeImageModel.connection.baseUrl,
+            apiKey: activeNodeImageModel.connection.apiKey,
+            model: activeNodeImageModel.model.id,
           }, {
             prompt,
             count: 1,
@@ -3329,8 +3651,8 @@ function App() {
         revisedPrompt: image.revisedPrompt || prompt,
       }))
       const primaryVariant = newVariants[0]
-      setNodes((current) => current.map((node) => {
-        if (node.id !== activeGenerationNode.id) return node
+      await patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => {
+        if (node.id !== generationNodeId) return node
         const previousVariants = node.data.imageVariants?.length
           ? node.data.imageVariants
           : node.data.imageUrl
@@ -3358,10 +3680,10 @@ function App() {
         id: `history-${variant.id}`,
         createdAt: new Date().toISOString(),
         prompt,
-        model: selectedImageModel.model.name,
+        model: activeNodeImageModel.model.name,
         imageUrl: variant.url,
         fileName: variant.fileName,
-        projectId: activeProjectId,
+        projectId: generationOrigin.projectId,
       }))
       setGenerationHistory((current) => {
         const next = [...current, ...records]
@@ -3379,51 +3701,51 @@ function App() {
         kind: 'image',
         status: 'success',
         prompt: promptText,
-        modelId: selectedImageModel.model.id,
-        modelName: selectedImageModel.model.name,
-        connectionName: selectedImageModel.connection.name,
+        modelId: activeNodeImageModel.model.id,
+        modelName: activeNodeImageModel.model.name,
+        connectionName: activeNodeImageModel.connection.name,
         requestedCount: generationCount,
         outputCount: images.length,
         preview: `${activeImageAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]} · 参考图 ${referenceImages.length} 张 · ${requestMode}`,
-      })
+      }, generationOrigin.projectId)
       if (stoppedError) {
         appendOutputHistory({
           kind: 'image',
           status: 'failed',
           prompt: promptText,
-          modelId: selectedImageModel.model.id,
-          modelName: selectedImageModel.model.name,
-          connectionName: selectedImageModel.connection.name,
+          modelId: activeNodeImageModel.model.id,
+          modelName: activeNodeImageModel.model.name,
+          connectionName: activeNodeImageModel.connection.name,
           requestedCount: generationCount - images.length,
           outputCount: 0,
           preview: `参考图 ${referenceImages.length} 张 · ${requestMode}`,
           error: toOutputHistoryError(stoppedError),
-        })
+        }, generationOrigin.projectId)
       }
       setToastMessage(stoppedError
         ? `生成失败，已停止后续请求${images.length ? `；已保留 ${images.length} 张成功结果` : ''}`
         : `已生成 ${images.length} 张图像`)
     } catch (error) {
       const historyError = toOutputHistoryError(error)
-      const attemptedReferenceCount = selectedImageReferences.length + (styleReferenceEnabled && styleReferenceUrl ? 1 : 0)
-      const attemptedRequestMode = attemptedReferenceCount > 0 && /(?:gpt-image|chatgpt-image)/i.test(selectedImageModel.model.id)
+      const attemptedReferenceCount = requestedReferenceUrls.length
+      const attemptedRequestMode = attemptedReferenceCount > 0 && /(?:gpt-image|chatgpt-image)/i.test(activeNodeImageModel.model.id)
         ? 'images/edits'
         : 'images/generations'
-      setNodes((current) => current.map((node) => node.id === generationNodeId
+      await patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => node.id === generationNodeId
         ? { ...node, data: { ...node.data, status: '生成失败' } }
         : node))
       appendOutputHistory({
         kind: 'image',
         status: 'failed',
         prompt: promptText,
-        modelId: selectedImageModel.model.id,
-        modelName: selectedImageModel.model.name,
-        connectionName: selectedImageModel.connection.name,
+        modelId: activeNodeImageModel.model.id,
+        modelName: activeNodeImageModel.model.name,
+        connectionName: activeNodeImageModel.connection.name,
         requestedCount: generationCount,
         outputCount: 0,
         preview: `参考图 ${attemptedReferenceCount} 张 · ${attemptedRequestMode}`,
         error: historyError,
-      })
+      }, generationOrigin.projectId)
       setToastMessage(historyError.summary)
     } finally {
       generationRequestLockRef.current = false
@@ -3436,7 +3758,37 @@ function App() {
     return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
   })
 
-  const sendAgentMessage = async (content: string) => {
+  const locateAgentCanvasNode = (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId)
+    if (!node) {
+      setToastMessage('对应的画布节点已不存在')
+      return
+    }
+    setNodes((current) => current.map((item) => ({ ...item, selected: item.id === nodeId })))
+    setActiveEditorNodeId(null)
+    setActiveImageNodeId(null)
+    setActiveGenerationNodeId(node.data.kind === 'image' ? nodeId : null)
+    setExpandedEditorNodeId(null)
+    window.requestAnimationFrame(() => {
+      void fitCanvas({ nodes: [{ id: nodeId }], padding: 0.65, maxZoom: 1.05, duration: reduceMotion ? 0 : 320 })
+      measureNodeOverlay(nodeId)
+    })
+  }
+
+  const createAgentUploadedReference = (reference: Omit<AgentImageReference, 'nodeId'>): AgentImageReference => {
+    const nodeId = `agent-upload-${crypto.randomUUID()}`
+    const center = screenToFlowPosition({ x: Math.max(320, (window.innerWidth - (agentOpen ? 420 : 0)) / 2), y: window.innerHeight / 2 })
+    setNodes((current) => [...current, {
+      id: nodeId,
+      type: 'disy',
+      position: { x: center.x - 130, y: center.y - 110 },
+      data: { kind: 'upload', title: reference.name, body: '', fileName: reference.name, imageUrl: reference.url },
+    }])
+    setToastMessage('参考图已加入画布和 Agent 对话')
+    return { ...reference, nodeId }
+  }
+
+  const sendAgentMessage = async (content: string, invocationText = content) => {
     if (agentBusy) return
     const [connectionId, modelId] = agentTextModelKey.split('::')
     const selection = enabledTextModels.find((item) => item.connection.id === connectionId && item.model.id === modelId)
@@ -3445,31 +3797,56 @@ function App() {
       setApiOpen(true)
       return
     }
-    const userMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'user', content, createdAt: new Date().toISOString() }
+    const uniqueAgentReferenceCount = new Set(agentReferences.map((reference) => reference.url)).size
+    if (uniqueAgentReferenceCount > 16) {
+      setToastMessage(`Agent 参考图最多 16 张，当前共 ${uniqueAgentReferenceCount} 张`)
+      return
+    }
+    const sentReferences = agentReferences.map((reference) => ({ ...reference }))
+    const styleInvocation = resolveStylePresets(stylePresets, invocationText)
+    const invokedStylePresets = styleInvocation.matchedPresets.map((preset) => ({
+      id: preset.id,
+      name: preset.name,
+      keyword: preset.keyword.trim(),
+      references: preset.references.map((reference) => ({ ...reference })),
+    }))
+    const invokedStyleReferences = styleInvocation.references.map((reference) => ({ ...reference }))
+    const styleInvocationWords = invokedStylePresets.map((preset) => preset.keyword)
+    const availableStyleKeywords = stylePresets
+      .filter((preset) => preset.enabled && preset.references.length && preset.keyword.trim())
+      .map((preset) => `${preset.name}：“${preset.keyword.trim()}”`)
+    const userMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'user', content, createdAt: new Date().toISOString(), references: sentReferences }
     const nextMessages = [...agentMessages, userMessage]
     setAgentMessages(nextMessages)
     setAgentBusy(true)
     try {
       const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴；只有用户明确表达想生成图像时，才提出 imagePlan。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlan":{"prompt":"可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}}。如果不需要生图，省略 imagePlan。参考图名称：${agentReferences.map((item) => item.name).join('、') || '无'}。\n\n${transcript}`
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlan，等待界面展示确认卡并由用户点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlan":{"prompt":"可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}}。如果不需要生图，省略 imagePlan。对话参考图名称：${agentReferences.map((item) => item.name).join('、') || '无'}。${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       const raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
       const parsed = parseAgentReply(raw)
       const assistantMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: parsed.reply || '我已经整理好了。', createdAt: new Date().toISOString() }
       setAgentMessages((current) => [...current, assistantMessage])
       if (parsed.imagePlan) {
         const [imageConnectionId, imageModelId] = agentImageModelKey.split('::')
+        const createdAt = new Date().toISOString()
         setAgentPlans((current) => [...current, {
           id: `agent-plan-${crypto.randomUUID()}`,
           status: 'ready',
           prompt: parsed.imagePlan!.prompt,
-          referenceNodeIds: agentReferences.map((item) => item.nodeId),
+          referenceNodeIds: sentReferences.map((item) => item.nodeId),
+          references: sentReferences,
+          invokedStyleReferences,
+          styleInvocationWord: styleInvocationWords.length ? styleInvocationWords.join('、') : undefined,
+          invokedStylePresets,
           aspectRatio: parsed.imagePlan!.aspectRatio,
           resolution: parsed.imagePlan!.resolution,
           detail: parsed.imagePlan!.detail,
           count: parsed.imagePlan!.count,
           imageConnectionId,
           imageModelId,
+          assistantMessageId: assistantMessage.id,
+          createdAt,
         }])
       }
       setAgentReferences([])
@@ -3489,39 +3866,84 @@ function App() {
       setToastMessage('这份方案的生图模型不可用，请重新选择')
       return
     }
-    const references = plan.referenceNodeIds.map((nodeId) => agentImageCandidates.find((item) => item.nodeId === nodeId)).filter((item): item is AgentImageReference => Boolean(item))
+    const references = plan.references?.length
+      ? plan.references
+      : plan.referenceNodeIds.map((nodeId) => agentImageCandidates.find((item) => item.nodeId === nodeId)).filter((item): item is AgentImageReference => Boolean(item))
     if (references.length !== plan.referenceNodeIds.length) {
       setToastMessage('部分参考图已被删除或失效，请重新发起方案')
       return
     }
+    const referenceUrls = Array.from(new Set([
+      ...references.map((reference) => reference.url),
+      ...(plan.invokedStyleReferences ?? []).map((reference) => reference.url),
+    ]))
+    if (referenceUrls.length > 16) {
+      setToastMessage(`参考图最多 16 张，当前共 ${referenceUrls.length} 张`)
+      return
+    }
     agentPlanLocksRef.current.add(planId)
     const nodeId = `agent-image-${crypto.randomUUID()}`
+    const origin = { projectId: activeProjectId, canvasId: activeCanvasId, sessionId: agentConversationId }
     const flowPosition = screenToFlowPosition({ x: Math.max(360, window.innerWidth - (agentOpen ? 720 : 420)), y: 230 })
     const aspectRatio = (IMAGE_ASPECT_OPTIONS.some((option) => option.value === plan.aspectRatio) ? plan.aspectRatio : '1:1') as ImageAspectRatio
-    setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'running', nodeId } : item))
-    setNodes((current) => [...current, {
+    const generatedNode: CanvasNode = {
       id: nodeId,
       type: 'disy',
       position: flowPosition,
       style: getImageGenerationNodeSize(aspectRatio),
-      data: { kind: 'image', title: '图像', body: plan.prompt, status: '生成中', imageAspectRatio: aspectRatio, imageResolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'), imageDetail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium') },
-    }])
-    setEdges((current) => [...current, ...references.filter((reference) => !current.some((edge) => edge.source === reference.nodeId && edge.target === nodeId)).map((reference) => ({ id: `agent-reference-${reference.nodeId}-${nodeId}`, source: reference.nodeId, target: nodeId, type: 'luminous' }))])
+      data: {
+        kind: 'image',
+        title: '图像',
+        body: plan.prompt,
+        status: '生成中',
+        imageAspectRatio: aspectRatio,
+        imageResolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
+        imageDetail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
+        imageModelConnectionId: model.connection.id,
+        imageModelId: model.model.id,
+        imageModelName: model.model.name,
+      },
+    }
+    const canvasReferenceIds = new Set(nodes.map((node) => node.id))
+    const createdEdges: Edge[] = references
+      .filter((reference) => canvasReferenceIds.has(reference.nodeId) && !edges.some((edge) => edge.source === reference.nodeId && edge.target === nodeId))
+      .map((reference) => ({ id: `agent-reference-${reference.nodeId}-${nodeId}`, source: reference.nodeId, target: nodeId, type: 'luminous' }))
+    const nextNodes = [...nodes, generatedNode]
+    const nextEdges = [...edges, ...createdEdges]
+    const nextPlans = agentPlans.map((item) => item.id === planId ? { ...item, status: 'running' as const, nodeId } : item)
+    setAgentPlans(nextPlans)
+    setNodes(nextNodes)
+    setEdges(nextEdges)
     try {
-      const prepared = await Promise.all(references.map((reference) => prepareReferenceImageForRequest(reference.url)))
+      await Promise.all([
+        persistCurrentCanvasSnapshot(nextNodes, nextEdges),
+        saveAgentSession({
+          id: origin.sessionId,
+          projectId: origin.projectId,
+          canvasId: origin.canvasId,
+          title: agentMessages[0]?.content.slice(0, 36) || '新的对话',
+          messages: agentMessages,
+          plans: nextPlans,
+          selectedChatModelId: agentTextModelKey,
+          selectedImageModelId: agentImageModelKey,
+          createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      ])
+      const prepared = await Promise.all(referenceUrls.map(prepareReferenceImageForRequest))
       const images = await generateRemoteImages({ baseUrl: model.connection.baseUrl, apiKey: model.connection.apiKey, model: model.model.id }, { prompt: plan.prompt.trim(), count: Math.min(4, Math.max(1, plan.count)), referenceImages: prepared, aspectRatio, resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'), detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium') })
       if (!images.length) throw new Error('图像模型没有返回图片')
       const createdAt = new Date().toISOString()
       const variants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
-      setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: '已完成' } } : node))
-      setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'completed', nodeId } : item))
-      setGenerationHistory((current) => [...current, ...variants.map((variant) => ({ id: `history-${variant.id}`, createdAt, prompt: plan.prompt, model: model.model.name, imageUrl: variant.url, fileName: variant.fileName, projectId: activeProjectId }))])
-      appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount: plan.count, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · 参考图 ${prepared.length} 张` })
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: '已完成' } } : node))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'completed', nodeId, collapsed: true } : item))
+      setGenerationHistory((current) => [...current, ...variants.map((variant) => ({ id: `history-${variant.id}`, createdAt, prompt: plan.prompt, model: model.model.name, imageUrl: variant.url, fileName: variant.fileName, projectId: origin.projectId }))])
+      appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount: plan.count, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · 参考图 ${prepared.length} 张` }, origin.projectId)
       setToastMessage(`Agent 已生成 ${images.length} 张图片`)
     } catch (error) {
       const message = error instanceof Error ? error.message : '生成失败'
-      setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
-      setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: message } : item))
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: message } : item))
       setToastMessage(message)
     } finally {
       agentPlanLocksRef.current.delete(planId)
@@ -3530,12 +3952,29 @@ function App() {
 
   const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth
   const nodeCenterX = nodeOverlayRect ? nodeOverlayRect.left + nodeOverlayRect.width / 2 : shellWidth / 2
-  const symmetricEditorWidth = nodeOverlayRect
-    ? 2 * Math.max(130, Math.min(nodeCenterX - 16, shellWidth - nodeCenterX - 16))
-    : shellWidth - 32
-  const nodeEditorWidth = Math.min(680, symmetricEditorWidth)
+  const nodeEditorWidth = Math.max(260, Math.min(680, shellWidth - 32))
+  const nodeEditorCenterX = Math.max(
+    16 + nodeEditorWidth / 2,
+    Math.min(nodeCenterX, shellWidth - 16 - nodeEditorWidth / 2),
+  )
+  const shellHeight = shellRef.current?.clientHeight ?? window.innerHeight
+  const resolveNodeEditorTop = (estimatedHeight: number) => {
+    if (!nodeOverlayRect) return 16
+    const below = nodeOverlayRect.top + nodeOverlayRect.height + 14
+    if (below + estimatedHeight <= shellHeight - 16) return below
+    return Math.max(16, nodeOverlayRect.top - estimatedHeight - 14)
+  }
+  const imageNodeEditorTop = resolveNodeEditorTop(236)
+  const textNodeEditorTop = resolveNodeEditorTop(224)
+  const imageEditorPlacedAbove = Boolean(nodeOverlayRect && imageNodeEditorTop < nodeOverlayRect.top)
   const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
     || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
+  const latestProjectCoverById = new Map<string, GenerationRecord>()
+  generationHistory.forEach((record) => {
+    const projectId = record.projectId ?? CURRENT_PROJECT_ID
+    const current = latestProjectCoverById.get(projectId)
+    if (!current || record.createdAt > current.createdAt) latestProjectCoverById.set(projectId, record)
+  })
 
   const selectedGroupNode = selectedNodeIds.length === 1
     ? nodes.find((node) => node.id === selectedNodeIds[0] && node.data.kind === 'group')
@@ -4582,10 +5021,37 @@ function App() {
         <AnimatePresence>
           {canvasSwitcherOpen && (
             <motion.section className="canvas-switcher-menu" initial={{ opacity: 0, y: -5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -4, scale: .98 }}>
-              <header className="canvas-switcher-header"><span><strong>{projectName}</strong><small>{workspaceCanvases.length} 张画布</small></span><label className="card-scale-control" title="调整画布卡片大小"><input type="range" min="0.8" max="1.4" step="0.1" value={canvasCardScale} onChange={(event) => setCanvasCardScale(Number(event.target.value))} /></label><button onClick={() => setCanvasSwitcherOpen(false)}><X size={14} /></button></header>
+              <header className="canvas-switcher-header">
+                <div className="canvas-switcher-project-title">
+                  {projectRename?.id === activeProjectId && projectRename.source === 'switcher' ? <>
+                    <input
+                      autoFocus
+                      value={projectRename.draft}
+                      maxLength={48}
+                      aria-label="编辑项目名称"
+                      onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void commitProjectRename(projectRename.id, projectRename.draft)
+                        if (event.key === 'Escape') {
+                          event.stopPropagation()
+                          setProjectRename(null)
+                        }
+                      }}
+                    />
+                    <button type="button" aria-label="确认项目名称" onClick={() => void commitProjectRename(projectRename.id, projectRename.draft)}><Check size={13} /></button>
+                    <button type="button" aria-label="取消项目重命名" onClick={() => setProjectRename(null)}><X size={13} /></button>
+                  </> : <>
+                    <span><strong>{projectName}</strong><small>{workspaceCanvases.length} 张画布</small></span>
+                    <button type="button" aria-label="重命名当前项目" title="重命名项目" onClick={() => setProjectRename({ id: activeProjectId, draft: projectName, source: 'switcher' })}><Pencil size={12} /></button>
+                  </>}
+                </div>
+                <label className="card-scale-control" title="调整画布卡片大小"><input aria-label="调整画布卡片大小" type="range" min="0.8" max="1.4" step="0.1" value={canvasCardScale} onChange={(event) => setCanvasCardScale(Number(event.target.value))} /></label>
+              </header>
               <div className="canvas-switcher-list">
-                {workspaceCanvases.map((canvas, index) => <div key={canvas.id} className={`canvas-switcher-row ${canvas.id === activeCanvasId ? 'is-active' : ''}`} style={{ '--canvas-card-scale': canvasCardScale } as React.CSSProperties}><button className={`canvas-switcher-item ${canvas.id === activeCanvasId ? 'is-active' : ''}`} onClick={() => void openWorkspaceCanvas(canvas.id)}>
-                  <span className="canvas-switcher-preview"><i style={{ left: `${18 + (index % 3) * 15}%`, top: `${28 + (index % 2) * 18}%` }} /></span>
+                {workspaceCanvases.map((canvas) => <div key={canvas.id} className={`canvas-switcher-row ${canvas.id === activeCanvasId ? 'is-active' : ''}`} style={{ '--canvas-card-scale': canvasCardScale } as React.CSSProperties}><button className={`canvas-switcher-item ${canvas.id === activeCanvasId ? 'is-active' : ''}`} onClick={() => void openWorkspaceCanvas(canvas.id)}>
+                  <span className={`canvas-switcher-preview ${getCanvasPreviewUrl(canvas) ? 'has-image' : 'is-empty'}`}>
+                    {getCanvasPreviewUrl(canvas) ? <img src={getCanvasPreviewUrl(canvas)} alt="" /> : <PanelsTopLeft size={16} />}
+                  </span>
                   <span><strong>{canvas.name}</strong><small>{(canvas.nodes as unknown[]).length} 个节点</small></span>
                   {canvas.id === activeCanvasId && <Check size={14} />}
                 </button><button className="canvas-switcher-delete" aria-label={`删除画布 ${canvas.name}`} title={workspaceCanvases.length <= 1 ? '项目至少保留一张画布' : '删除画布'} disabled={workspaceCanvases.length <= 1} onClick={() => void removeCanvas(canvas.id)}><Trash2 size={13} /></button></div>)}
@@ -4629,69 +5095,125 @@ function App() {
                 <div className="settings-style-reference">
                   <div className="style-reference-heading">
                     <div>
-                      <strong>风格母图</strong>
-                      <p>上传卡通或电影截图等，本项目所有图像生成会自动参考此风格。</p>
+                      <strong>风格设定</strong>
+                      <p>创建多个独立预设；在 Agent 对话或画布提示词中输入调用词，即可同时调用对应风格。</p>
                     </div>
-                    {styleReferenceUrl && (
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={styleReferenceEnabled}
-                        className={`style-reference-switch ${styleReferenceEnabled ? 'is-on' : ''}`}
-                        disabled={projectSettingsLocked}
-                        onClick={() => setStyleReferenceEnabled((enabled) => !enabled)}
-                      >
-                        <span>启用</span>
-                        <i />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="style-preset-create"
+                      disabled={projectSettingsLocked}
+                      onClick={() => setStylePresets((current) => [...current, {
+                        id: `style-preset-${crypto.randomUUID()}`,
+                        name: `风格预设 ${current.length + 1}`,
+                        keyword: '',
+                        enabled: true,
+                        collapsed: false,
+                        references: [],
+                      }])}
+                    ><Plus size={13} />新建预设</button>
                   </div>
 
-                  {styleReferenceUrl ? (
-                    <div className={`style-reference-preview ${styleReferenceEnabled ? '' : 'is-disabled'}`}>
-                      <img src={styleReferenceUrl} alt="项目风格母图" draggable={false} />
-                      <div className="style-reference-meta">
-                        <strong title={styleReferenceName}>{styleReferenceName}</strong>
-                        <small>
-                          {!styleReferenceEnabled
-                            ? '已停用 · 不参与生成'
-                            : projectSettingsLocked
-                              ? '已锁定 · 生图时自动参考'
-                              : '已启用 · 锁定项目后生效'}
-                        </small>
-                        <div>
-                          <button
-                            type="button"
+                  <div className="style-preset-list">
+                    {stylePresets.map((preset) => <section className={`style-preset-card ${preset.collapsed ? 'is-collapsed' : ''}`} key={preset.id}>
+                      <header className="style-preset-card-header">
+                        <button
+                          type="button"
+                          className="style-preset-collapse"
+                          aria-label={preset.collapsed ? `展开 ${preset.name}` : `折叠 ${preset.name}`}
+                          onClick={() => setStylePresets((current) => current.map((item) => item.id === preset.id ? { ...item, collapsed: !item.collapsed } : item))}
+                        ><ChevronRight size={14} /></button>
+                        <input
+                          className="style-preset-name"
+                          value={preset.name}
+                          maxLength={32}
+                          disabled={projectSettingsLocked}
+                          aria-label="风格预设名称"
+                          onChange={(event) => setStylePresets((current) => current.map((item) => item.id === preset.id ? { ...item, name: event.target.value } : item))}
+                          onBlur={() => setStylePresets((current) => current.map((item, index) => item.id === preset.id ? { ...item, name: item.name.trim() || `风格预设 ${index + 1}` } : item))}
+                        />
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={preset.enabled}
+                          className={`style-reference-switch ${preset.enabled ? 'is-on' : ''}`}
+                          disabled={projectSettingsLocked}
+                          onClick={() => setStylePresets((current) => current.map((item) => item.id === preset.id ? { ...item, enabled: !item.enabled } : item))}
+                        ><span>启用</span><i /></button>
+                        <button
+                          type="button"
+                          className="style-preset-delete"
+                          aria-label={`删除 ${preset.name}`}
+                          disabled={projectSettingsLocked}
+                          onClick={() => {
+                            if (preset.references.length) {
+                              setDeleteConfirm({ kind: 'style-preset', presetId: preset.id, label: `${preset.name}（含 ${preset.references.length} 张参考图）` })
+                              return
+                            }
+                            setStylePresets((current) => current.filter((item) => item.id !== preset.id))
+                          }}
+                        ><Trash2 size={13} /></button>
+                      </header>
+                      {!preset.collapsed && <div className="style-preset-card-body">
+                        <label className="style-invocation-field">
+                          <span>
+                            <strong>风格调用词</strong>
+                            <small>Agent 对话和画布生图提示词均可使用。</small>
+                          </span>
+                          <input
+                            type="text"
+                            value={preset.keyword}
+                            maxLength={24}
                             disabled={projectSettingsLocked}
-                            onClick={() => styleReferenceInputRef.current?.click()}
-                          >
-                            更换
-                          </button>
-                          <button
-                            type="button"
-                            className="is-danger"
-                            disabled={projectSettingsLocked}
-                            onClick={() => {
-                              setStyleReferenceName('')
-                              setStyleReferenceUrl('')
-                              setStyleReferenceEnabled(true)
-                            }}
-                          >
-                            清除
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      className="style-reference-upload"
-                      disabled={projectSettingsLocked}
-                      onClick={() => styleReferenceInputRef.current?.click()}
-                    >
-                      <ImagePlus size={16} />
-                      上传风格母图
-                    </button>
-                  )}
+                            placeholder="例如：Disy"
+                            aria-label={`${preset.name}调用词`}
+                            onChange={(event) => setStylePresets((current) => current.map((item) => item.id === preset.id ? { ...item, keyword: event.target.value } : item))}
+                          />
+                        </label>
+                        {!!preset.references.length && <div className="style-reference-list">
+                          {preset.references.map((reference, index) => (
+                            <div className={`style-reference-preview ${preset.enabled ? '' : 'is-disabled'}`} key={reference.id}>
+                              <img src={reference.url} alt={`${preset.name}参考图 ${index + 1}`} draggable={false} />
+                              <div className="style-reference-meta">
+                                <strong title={reference.name}>{reference.name}</strong>
+                                <small>{!preset.enabled ? `参考图 ${index + 1}/5 · 已停用` : `参考图 ${index + 1}/5 · 调用词触发`}</small>
+                                <div>
+                                  <button
+                                    type="button"
+                                    disabled={projectSettingsLocked}
+                                    onClick={() => {
+                                      styleReferenceUploadTargetRef.current = { presetId: preset.id, referenceId: reference.id }
+                                      styleReferenceInputRef.current?.click()
+                                    }}
+                                  >替换</button>
+                                  <button
+                                    type="button"
+                                    className="is-danger"
+                                    disabled={projectSettingsLocked}
+                                    onClick={() => setDeleteConfirm({ kind: 'style-reference', id: reference.id, presetId: preset.id, label: reference.name })}
+                                  >移除</button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>}
+                        {preset.references.length < 5 && <button
+                          className="style-reference-upload"
+                          disabled={projectSettingsLocked}
+                          onClick={() => {
+                            styleReferenceUploadTargetRef.current = { presetId: preset.id }
+                            styleReferenceInputRef.current?.click()
+                          }}
+                        >
+                          <ImagePlus size={16} />
+                          {preset.references.length ? `继续上传（${preset.references.length}/5）` : '上传风格参考图（最多 5 张）'}
+                        </button>}
+                      </div>}
+                    </section>)}
+                    {!stylePresets.length && <div className="style-preset-empty">
+                      <Sparkles size={15} />
+                      <span><strong>还没有风格预设</strong><small>点击“新建预设”创建第一组风格设定。</small></span>
+                    </div>}
+                  </div>
                 </div>
               </motion.section>
             </>
@@ -4703,21 +5225,40 @@ function App() {
           className="image-file-input"
           type="file"
           accept="image/*"
-          aria-label="上传项目风格母图"
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) {
-              const reader = new FileReader()
-              reader.onload = () => {
-                if (typeof reader.result !== 'string') return
-                setStyleReferenceName(file.name)
-                setStyleReferenceUrl(reader.result)
-                setStyleReferenceEnabled(true)
-              }
-              reader.onerror = () => setToastMessage('母图读取失败，请重新选择')
-              reader.readAsDataURL(file)
-            }
+          multiple
+          aria-label="上传项目风格参考图"
+          onChange={async (event) => {
+            const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
+            const target = styleReferenceUploadTargetRef.current
+            styleReferenceUploadTargetRef.current = null
+            const targetPreset = target ? stylePresets.find((preset) => preset.id === target.presetId) : undefined
+            const remaining = target?.referenceId ? 1 : Math.max(0, 5 - (targetPreset?.references.length ?? 5))
+            const acceptedFiles = files.slice(0, remaining)
             event.target.value = ''
+            if (!target || !targetPreset || !acceptedFiles.length) return
+            try {
+              const uploaded = await Promise.all(acceptedFiles.map((file) => new Promise<StyleReferenceRecord>((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => typeof reader.result === 'string'
+                  ? resolve({ id: `style-${crypto.randomUUID()}`, name: file.name, url: reader.result })
+                  : reject(new Error('图片读取失败'))
+                reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+                reader.readAsDataURL(file)
+              })))
+              setStylePresets((current) => current.map((preset) => {
+                if (preset.id !== target.presetId) return preset
+                return {
+                  ...preset,
+                  enabled: target.referenceId ? preset.enabled : true,
+                  references: target.referenceId
+                    ? preset.references.map((reference) => reference.id === target.referenceId ? { ...uploaded[0], id: reference.id } : reference)
+                    : [...preset.references, ...uploaded].slice(0, 5),
+                }
+              }))
+              if (!target.referenceId && files.length > remaining) setToastMessage(`每个预设最多上传 5 张，已添加前 ${acceptedFiles.length} 张`)
+            } catch {
+              setToastMessage('风格参考图读取失败，请重新选择')
+            }
           }}
         />
 
@@ -4734,13 +5275,13 @@ function App() {
 
         <nav className="floating-chrome tool-rail" aria-label="画布工具">
           <button
+            ref={nodeMenuButtonRef}
             className="rail-primary"
             aria-label="添加"
             data-tooltip="添加"
             onClick={openNodeMenuFromButton}
           >
             <Plus size={22} />
-            <span className="rail-status-dot" />
           </button>
           <button
             aria-label="画布/项目"
@@ -4795,6 +5336,9 @@ function App() {
                 activeConversationId={agentConversationId}
                 textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
                 imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                aspectOptions={IMAGE_ASPECT_OPTIONS.map(({ value, label }) => ({ value, label }))}
+                resolutionOptions={(['1K', '2K', '4K'] as ImageResolution[]).map((value) => ({ value, label: value }))}
+                detailOptions={(Object.keys(IMAGE_DETAIL_LABELS) as ImageDetail[]).map((value) => ({ value, label: IMAGE_DETAIL_LABELS[value] }))}
                 textModelKey={agentTextModelKey}
                 imageModelKey={agentImageModelKey}
                 busy={agentBusy}
@@ -4805,12 +5349,14 @@ function App() {
                 onTextModelChange={setAgentTextModelKey}
                 onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId, modelId] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'ready' ? { ...plan, imageConnectionId: connectionId, imageModelId: modelId } : plan)) }}
                 onReferencesChange={setAgentReferences}
+                onCreateUploadedReference={createAgentUploadedReference}
                 onPendingReferenceConsumed={() => setAgentPendingReference(null)}
                 onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
-                onSend={(message) => void sendAgentMessage(message)}
-                onPlanChange={(id, prompt) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, prompt } : plan))}
+                onSend={(message, invocationText) => void sendAgentMessage(message, invocationText)}
+                onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
                 onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'cancelled' } : plan))}
+                onLocateCanvasNode={locateAgentCanvasNode}
               />
             </motion.div>
           )}
@@ -4907,10 +5453,10 @@ function App() {
         <AnimatePresence>
           {activeGenerationNode && nodeOverlayRect && !isNodeDragging && (
             <motion.div
-              className={`node-quick-toolbar ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
+              className={`node-quick-toolbar ${imageEditorPlacedAbove ? 'is-below' : ''} ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
               style={{
-                left: nodeCenterX,
-                top: nodeOverlayRect.top - 10,
+                left: nodeEditorCenterX,
+                top: imageEditorPlacedAbove ? nodeOverlayRect.top + nodeOverlayRect.height + 10 : nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -5200,8 +5746,8 @@ function App() {
             <div
               className="image-node-editor-positioner"
               style={{
-                left: nodeCenterX,
-                top: nodeOverlayRect.top + nodeOverlayRect.height + 14,
+                left: nodeEditorCenterX,
+                top: imageNodeEditorTop,
                 width: nodeEditorWidth,
               }}
             >
@@ -5368,15 +5914,20 @@ function App() {
                             <button
                               type="button"
                               key={`${connection.id}-${model.id}`}
-                              className={selectedImageModel?.connection.id === connection.id && selectedImageModel.model.id === model.id ? 'is-selected' : ''}
+                              className={displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id ? 'is-selected' : ''}
                               onClick={() => {
                                 saveApiSettings({ ...apiSettings, selectedImageModel: { connectionId: connection.id, modelId: model.id } })
+                                if (activeGenerationNode) {
+                                  setNodes((current) => current.map((node) => node.id === activeGenerationNode.id
+                                    ? { ...node, data: { ...node.data, imageModelConnectionId: connection.id, imageModelId: model.id, imageModelName: model.name } }
+                                    : node))
+                                }
                                 setImageModelMenuOpen(false)
                               }}
                             >
                               <ImagePlus size={14} />
                               <span><strong>{model.name}</strong><small>{connection.name} · ID: {model.id}</small></span>
-                              {selectedImageModel?.connection.id === connection.id && selectedImageModel.model.id === model.id && <Check size={14} />}
+                              {displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id && <Check size={14} />}
                             </button>
                           ))}
                           {!enabledImageModels.length && <p>{hasCatalogImageModels ? '已获取到图像模型，但尚未启用，请到 API 设置中勾选。' : '还没有图像模型，请先到 API 设置中获取并启用。'}</p>}
@@ -5386,7 +5937,7 @@ function App() {
                     <button
                       type="button"
                       className="editor-model-empty"
-                      title={selectedImageModel?.model.name || '选择图像模型'}
+                      title={activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || '选择图像模型'}
                       onClick={() => {
                         setImageParameterMenuOpen(false)
                         setQuantityMenuOpen(false)
@@ -5395,7 +5946,7 @@ function App() {
                       }}
                     >
                       <Sparkles size={13} />
-                      <span>{selectedImageModel?.model.name || (hasCatalogImageModels ? '图像模型尚未启用' : '配置并启用图像模型')}</span>
+                      <span>{activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || (hasCatalogImageModels ? '图像模型尚未启用' : '配置并启用图像模型')}</span>
                     </button>
                   </div>
                   <div className="image-editor-options">
@@ -5486,8 +6037,8 @@ function App() {
             <div
               className="text-node-editor-positioner"
               style={{
-                left: nodeCenterX,
-                top: nodeOverlayRect.top + nodeOverlayRect.height + 14,
+                left: nodeEditorCenterX,
+                top: textNodeEditorTop,
                 width: nodeEditorWidth,
               }}
             >
@@ -5851,7 +6402,7 @@ function App() {
                             <AnimatePresence>
                               {expandedOutputErrorId === record.id && (
                                 <motion.div className="output-error-detail" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
-                                  <div><code>{record.error.detail}</code><button type="button" title="复制详细错误" onClick={() => void navigator.clipboard.writeText(record.error!.detail)}><Copy size={13} /></button></div>
+                                  <div><code>{record.error.detail}</code><button type="button" title="复制详细错误" onClick={() => void navigator.clipboard.writeText(record.error!.detail).then(() => { internalNodePastePreferredRef.current = false })}><Copy size={13} /></button></div>
                                   <footer>{record.error.status && <span>HTTP {record.error.status}</span>}{record.error.requestId && <span>请求 ID：{record.error.requestId}</span>}<span>模型：{record.modelId}</span></footer>
                                 </motion.div>
                               )}
@@ -6231,6 +6782,14 @@ function App() {
                     if (deleteConfirm.kind === 'history') deleteGenerationRecord(deleteConfirm.id)
                     if (deleteConfirm.kind === 'assets') deleteAssetBatch(deleteConfirm.ids)
                     if (deleteConfirm.kind === 'history-batch') deleteHistoryBatch(deleteConfirm.ids)
+                    if (deleteConfirm.kind === 'style-reference') {
+                      setStylePresets((current) => current.map((preset) => preset.id === deleteConfirm.presetId
+                        ? { ...preset, references: preset.references.filter((reference) => reference.id !== deleteConfirm.id) }
+                        : preset))
+                    }
+                    if (deleteConfirm.kind === 'style-preset') {
+                      setStylePresets((current) => current.filter((preset) => preset.id !== deleteConfirm.presetId))
+                    }
                     setDeleteConfirm(null)
                   }}
                 >
@@ -6249,7 +6808,10 @@ function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setProjectOpen(false)}
+            onClick={() => {
+              setProjectRename((current) => current?.source === 'modal' ? null : current)
+              setProjectOpen(false)
+            }}
           >
             <motion.section
               role="dialog"
@@ -6266,7 +6828,10 @@ function App() {
                   <h2 id="project-dialog-title">项目</h2>
                   <span>{workspaceProjects.length}</span>
                 </div>
-                <button className="project-close" aria-label="关闭项目窗口" onClick={() => setProjectOpen(false)}>
+                <button className="project-close" aria-label="关闭项目窗口" onClick={() => {
+                  setProjectRename((current) => current?.source === 'modal' ? null : current)
+                  setProjectOpen(false)
+                }}>
                   <X size={18} />
                 </button>
               </header>
@@ -6308,19 +6873,48 @@ function App() {
                 {filteredWorkspaceProjects.map((project) => {
                   const isCurrent = project.id === activeProjectId
                   const projectCanvases = isCurrent ? workspaceCanvases : []
-                  return <div key={project.id} className={`project-card-wrap ${isCurrent ? 'is-current' : ''}`}><button className={`project-card ${isCurrent ? 'is-current' : ''}`} onClick={() => void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectOpen(false)).catch(() => setToastMessage('项目打开失败'))}>
-                    <div className="project-preview">
-                      <span className="preview-node preview-node-one" />
-                      <span className="preview-node preview-node-two" />
-                      <span className="preview-edge" />
-                      <span className="preview-node preview-node-three" />
-                    </div>
-                    <div className="project-card-meta">
-                      <strong>{project.name}</strong>
-                      {isCurrent && <span className="current-project-badge">当前</span>}
-                      <small>{project.canvasIds.length} 张画布{isCurrent ? ` · ${projectCanvases.reduce((sum, canvas) => sum + (canvas.nodes as unknown[]).length, 0)} 个节点` : ''}</small>
-                    </div>
-                  </button><button className="project-card-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={() => void removeProject(project.id)}><Trash2 size={14} /></button></div>
+                  const cover = latestProjectCoverById.get(project.id)
+                  const isRenaming = projectRename?.id === project.id && projectRename.source === 'modal'
+                  return <div key={project.id} className={`project-card-wrap ${isCurrent ? 'is-current' : ''}`}>
+                    <button className={`project-card ${isCurrent ? 'is-current' : ''}`} onClick={() => {
+                      if (isRenaming) return
+                      void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectOpen(false)).catch(() => setToastMessage('项目打开失败'))
+                    }}>
+                      <div className={`project-preview ${cover ? 'has-cover' : ''}`}>
+                        <span className="preview-node preview-node-one" />
+                        <span className="preview-node preview-node-two" />
+                        <span className="preview-edge" />
+                        <span className="preview-node preview-node-three" />
+                        {cover && <img className="project-cover-image" src={cover.imageUrl} alt={`${project.name} 最新生成图片`} onError={(event) => event.currentTarget.remove()} />}
+                      </div>
+                      <div className="project-card-meta">
+                        <strong>{project.name}</strong>
+                        {isCurrent && <span className="current-project-badge">当前</span>}
+                        <small>{project.canvasIds.length} 张画布{isCurrent ? ` · ${projectCanvases.reduce((sum, canvas) => sum + (canvas.nodes as unknown[]).length, 0)} 个节点` : ''}</small>
+                      </div>
+                    </button>
+                    {isRenaming ? <div className="project-card-rename-form" onPointerDown={(event) => event.stopPropagation()}>
+                      <input
+                        autoFocus
+                        value={projectRename.draft}
+                        maxLength={48}
+                        aria-label={`编辑项目 ${project.name} 名称`}
+                        onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') void commitProjectRename(project.id, projectRename.draft)
+                          if (event.key === 'Escape') {
+                            event.stopPropagation()
+                            setProjectRename(null)
+                          }
+                        }}
+                      />
+                      <button type="button" aria-label="确认项目名称" onClick={() => void commitProjectRename(project.id, projectRename.draft)}><Check size={13} /></button>
+                      <button type="button" aria-label="取消项目重命名" onClick={() => setProjectRename(null)}><X size={13} /></button>
+                    </div> : <>
+                      <button className="project-card-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={() => setProjectRename({ id: project.id, draft: project.name, source: 'modal' })}><Pencil size={13} /></button>
+                      <button className="project-card-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={() => void removeProject(project.id)}><Trash2 size={14} /></button>
+                    </>}
+                  </div>
                 })}
                 {!filteredWorkspaceProjects.length && (
                   <div className="project-empty-search">没有找到匹配的项目</div>

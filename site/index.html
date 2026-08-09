@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Disy 无限可能：面向设计师、电商视觉工作者和内容创作者的本地优先 AI 无限画布。" />
+  <meta property="og:title" content="Disy 无限可能" />
+  <meta property="og:description" content="把灵感、参考图、提示词、Agent 对话和生成结果留在同一张无限画布。" />
+  <meta property="og:image" content="./assets/canvas-agent.png" />
+  <title>Disy 无限可能 · AI 创作画布</title>
+  <link rel="icon" href="./assets/disy-logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <nav class="pill-nav" aria-label="页面导航">
+    <a href="#top" class="nav-brand"><img src="./assets/disy-logo.png" alt="" />Disy</a>
+    <a href="#workflow">工作流</a>
+    <a href="#features">能力</a>
+    <a href="#roadmap">下一站</a>
+    <a class="nav-cta" href="https://disy-infinite.netlify.app">开始创作</a>
+  </nav>
+
+  <main id="top">
+    <section class="hero">
+      <div class="orb orb-one"></div>
+      <div class="orb orb-two"></div>
+      <div class="hero-copy">
+        <div class="eyebrow"><span></span>Disy Infinite · v0.3.0</div>
+        <h1>让创作过程<br /><em>留在画布上</em></h1>
+        <p class="hero-lead">把灵感、参考图、提示词、Agent 对话和生成结果放回同一张持续生长的无限画布。</p>
+        <div class="hero-actions">
+          <a class="primary-button" href="https://disy-infinite.netlify.app">在线体验 <span>↗</span></a>
+          <a class="text-link" href="https://github.com/ashhaveaniceday/Disy-Infinite">查看 GitHub</a>
+        </div>
+        <div class="hero-notes"><span>本地优先</span><span>确认后生成</span><span>自带 API</span></div>
+      </div>
+
+      <div class="demo-stage" aria-label="Disy 创作流程演示">
+        <div class="demo-index"><b>01</b><span>从灵感到画面</span></div>
+        <div class="demo-canvas">
+          <div class="canvas-grid"></div>
+          <div class="demo-node node-reference"><small>参考图</small><div class="mini-art"></div></div>
+          <div class="demo-node node-prompt"><small>提示词</small><strong>把森林伙伴改成<br />轻快的春日旅行</strong></div>
+          <svg viewBox="0 0 480 360" aria-hidden="true"><path d="M126 132 C190 100 208 164 274 148" /><path d="M274 148 C330 138 340 202 382 220" /></svg>
+          <div class="demo-node node-result"><span class="result-glow"></span><small>图像生成</small><strong>方案已确认</strong><em>Nano Banana 2</em></div>
+          <div class="demo-agent"><img src="./assets/disy-logo.png" alt="" /><span>我会先整理方案，<br />等你确认后再生成。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="statement section-dissolve">
+      <p>不是又一个输入框。</p>
+      <h2>是一间记得住上下文的<br /><span>AI 创作工作台。</span></h2>
+      <div class="statement-meta">
+        <span>文本与图像节点</span>
+        <span>可视化关系</span>
+        <span>多项目与多画布</span>
+        <span>Agent 确认生图</span>
+      </div>
+    </section>
+
+    <section id="workflow" class="showcase">
+      <header class="section-heading">
+        <span>01 / WORKFLOW</span>
+        <h2>先对话，再确认，最后生成</h2>
+        <p>Agent 不会在你说完想法后直接扣费生图。每个任务都保留可编辑的确认步骤，并固定在对应回复旁边。</p>
+      </header>
+      <div class="screenshot-shell screenshot-wide">
+        <img src="./assets/canvas-agent.png" alt="Disy Agent 与无限画布协作界面" />
+        <span class="image-caption">Canvas + Agent · 同一份创作上下文</span>
+      </div>
+    </section>
+
+    <section id="features" class="features clip-diagonal-br">
+      <header class="section-heading">
+        <span>02 / CAPABILITIES</span>
+        <h2>自由生长，也能保持秩序</h2>
+      </header>
+      <div class="feature-grid">
+        <article><b>01</b><h3>无限画布</h3><p>节点、连线、组合、框选、小地图和系统图片粘贴，让素材关系一眼可见。</p></article>
+        <article><b>02</b><h3>风格调用词</h3><p>建立多个风格预设，用一句调用词同时带入角色、配色与画面语言。</p></article>
+        <article><b>03</b><h3>后台生成路由</h3><p>任务进行中可以切换画布或对话，结果仍会准确回到发起它的位置。</p></article>
+        <article><b>04</b><h3>本地优先</h3><p>项目、资产、历史和 Agent 会话保存在本机浏览器；导出为完整 .disy 项目包。</p></article>
+      </div>
+      <div class="preset-feature">
+        <div><span>STYLE PRESETS</span><h3>一个项目，多个视觉世界</h3><p>每个预设独立管理名称、调用词、启用状态与 1–5 张参考图。超过面板高度后自然滚动，不挤压工作区。</p></div>
+        <div class="preset-image"><img src="./assets/style-presets.png" alt="Disy 多风格预设设置界面" /></div>
+      </div>
+    </section>
+
+    <section id="roadmap" class="roadmap">
+      <header class="section-heading">
+        <span>03 / NEXT VERSION</span>
+        <h2>下一站，继续扩展视觉创作</h2>
+      </header>
+      <div class="roadmap-track">
+        <article><span>VIDEO</span><h3>视频生成</h3><p>视频模型、首尾帧、参考图、任务状态与视频资产管理。</p></article>
+        <article><span>PRESETS</span><h3>人物与场景预设</h3><p>人物、场景与分镜设定可以独立复用和组合调用。</p></article>
+        <article><span>TOOLS</span><h3>扩图与抠图</h3><p>补齐常用图像编辑动作，让结果继续在画布内生长。</p></article>
+        <article><span>SYSTEM</span><h3>浅色皮肤与 Skill</h3><p>加入浅色主题、Skill 上传、节点搜索与 Agent 历史搜索。</p></article>
+      </div>
+      <div class="future-line">
+        <span>持续更新</span>
+        <p>桌面端应用 · Web/桌面项目导入导出与双向传递 · 服务端任务 · 账号与云同步 · 项目分享与多人协作</p>
+      </div>
+      <p class="roadmap-note">Disy 聚焦视觉创作。音频生成不在现在或未来的产品规划中。</p>
+    </section>
+
+    <section class="final-cta clip-arc-bottom">
+      <img src="./assets/disy-logo.png" alt="Disy Logo" />
+      <span>世界由你创造</span>
+      <h2>让下一张画面，<br />从一张会思考的画布开始。</h2>
+      <div>
+        <a class="primary-button" href="https://disy-infinite.netlify.app">打开 Disy <span>↗</span></a>
+        <a class="text-link" href="https://github.com/ashhaveaniceday/Disy-Infinite">GitHub 仓库</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><span>Disy Infinite © 2026</span><span>无限自由想象，世界由你创造。</span></footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script src="./main.js"></script>
+</body>
+</html>

@@ -11,6 +11,21 @@ const WORKSPACE_DATA_ID = 'workspace'
 
 export const DEFAULT_PROJECT_ID = 'default-project'
 
+export type StyleReferenceRecord = {
+  id: string
+  name: string
+  url: string
+}
+
+export type StylePresetRecord = {
+  id: string
+  name: string
+  keyword: string
+  enabled: boolean
+  collapsed: boolean
+  references: StyleReferenceRecord[]
+}
+
 export type LocalProject = {
   id: string
   name: string
@@ -18,7 +33,10 @@ export type LocalProject = {
   edges: unknown[]
   styleReferenceName: string
   styleReferenceUrl?: string
+  styleReferences?: StyleReferenceRecord[]
   styleReferenceEnabled?: boolean
+  styleReferenceKeyword?: string
+  stylePresets?: StylePresetRecord[]
   promptSuffix: string
   settingsLocked: boolean
   updatedAt: string
@@ -364,7 +382,10 @@ export async function createWorkspaceCanvas(projectId: string, name?: string, so
     edges: source?.edges ?? [],
     styleReferenceName: source?.styleReferenceName ?? '',
     styleReferenceUrl: source?.styleReferenceUrl,
+    styleReferences: source?.styleReferences,
     styleReferenceEnabled: source?.styleReferenceEnabled,
+    styleReferenceKeyword: source?.styleReferenceKeyword,
+    stylePresets: source?.stylePresets,
     promptSuffix: source?.promptSuffix ?? '',
     settingsLocked: source?.settingsLocked ?? false,
     createdAt: timestamp,
