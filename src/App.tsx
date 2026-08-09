@@ -290,6 +290,7 @@ const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
 const API_PROVIDER_PRESETS = [
   { id: 'grsai', name: 'GRS AI', baseUrl: 'https://grsai.dakka.com.cn/v1', detail: '国内直连 · 图像与文本' },
   { id: 'apiyi', name: 'APIYI', baseUrl: 'https://api.apiyi.com/v1', detail: 'OpenAI 兼容聚合平台' },
+  { id: 'gptgod', name: 'GPTGod', baseUrl: 'https://api.gptgod.online/v1', detail: 'OpenAI 兼容中转' },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: '官方 GPT 与图像模型' },
   { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', detail: '国内开源模型平台' },
 ] as const
@@ -3970,13 +3971,13 @@ function App() {
     })
   }
 
-  const captureImageAdminLog = (
+  const captureGenerationAdminLog = (
     log: GenerationAdminLog,
     meta: { prompt: string; modelName: string; connectionName: string; projectId?: string },
   ) => {
     appendOperatorRecoveryLog({
       projectId: meta.projectId ?? activeProjectId,
-      provider: log.provider,
+      provider: log.provider || meta.connectionName || 'Custom API',
       taskId: log.taskId,
       model: log.model,
       modelName: meta.modelName,
@@ -3984,8 +3985,10 @@ function App() {
       prompt: meta.prompt,
       durationMs: log.durationMs,
       resultType: log.resultType,
+      kind: log.kind ?? 'image',
       requestJson: log.requestJson,
       resultJson: log.resultJson,
+      resultUrls: log.resultUrls ?? [],
       createdAt: log.finishedAt,
     })
     if (operatorUnlocked) setOperatorLogs(listOperatorRecoveryLogs(activeProjectId))
@@ -4188,7 +4191,16 @@ function App() {
         baseUrl: selectedTextModel.connection.baseUrl,
         apiKey: selectedTextModel.connection.apiKey,
         model: selectedTextModel.model.id,
-      }, prompt, { referenceImages, signal: controller.signal })
+      }, prompt, {
+        referenceImages,
+        signal: controller.signal,
+        captureAdminLog: (log) => captureGenerationAdminLog(log, {
+          prompt,
+          modelName: selectedTextModel.model.name,
+          connectionName: selectedTextModel.connection.name,
+          projectId: textGenerationOrigin.projectId,
+        }),
+      })
       await patchCanvasNodesAtOrigin(textGenerationOrigin, (current) => current.map((node) => node.id === textGenerationNodeId
         ? { ...node, data: { ...node.data, body: output, status: selectedTextModel.model.name } }
         : node))
@@ -4307,7 +4319,7 @@ function App() {
             resolution: activeImageResolution,
             detail: activeImageDetail,
             signal: controller.signal,
-            captureAdminLog: (log) => captureImageAdminLog(log, {
+            captureAdminLog: (log) => captureGenerationAdminLog(log, {
               prompt: promptText,
               modelName: activeNodeImageModel.model.name,
               connectionName: activeNodeImageModel.connection.name,
@@ -4657,7 +4669,7 @@ function App() {
               resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
               detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
               signal: controller.signal,
-              captureAdminLog: (log) => captureImageAdminLog(log, {
+              captureAdminLog: (log) => captureGenerationAdminLog(log, {
                 prompt: plan.prompt,
                 modelName: model.model.name,
                 connectionName: model.connection.name,
@@ -7368,7 +7380,7 @@ function App() {
                   ) : (
                     <>
                       <div className="operator-log-toolbar">
-                        <span>本机运维日志 · {filteredOperatorLogs.length} 条（含 GRS AI 任务结果）</span>
+                        <span>本机运维日志 · {filteredOperatorLogs.length} 条（GRS AI / APIYI / GPTGod 等均可找回结果）</span>
                         <button
                           type="button"
                           onClick={() => {
@@ -7381,6 +7393,7 @@ function App() {
                         <div className="operator-log-table allow-text-select">
                           <div className="operator-log-head">
                             <span>任务 ID</span>
+                            <span>服务商</span>
                             <span>模型</span>
                             <span>耗时</span>
                             <span>结果</span>
@@ -7388,11 +7401,13 @@ function App() {
                             <span>操作</span>
                           </div>
                           {filteredOperatorLogs.map((log) => {
-                            const resultUrls = extractImageUrlsFromAdminResult(log.resultJson)
+                            const resultUrls = (log.resultUrls?.length ? log.resultUrls : extractImageUrlsFromAdminResult(log.resultJson))
+                              .filter(Boolean)
                             const expanded = expandedOperatorLogId === log.id
                             return (
                               <article key={log.id} className={`operator-log-row ${log.resultType === 'failed' ? 'is-failed' : ''}`}>
                                 <code title={log.taskId || '—'}>{log.taskId || '—'}</code>
+                                <span title={log.connectionName || log.provider}>{log.provider}</span>
                                 <span>{log.modelName || log.model}</span>
                                 <span>{Math.max(1, Math.round(log.durationMs / 1000))}s</span>
                                 <em>{log.resultType === 'success' ? '成功' : '失败'}</em>
@@ -7405,7 +7420,7 @@ function App() {
                                 {expanded && (
                                   <div className="operator-log-detail">
                                     <div>
-                                      <strong>请求参数</strong>
+                                      <strong>请求参数 · {log.provider}{log.connectionName ? ` · ${log.connectionName}` : ''}</strong>
                                       <pre>{log.requestJson}</pre>
                                     </div>
                                     <div>
@@ -7413,10 +7428,10 @@ function App() {
                                       <pre>{log.resultJson}</pre>
                                       {resultUrls.length > 0 && (
                                         <div className="operator-log-urls">
-                                          <p className="operator-log-url-tip">结果图 URL 约 2 小时后失效，请尽快下载或写回画布</p>
+                                          <p className="operator-log-url-tip">结果图 URL 约 2 小时后失效（各服务商临时链均适用），请尽快下载或写回画布</p>
                                           {resultUrls.map((url) => (
                                             <div key={url} className="operator-log-url-row">
-                                              <a href={url} target="_blank" rel="noreferrer">{url}</a>
+                                              <a href={url} target="_blank" rel="noreferrer">{url.startsWith('data:') ? `[内嵌图片 data URL · ${url.length} 字符]` : url}</a>
                                               <button type="button" title="复制图片 URL" onClick={() => void navigator.clipboard.writeText(url)}><Copy size={12} /></button>
                                             </div>
                                           ))}
@@ -7430,7 +7445,7 @@ function App() {
                           })}
                         </div>
                       ) : (
-                        <div className="output-history-empty"><History size={30} /><strong>还没有运维日志</strong><span>图像生成（含 GRS AI）成功或失败后都会写入本机运维日志，便于找回结果数据。</span></div>
+                        <div className="output-history-empty"><History size={30} /><strong>还没有运维日志</strong><span>任意服务商（GRS AI、APIYI、GPTGod 等）的图像/文本生成成功或失败后都会写入，便于管理员找回结果数据。</span></div>
                       )}
                     </>
                   )

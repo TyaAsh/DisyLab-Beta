@@ -68,8 +68,10 @@ export type OperatorRecoveryLog = {
   prompt: string
   durationMs: number
   resultType: 'success' | 'failed'
+  kind?: 'image' | 'text'
   requestJson: string
   resultJson: string
+  resultUrls?: string[]
 }
 
 function readOperatorLogsRaw(): OperatorRecoveryLog[] {

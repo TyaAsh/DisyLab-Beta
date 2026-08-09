@@ -1654,7 +1654,7 @@ button { border: 0; cursor: pointer; }
 .operator-log-toolbar button:hover { color: var(--ink); }
 .operator-log-table { display: grid; gap: 6px; }
 .operator-log-head,
-.operator-log-row { display: grid; grid-template-columns: minmax(120px,1.2fr) minmax(90px,.8fr) 54px 54px minmax(0,1.6fr) auto; gap: 8px; align-items: center; }
+.operator-log-row { display: grid; grid-template-columns: minmax(110px,1.1fr) minmax(72px,.7fr) minmax(90px,.8fr) 54px 54px minmax(0,1.5fr) auto; gap: 8px; align-items: center; }
 .operator-log-head { padding: 0 10px; color: var(--muted); font-size: 8px; font-weight: 700; }
 .operator-log-row { padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.02); font-size: 9px; }
 .operator-log-row.is-failed { border-color: color-mix(in srgb, var(--danger) 28%, transparent); }

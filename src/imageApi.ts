@@ -27,11 +27,15 @@ export type GenerationAdminLog = {
   resultType: 'success' | 'failed'
   requestJson: string
   resultJson: string
+  /** Recoverable image/result URLs kept outside sanitized JSON (http kept in full). */
+  resultUrls?: string[]
+  kind?: 'image' | 'text'
 }
 
 export type TextGenerationOptions = {
   referenceImages?: string[]
   signal?: AbortSignal
+  captureAdminLog?: (log: GenerationAdminLog) => void
 }
 
 export type ImageGenerationOptions = {
@@ -222,6 +226,50 @@ function endpoint(baseUrl: string, path: string) {
 
 function isGrsaiBaseUrl(baseUrl: string) {
   return /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(normalizedApiBaseUrl(baseUrl))
+}
+
+export function resolveProviderLabel(baseUrl: string) {
+  const normalized = normalizedApiBaseUrl(baseUrl).toLowerCase()
+  if (/grsaiapi\.com|grsai\.dakka\.com\.cn/.test(normalized)) return 'GRS AI'
+  if (/api\.apiyi\.com|apiyi\.com/.test(normalized)) return 'APIYI'
+  if (/gptgod\.online|gptgod\.com/.test(normalized)) return 'GPTGod'
+  if (/api\.openai\.com/.test(normalized)) return 'OpenAI'
+  if (/api\.siliconflow\.cn|siliconflow/.test(normalized)) return '硅基流动'
+  if (/api\.deepseek\.com/.test(normalized)) return 'DeepSeek'
+  try {
+    return new URL(normalized).hostname.replace(/^www\./, '') || 'Custom API'
+  } catch {
+    return 'Custom API'
+  }
+}
+
+function extractTaskId(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return ''
+  const record = payload as Record<string, unknown>
+  const nested = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+    ? record.data as Record<string, unknown>
+    : null
+  return String(
+    record.id
+    ?? record.taskId
+    ?? record.task_id
+    ?? record.request_id
+    ?? record.requestId
+    ?? nested?.id
+    ?? nested?.taskId
+    ?? nested?.task_id
+    ?? '',
+  ).trim()
+}
+
+function collectRecoverableResultUrls(payload: unknown) {
+  return extractGeneratedImages(payload)
+    .map((image) => image.url)
+    .filter((url) => {
+      if (/^https?:\/\//i.test(url)) return true
+      // Keep small embedded results so admins can still recover when CDN URLs are absent.
+      return /^data:image\//i.test(url) && url.length <= 350_000
+    })
 }
 
 function waitForDelay(delay: number, signal?: AbortSignal) {
@@ -542,35 +590,43 @@ export async function generateRemoteImages(
   let taskId = ''
   let lastPayload: unknown = null
 
+  const providerLabel = resolveProviderLabel(settings.baseUrl)
+
   const emitAdminLog = (resultType: 'success' | 'failed', resultPayload: unknown) => {
     if (!options.captureAdminLog) return
     const finishedAt = new Date().toISOString()
+    const payload = resultPayload ?? lastPayload ?? {}
     options.captureAdminLog({
-      provider: useGrsaiUnifiedImage ? 'GRS AI' : 'OpenAI Compatible',
-      taskId: taskId || undefined,
+      provider: providerLabel,
+      taskId: taskId || extractTaskId(payload) || undefined,
       model: settings.model,
       startedAt,
       finishedAt,
       durationMs: Date.now() - startedAtMs,
       resultType,
+      kind: 'image',
       requestJson: sanitizeAdminLogJson(requestForLog),
-      resultJson: sanitizeAdminLogJson(resultPayload ?? lastPayload ?? {}),
+      resultJson: sanitizeAdminLogJson(payload),
+      resultUrls: collectRecoverableResultUrls(payload),
     })
   }
 
   const failWithAdminLog = (error: unknown): never => {
     if (error instanceof GenerationRequestError) {
       if (!error.adminLog && options.captureAdminLog) {
+        const payload = lastPayload ?? { error: error.detail, summary: error.message }
         const log: GenerationAdminLog = {
-          provider: useGrsaiUnifiedImage ? 'GRS AI' : 'OpenAI Compatible',
-          taskId: taskId || error.requestId || undefined,
+          provider: providerLabel,
+          taskId: taskId || error.requestId || extractTaskId(payload) || undefined,
           model: settings.model,
           startedAt,
           finishedAt: new Date().toISOString(),
           durationMs: Date.now() - startedAtMs,
           resultType: 'failed',
+          kind: 'image',
           requestJson: sanitizeAdminLogJson(requestForLog),
-          resultJson: sanitizeAdminLogJson(lastPayload ?? { error: error.detail, summary: error.message }),
+          resultJson: sanitizeAdminLogJson(payload),
+          resultUrls: collectRecoverableResultUrls(payload),
         }
         error.adminLog = log
         options.captureAdminLog(log)
@@ -676,10 +732,7 @@ export async function generateRemoteImages(
   try {
     payload = await response.json()
     lastPayload = payload
-    if (payload && typeof payload === 'object') {
-      const record = payload as Record<string, unknown>
-      taskId = String(record.id ?? record.taskId ?? record.task_id ?? '').trim()
-    }
+    taskId = extractTaskId(payload) || taskId
   } catch (error) {
     return failWithAdminLog(new GenerationRequestError(
       'platform',
@@ -691,10 +744,7 @@ export async function generateRemoteImages(
     if (useGrsaiUnifiedImage) {
       payload = await resolveGrsaiImageResult(settings, payload, options.signal)
       lastPayload = payload
-      if (payload && typeof payload === 'object') {
-        const record = payload as Record<string, unknown>
-        taskId = String(record.id ?? record.taskId ?? record.task_id ?? taskId).trim()
-      }
+      taskId = extractTaskId(payload) || taskId
     }
     const rows = extractGeneratedImages(payload)
     if (!rows.length) {
@@ -720,6 +770,9 @@ export async function generateRemoteText(
   prompt: string,
   options: TextGenerationOptions = {},
 ) {
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
+  const providerLabel = resolveProviderLabel(settings.baseUrl)
   const referenceImages = options.referenceImages?.map((source) => source.trim()).filter(Boolean) ?? []
   const userContent = referenceImages.length
     ? [
@@ -730,6 +783,30 @@ export async function generateRemoteText(
         })),
       ]
     : prompt
+  const requestForLog = {
+    model: settings.model,
+    messages: [{ role: 'user', content: typeof userContent === 'string' ? userContent : '[multimodal text + images]' }],
+    stream: false,
+    referenceImageCount: referenceImages.length,
+  }
+
+  const emitTextAdminLog = (resultType: 'success' | 'failed', resultPayload: unknown, taskId?: string) => {
+    if (!options.captureAdminLog) return
+    options.captureAdminLog({
+      provider: providerLabel,
+      taskId,
+      model: settings.model,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      resultType,
+      kind: 'text',
+      requestJson: sanitizeAdminLogJson(requestForLog),
+      resultJson: sanitizeAdminLogJson(resultPayload),
+      resultUrls: [],
+    })
+  }
+
   let response: Response
   try {
     response = await fetch(endpoint(settings.baseUrl, 'chat/completions'), {
@@ -747,10 +824,17 @@ export async function generateRemoteText(
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw createNetworkError(error)
+    const networkError = createNetworkError(error)
+    emitTextAdminLog('failed', { error: networkError.detail, summary: networkError.message })
+    throw networkError
   }
-  if (!response.ok) throw await createApiError(response)
+  if (!response.ok) {
+    const apiError = await createApiError(response)
+    emitTextAdminLog('failed', { error: apiError.detail, summary: apiError.message, status: apiError.status }, apiError.requestId)
+    throw apiError
+  }
   let payload: {
+    id?: string
     choices?: Array<{ message?: { content?: string }; text?: string }>
     output_text?: string
     text?: string
@@ -758,13 +842,24 @@ export async function generateRemoteText(
   try {
     payload = await response.json() as typeof payload
   } catch (error) {
-    throw new GenerationRequestError('platform', 'API 返回了无法识别的数据', error instanceof Error ? error.message : String(error))
+    const parseError = new GenerationRequestError('platform', 'API 返回了无法识别的数据', error instanceof Error ? error.message : String(error))
+    emitTextAdminLog('failed', { error: parseError.detail, summary: parseError.message })
+    throw parseError
   }
   const content = payload.choices?.[0]?.message?.content
     ?? payload.choices?.[0]?.text
     ?? payload.output_text
     ?? payload.text
     ?? ''
-  if (!content.trim()) throw new GenerationRequestError('platform', '模型没有返回文本内容', '接口请求成功，但响应中没有可用的文本字段。')
+  if (!content.trim()) {
+    const emptyError = new GenerationRequestError('platform', '模型没有返回文本内容', '接口请求成功，但响应中没有可用的文本字段。')
+    emitTextAdminLog('failed', payload, extractTaskId(payload))
+    throw emptyError
+  }
+  emitTextAdminLog('success', {
+    id: payload.id,
+    content: content.trim().slice(0, 8_000),
+    truncated: content.trim().length > 8_000,
+  }, extractTaskId(payload))
   return content.trim()
 }
