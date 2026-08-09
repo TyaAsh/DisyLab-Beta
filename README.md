@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/disy-logo.png" width="132" alt="DisyLab Logo" />
+  <img src="public/disy-logo.jpg" width="360" alt="DisyLab Logo" />
 </p>
 
 <h1 align="center">DisyLab</h1>
