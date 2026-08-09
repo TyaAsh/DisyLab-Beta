@@ -17,9 +17,33 @@ export type GeneratedImage = {
   revisedPrompt?: string
 }
 
+export type GenerationAdminLog = {
+  provider: string
+  taskId?: string
+  model: string
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  resultType: 'success' | 'failed'
+  requestJson: string
+  resultJson: string
+}
+
 export type TextGenerationOptions = {
   referenceImages?: string[]
   signal?: AbortSignal
+}
+
+export type ImageGenerationOptions = {
+  prompt: string
+  count: number
+  referenceImages?: string[]
+  aspectRatio?: string
+  resolution?: '1K' | '2K' | '4K'
+  detail?: 'low' | 'medium' | 'high'
+  signal?: AbortSignal
+  /** Captures a sanitized request/result snapshot for admin recovery logs. */
+  captureAdminLog?: (log: GenerationAdminLog) => void
 }
 
 const REFERENCE_IMAGE_TARGET_BYTES = 1_800_000
@@ -130,8 +154,14 @@ export class GenerationRequestError extends Error {
   status?: number
   code?: string
   requestId?: string
+  adminLog?: GenerationAdminLog
 
-  constructor(category: GenerationErrorCategory, message: string, detail: string, metadata?: { status?: number; code?: string; requestId?: string }) {
+  constructor(
+    category: GenerationErrorCategory,
+    message: string,
+    detail: string,
+    metadata?: { status?: number; code?: string; requestId?: string; adminLog?: GenerationAdminLog },
+  ) {
     super(message)
     this.name = 'GenerationRequestError'
     this.category = category
@@ -139,6 +169,41 @@ export class GenerationRequestError extends Error {
     this.status = metadata?.status
     this.code = metadata?.code
     this.requestId = metadata?.requestId
+    this.adminLog = metadata?.adminLog
+  }
+}
+
+function sanitizeAdminLogValue(value: unknown, depth = 0): unknown {
+  if (depth > 10) return '[…]'
+  if (typeof value === 'string') {
+    if (/^data:image\//i.test(value) || (value.length > 240 && /^[A-Za-z0-9+/=\s]+$/.test(value.slice(0, 120)))) {
+      return `base64 image… (${value.length} chars)`
+    }
+    if (value.length > 6_000) return `${value.slice(0, 6_000)}…`
+    return value
+  }
+  if (Array.isArray(value)) return value.slice(0, 40).map((item) => sanitizeAdminLogValue(item, depth + 1))
+  if (!value || typeof value !== 'object') return value
+  const output: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 80)) {
+    output[key] = sanitizeAdminLogValue(child, depth + 1)
+  }
+  return output
+}
+
+export function sanitizeAdminLogJson(value: unknown) {
+  try {
+    return JSON.stringify(sanitizeAdminLogValue(value), null, 0)
+  } catch {
+    return String(value)
+  }
+}
+
+export function extractImageUrlsFromAdminResult(resultJson: string): string[] {
+  try {
+    return extractGeneratedImages(JSON.parse(resultJson) as unknown).map((image) => image.url)
+  } catch {
+    return []
   }
 }
 
@@ -434,16 +499,10 @@ async function resolveGrsaiImageResult(
 
 export async function generateRemoteImages(
   settings: ApiRequestSettings,
-  options: {
-    prompt: string
-    count: number
-    referenceImages?: string[]
-    aspectRatio?: string
-    resolution?: '1K' | '2K' | '4K'
-    detail?: 'low' | 'medium' | 'high'
-    signal?: AbortSignal
-  },
+  options: ImageGenerationOptions,
 ): Promise<GeneratedImage[]> {
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
   const compatibleSize = (() => {
     const [width, height] = String(options.aspectRatio ?? '1:1').split(':').map(Number)
     if (!Number.isFinite(width) || !Number.isFinite(height) || height === 0) return '1024x1024'
@@ -465,6 +524,62 @@ export async function generateRemoteImages(
   const referenceImages = options.referenceImages?.filter(Boolean) ?? []
   const useGrsaiUnifiedImage = isGrsaiBaseUrl(settings.baseUrl)
   const useStandardImageEdit = !useGrsaiUnifiedImage && referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
+  const grsaiRequestBody = {
+    model: settings.model,
+    prompt: options.prompt,
+    images: referenceImages,
+    aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
+    imageSize: options.resolution ?? '1K',
+    // Async mode returns a task ID immediately. Polling that ID avoids losing
+    // successful images when a long-lived synchronous connection is interrupted.
+    replyType: 'async',
+  }
+  const requestForLog: Record<string, unknown> = useGrsaiUnifiedImage
+    ? grsaiRequestBody
+    : useStandardImageEdit
+      ? { model: settings.model, prompt: options.prompt, n: options.count, size: compatibleSize, quality: options.detail, images: `[multipart × ${referenceImages.length}]` }
+      : body
+  let taskId = ''
+  let lastPayload: unknown = null
+
+  const emitAdminLog = (resultType: 'success' | 'failed', resultPayload: unknown) => {
+    if (!options.captureAdminLog) return
+    const finishedAt = new Date().toISOString()
+    options.captureAdminLog({
+      provider: useGrsaiUnifiedImage ? 'GRS AI' : 'OpenAI Compatible',
+      taskId: taskId || undefined,
+      model: settings.model,
+      startedAt,
+      finishedAt,
+      durationMs: Date.now() - startedAtMs,
+      resultType,
+      requestJson: sanitizeAdminLogJson(requestForLog),
+      resultJson: sanitizeAdminLogJson(resultPayload ?? lastPayload ?? {}),
+    })
+  }
+
+  const failWithAdminLog = (error: unknown): never => {
+    if (error instanceof GenerationRequestError) {
+      if (!error.adminLog && options.captureAdminLog) {
+        const log: GenerationAdminLog = {
+          provider: useGrsaiUnifiedImage ? 'GRS AI' : 'OpenAI Compatible',
+          taskId: taskId || error.requestId || undefined,
+          model: settings.model,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          resultType: 'failed',
+          requestJson: sanitizeAdminLogJson(requestForLog),
+          resultJson: sanitizeAdminLogJson(lastPayload ?? { error: error.detail, summary: error.message }),
+        }
+        error.adminLog = log
+        options.captureAdminLog(log)
+      }
+      throw error
+    }
+    emitAdminLog('failed', { error: error instanceof Error ? error.message : String(error) })
+    throw error
+  }
 
   let response: Response
   try {
@@ -476,16 +591,7 @@ export async function generateRemoteImages(
           Authorization: `Bearer ${settings.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: settings.model,
-          prompt: options.prompt,
-          images: referenceImages,
-          aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
-          imageSize: options.resolution ?? '1K',
-          // Async mode returns a task ID immediately. Polling that ID avoids losing
-          // successful images when a long-lived synchronous connection is interrupted.
-          replyType: 'async',
-        }),
+        body: JSON.stringify(grsaiRequestBody),
       })
     } else if (useStandardImageEdit) {
       const form = new FormData()
@@ -554,40 +660,59 @@ export async function generateRemoteImages(
       })
     }
   } catch (error) {
-    if (error instanceof GenerationRequestError) throw error
     if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof GenerationRequestError) return failWithAdminLog(error)
     const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    throw new GenerationRequestError(
+    return failWithAdminLog(new GenerationRequestError(
       'network',
       '请求可能已送达并扣费，但浏览器没有收到生成结果',
       `${detail}。请先检查中转服务的消费记录、任务详情或生成历史，不要直接重复生成。常见原因是中转响应缺少跨域许可、连接中途断开或代理没有把图片响应返回给浏览器。`,
-    )
+    ))
   }
   // Paid generation requests are never retried or split automatically. A rejected
   // batch stops here so one click can produce at most one billable API request.
-  if (!response.ok) throw await createApiError(response)
+  if (!response.ok) return failWithAdminLog(await createApiError(response))
   let payload: unknown
   try {
     payload = await response.json()
+    lastPayload = payload
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>
+      taskId = String(record.id ?? record.taskId ?? record.task_id ?? '').trim()
+    }
   } catch (error) {
-    throw new GenerationRequestError(
+    return failWithAdminLog(new GenerationRequestError(
       'platform',
       '请求可能已经扣费，但 API 返回了无法识别的数据',
       `${error instanceof Error ? error.message : String(error)}。请检查中转任务或生成历史，不要直接重试。`,
-    )
+    ))
   }
-  if (useGrsaiUnifiedImage) payload = await resolveGrsaiImageResult(settings, payload, options.signal)
-  const rows = extractGeneratedImages(payload)
-  if (!rows.length) {
-    throw new GenerationRequestError(
-      'platform',
-      '请求可能已经扣费，但没有收到图片结果',
-      '接口请求成功，但响应中没有可识别的图片。请检查中转任务或生成历史，不要直接重试。',
-    )
+  try {
+    if (useGrsaiUnifiedImage) {
+      payload = await resolveGrsaiImageResult(settings, payload, options.signal)
+      lastPayload = payload
+      if (payload && typeof payload === 'object') {
+        const record = payload as Record<string, unknown>
+        taskId = String(record.id ?? record.taskId ?? record.task_id ?? taskId).trim()
+      }
+    }
+    const rows = extractGeneratedImages(payload)
+    if (!rows.length) {
+      throw new GenerationRequestError(
+        'platform',
+        '请求可能已经扣费，但没有收到图片结果',
+        '接口请求成功，但响应中没有可识别的图片。请检查中转任务或生成历史，不要直接重试。',
+        { requestId: taskId || undefined },
+      )
+    }
+    emitAdminLog('success', payload)
+    // Preserve response order and cardinality. Some gateways intentionally reuse the
+    // same proxy URL for separate batch items, so URL-based deduplication can lose images.
+    return rows
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    return failWithAdminLog(error)
   }
-  // Preserve response order and cardinality. Some gateways intentionally reuse the
-  // same proxy URL for separate batch items, so URL-based deduplication can lose images.
-  return rows
 }
 
 export async function generateRemoteText(

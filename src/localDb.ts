@@ -79,6 +79,13 @@ export type HistoryMediaRecord = {
   createdAt: string
 }
 
+export type SerializedHistoryMedia = {
+  id: string
+  fileName: string
+  createdAt: string
+  dataUrl: string
+}
+
 export type WorkspaceAuxiliaryData = {
   id: typeof WORKSPACE_DATA_ID
   folders: unknown[]
@@ -100,6 +107,8 @@ export type WorkspaceSnapshot = {
   outputHistory: unknown[]
   publicSettings: Record<string, unknown>
   agentSessions: AgentSessionRecord[]
+  /** Optional portable copies of IndexedDB history blobs (data URLs). */
+  historyMedia?: SerializedHistoryMedia[]
 }
 
 const now = () => new Date().toISOString()
@@ -529,6 +538,75 @@ export async function deleteHistoryMedia(id: string) {
   })
 }
 
+export async function listHistoryMedia(): Promise<HistoryMediaRecord[]> {
+  const database = await openDatabase()
+  try {
+    const records = await requestResult(database.transaction(HISTORY_MEDIA_STORE, 'readonly').objectStore(HISTORY_MEDIA_STORE).getAll())
+    return (records as HistoryMediaRecord[]) ?? []
+  } finally {
+    database.close()
+  }
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('历史图片读取失败'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function dataUrlToBlob(dataUrl: string) {
+  const response = await fetch(dataUrl)
+  if (!response.ok) throw new Error(`历史图片还原失败（${response.status}）`)
+  return response.blob()
+}
+
+export async function exportHistoryMedia(): Promise<SerializedHistoryMedia[]> {
+  const records = await listHistoryMedia()
+  const exported: SerializedHistoryMedia[] = []
+  for (const record of records) {
+    try {
+      exported.push({
+        id: record.id,
+        fileName: record.fileName,
+        createdAt: record.createdAt,
+        dataUrl: await blobToDataUrl(record.blob),
+      })
+    } catch {
+      // Skip unreadable blobs so the rest of the workspace can still export.
+    }
+  }
+  return exported
+}
+
+export async function replaceHistoryMediaRecords(records: HistoryMediaRecord[]) {
+  await runTransaction<void>([HISTORY_MEDIA_STORE], 'readwrite', (transaction) => {
+    const store = transaction.objectStore(HISTORY_MEDIA_STORE)
+    store.clear()
+    records.forEach((record) => store.put(record))
+  })
+}
+
+export async function replaceHistoryMedia(serialized: SerializedHistoryMedia[] | undefined) {
+  const records: HistoryMediaRecord[] = []
+  for (const item of serialized ?? []) {
+    if (!item?.id || typeof item.dataUrl !== 'string' || !item.dataUrl.startsWith('data:')) continue
+    try {
+      records.push({
+        id: item.id,
+        fileName: item.fileName || 'image.png',
+        createdAt: item.createdAt || now(),
+        blob: await dataUrlToBlob(item.dataUrl),
+      })
+    } catch {
+      // Skip damaged entries; import of structural data should still succeed.
+    }
+  }
+  await replaceHistoryMediaRecords(records)
+}
+
 export async function exportWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   const database = await openDatabase()
   try {
@@ -577,7 +655,7 @@ export function validateWorkspaceSnapshot(value: unknown): asserts value is Work
   }
 }
 
-export async function replaceWorkspace(snapshotValue: unknown) {
+export async function replaceWorkspace(snapshotValue: unknown, historyMediaRecords?: HistoryMediaRecord[]) {
   validateWorkspaceSnapshot(snapshotValue)
   const snapshot = removeSecrets(snapshotValue) as WorkspaceSnapshot
   await runTransaction<void>([WORKSPACE_PROJECT_STORE, CANVAS_STORE, ASSET_STORE, WORKSPACE_DATA_STORE, AGENT_SESSION_STORE], 'readwrite', (transaction) => {
@@ -602,5 +680,7 @@ export async function replaceWorkspace(snapshotValue: unknown) {
       updatedAt: now(),
     })
   })
+  if (historyMediaRecords) await replaceHistoryMediaRecords(historyMediaRecords)
+  else await replaceHistoryMedia(snapshot.historyMedia)
   return snapshot
 }

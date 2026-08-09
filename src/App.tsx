@@ -74,8 +74,10 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
-import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
-import { fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationErrorCategory } from './imageApi'
+import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
+import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
+import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
@@ -95,6 +97,8 @@ type ImageVariant = {
   fileName: string
   createdAt: string
   revisedPrompt?: string
+  /** IndexedDB history-media id — durable across CDN expiry / reloads */
+  mediaId?: string
 }
 type CanvasNode = Node<{
   kind: NodeKind
@@ -1336,8 +1340,13 @@ function App() {
   const [imageGalleryThumbnailSize, setImageGalleryThumbnailSize] = useState(190)
   const [outputHistory, setOutputHistory] = useState<OutputHistoryRecord[]>(readOutputHistory)
   const [outputHistoryOpen, setOutputHistoryOpen] = useState(false)
-  const [outputHistoryFilter, setOutputHistoryFilter] = useState<'all' | 'text' | 'image' | 'failed'>('all')
+  const [outputHistoryFilter, setOutputHistoryFilter] = useState<'all' | 'text' | 'image' | 'failed' | 'ops'>('all')
   const [outputHistorySearch, setOutputHistorySearch] = useState('')
+  const [operatorUnlocked, setOperatorUnlocked] = useState(false)
+  const [operatorPassDraft, setOperatorPassDraft] = useState('')
+  const [operatorGateError, setOperatorGateError] = useState('')
+  const [operatorLogs, setOperatorLogs] = useState<OperatorRecoveryLog[]>([])
+  const [expandedOperatorLogId, setExpandedOperatorLogId] = useState<string | null>(null)
   const [expandedOutputErrorId, setExpandedOutputErrorId] = useState<string | null>(null)
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState('')
@@ -1357,6 +1366,8 @@ function App() {
   const [activeGenerationTaskKeys, setActiveGenerationTaskKeys] = useState<Set<string>>(new Set())
   const generationLoading = activeGenerationTaskKeys.size > 0
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [transferProgress, setTransferProgress] = useState<string | null>(null)
+  const transferBusy = Boolean(transferProgress)
   const [showGrid, setShowGrid] = useState(true)
   const [canvasZoom, setCanvasZoom] = useState(1)
   const [activeEditorNodeId, setActiveEditorNodeId] = useState<string | null>(null)
@@ -1622,13 +1633,20 @@ function App() {
   }, [generationHistoryOpen, libraryPreview])
 
   useEffect(() => {
+    // Never keep a leftover unlock across reloads.
+    lockOperatorSession()
+  }, [])
+
+  useEffect(() => {
     if (!outputHistoryOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOutputHistoryOpen(false)
+      if (event.key !== 'Escape') return
+      if (outputHistoryFilter === 'ops') lockOperatorView()
+      setOutputHistoryOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [outputHistoryOpen])
+  }, [outputHistoryOpen, outputHistoryFilter])
 
   useEffect(() => {
     try {
@@ -1974,10 +1992,10 @@ function App() {
   }, [canvasName, edges, nodes, projectPromptSuffix, projectSettingsLocked, stylePresets])
 
   useEffect(() => {
-    if (!toastMessage) return
+    if (!toastMessage || transferBusy) return
     const timer = window.setTimeout(() => setToastMessage(null), 1800)
     return () => window.clearTimeout(timer)
-  }, [toastMessage])
+  }, [toastMessage, transferBusy])
 
   useEffect(() => {
     if (!canvasSwitcherOpen) return
@@ -3203,61 +3221,126 @@ function App() {
     setToastMessage('项目已删除')
   }
 
-  const exportWholeWorkspace = async () => {
-    await saveCanvasState(canvasName, true)
-    await saveAgentSession({
-      id: agentConversationId,
-      projectId: activeProjectId,
-      canvasId: activeCanvasId,
-      title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
-      messages: agentMessages,
-      plans: agentPlans,
-      selectedChatModelId: agentTextModelKey,
-      selectedImageModelId: agentImageModelKey,
-      createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    await saveWorkspaceAuxiliaryData({
-      folders: assetFolders,
-      generationHistory,
-      outputHistory,
-      publicSettings: {
-        ...apiSettings,
-        connections: apiSettings.connections.map(({ apiKey: _apiKey, ...connection }) => connection),
-      },
-    })
-    const snapshot = await exportWorkspaceSnapshot()
-    const archivedSnapshot = structuredClone(snapshot) as unknown as Record<string, unknown>
-    const mediaCache = new Map<string, string>()
-    const archiveMedia = async (value: unknown, parentKey = ''): Promise<void> => {
-      if (!value || typeof value !== 'object') return
-      if (Array.isArray(value)) {
-        for (const item of value) await archiveMedia(item, parentKey)
-        return
+  const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean }) => {
+    const asBackup = Boolean(options?.asBackup)
+    const manageProgress = options?.manageProgress ?? true
+    if (manageProgress) setTransferProgress(asBackup ? '正在备份当前项目…' : '正在打包完整项目…')
+    try {
+      setTransferProgress(asBackup ? '正在保存当前工作区…' : '正在保存画布与对话…')
+      await saveCanvasState(canvasName, true)
+      await saveAgentSession({
+        id: agentConversationId,
+        projectId: activeProjectId,
+        canvasId: activeCanvasId,
+        title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
+        messages: agentMessages,
+        plans: agentPlans,
+        selectedChatModelId: agentTextModelKey,
+        selectedImageModelId: agentImageModelKey,
+        createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      await saveWorkspaceAuxiliaryData({
+        folders: assetFolders,
+        generationHistory,
+        outputHistory,
+        publicSettings: {
+          ...apiSettings,
+          connections: apiSettings.connections.map(({ apiKey: _apiKey, ...connection }) => connection),
+        },
+      })
+
+      setTransferProgress(asBackup ? '正在打包备份文件…' : '正在收集本机图片…')
+      const media = new Map<string, BundleMediaEntry>()
+      for (const record of await listHistoryMedia()) {
+        media.set(record.id, {
+          id: record.id,
+          blob: record.blob,
+          fileName: record.fileName,
+          createdAt: record.createdAt,
+          kind: 'history',
+        })
       }
-      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-        const isMediaKey = key === 'url' || key === 'imageUrl' || key === 'styleReferenceUrl' || key === 'referenceImageUrl'
-        if (isMediaKey && typeof child === 'string' && /^(?:https?:|blob:)/i.test(child)) {
-          let stable = mediaCache.get(child)
-          if (!stable) {
-            stable = await prepareReferenceImageForRequest(child)
-            mediaCache.set(child, stable)
-          }
-          ;(value as Record<string, unknown>)[key] = stable
-        } else {
-          await archiveMedia(child, key)
-        }
+
+      // Mutate the export snapshot in place so huge data-URLs are replaced with
+      // media refs before JSON.stringify — never clone the fat graph first.
+      setTransferProgress(asBackup ? '正在写入备份包…' : '正在打包项目数据…')
+      const snapshot = await exportWorkspaceSnapshot()
+      const manifest = snapshot as unknown as Record<string, unknown>
+      delete manifest.historyMedia
+      const skipped = { count: 0 }
+      await extractMediaIntoBundle(manifest, media, { skipped })
+
+      setTransferProgress(asBackup ? '正在生成备份下载…' : '正在生成下载文件…')
+      const bundle = await packWorkspaceBundle(manifest, media.values())
+      const projectCount = Array.isArray(manifest.projects) ? manifest.projects.length : 0
+      const canvasCount = Array.isArray(manifest.canvases) ? manifest.canvases.length : 0
+      triggerBlobDownload(bundle, `DisyLab-完整项目-${new Date().toISOString().slice(0, 10)}.disy`)
+      const skipNote = skipped.count ? `，${skipped.count} 张外链未能打包` : ''
+      const successMessage = asBackup
+        ? `备份已开始下载：${projectCount} 个项目、${canvasCount} 张画布`
+        : `导出成功：${projectCount} 个项目、${canvasCount} 张画布、${media.size} 张图片${skipNote}（不含 API Key）`
+      if (manageProgress) {
+        setTransferProgress(null)
+        setToastMessage(successMessage)
       }
+      return { projectCount, canvasCount, mediaCount: media.size, skipped: skipped.count }
+    } catch (error) {
+      if (manageProgress) {
+        setTransferProgress(null)
+        setToastMessage(error instanceof Error ? error.message : '完整导出失败')
+      }
+      throw error
     }
-    await archiveMedia(archivedSnapshot)
-    const blob = new Blob([JSON.stringify(archivedSnapshot)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `Disy-完整项目-${new Date().toISOString().slice(0, 10)}.disy`
-    anchor.click()
-    URL.revokeObjectURL(url)
-    setToastMessage(`已导出 ${snapshot.projects.length} 个项目、${snapshot.canvases.length} 张画布（不含 API Key）`)
+  }
+
+  const parseWorkspaceImportFile = async (file: File) => {
+    const header = new Uint8Array(await file.slice(0, 8).arrayBuffer())
+    if (isWorkspaceBundle(header)) {
+      const unpacked = await unpackWorkspaceBundle(file)
+      const snapshot = unpacked.manifest
+      delete snapshot.historyMedia
+      // History blobs stay in IndexedDB; only inflate non-history refs for canvas/assets.
+      const historyIds = new Set(
+        [...unpacked.media.values()]
+          .filter((entry) => entry.kind === 'history' || entry.id.startsWith('history-media-'))
+          .map((entry) => entry.id),
+      )
+      const inflateMedia = new Map(
+        [...unpacked.media.entries()].filter(([id]) => !historyIds.has(id)),
+      )
+      await reinflateBundleMedia(snapshot, inflateMedia)
+      const clearHistoryUrls = (value: unknown): void => {
+        if (!value || typeof value !== 'object') return
+        if (Array.isArray(value)) {
+          value.forEach(clearHistoryUrls)
+          return
+        }
+        const record = value as Record<string, unknown>
+        if (typeof record.mediaId === 'string' && historyIds.has(record.mediaId)) {
+          record.imageUrl = ''
+        }
+        Object.values(record).forEach(clearHistoryUrls)
+      }
+      clearHistoryUrls(snapshot)
+      const historyMediaRecords = [...unpacked.media.values()]
+        .filter((entry) => historyIds.has(entry.id))
+        .map((entry) => ({
+          id: entry.id,
+          blob: entry.blob,
+          fileName: entry.fileName || 'image.png',
+          createdAt: entry.createdAt || new Date().toISOString(),
+        }))
+      return { snapshot, historyMediaRecords }
+    }
+
+    let snapshot: unknown
+    try {
+      snapshot = JSON.parse(await file.text()) as unknown
+    } catch {
+      throw new Error('项目包不是有效的 DisyLab .disy 文件')
+    }
+    return { snapshot, historyMediaRecords: undefined }
   }
 
   const importWholeWorkspace = async (file: File) => {
@@ -3265,35 +3348,56 @@ function App() {
       setToastMessage('正在生成内容，完成后才能导入项目')
       return
     }
-    const snapshot = JSON.parse(await file.text()) as unknown
-    if (!window.confirm('导入会替换当前本机工作区。确认后将先自动导出一份完整备份，再执行导入。')) return
-    await exportWholeWorkspace()
-    await replaceWorkspace(snapshot)
-    const projects = await listWorkspaceProjects()
-    if (!projects.length) throw new Error('导入包没有项目')
-    setWorkspaceProjects(projects)
-    const auxiliary = await loadWorkspaceAuxiliaryData()
-    setAssetFolders(auxiliary.folders as AssetFolder[])
-    setGenerationHistory(auxiliary.generationHistory as GenerationRecord[])
-    setOutputHistory(auxiliary.outputHistory as OutputHistoryRecord[])
-    setSavedAssets((await loadLocalAssets<SavedAsset>()) ?? [])
-    const importedApiSettings = auxiliary.publicSettings as Partial<ApiSettings>
-    if (Array.isArray(importedApiSettings.connections)) {
-      saveApiSettings({
-        connections: importedApiSettings.connections.map((connection) => ({
-          ...connection,
-          apiKey: '',
-        })),
-        selectedTextModel: importedApiSettings.selectedTextModel,
-        selectedImageModel: importedApiSettings.selectedImageModel,
-      })
+    if (transferBusy) {
+      setToastMessage('正在导入或导出，请稍候')
+      return
     }
-    const owner = projects[0]
-    const canvases = await listWorkspaceCanvases(owner.id)
-    setWorkspaceCanvases(canvases)
-    await openWorkspaceCanvas(owner.activeCanvasId, owner.id, true)
-    setProjectOpen(false)
-    setToastMessage('完整项目已导入；API Key 出于安全原因未导入')
+    setTransferProgress('正在读取项目包…')
+    try {
+      const parsed = await parseWorkspaceImportFile(file)
+      if (!window.confirm('导入会替换当前本机工作区。确认后将先自动导出一份完整备份，再执行导入。')) {
+        setTransferProgress(null)
+        return
+      }
+      setTransferProgress('正在备份当前项目…')
+      await exportWholeWorkspace({ asBackup: true, manageProgress: false })
+      setTransferProgress('正在写入导入数据…')
+      await replaceWorkspace(parsed.snapshot, parsed.historyMediaRecords)
+      const projects = await listWorkspaceProjects()
+      if (!projects.length) throw new Error('导入包没有项目')
+      setWorkspaceProjects(projects)
+      const auxiliary = await loadWorkspaceAuxiliaryData()
+      setAssetFolders(auxiliary.folders as AssetFolder[])
+      setBrokenHistoryIds([])
+      historyArchiveAttemptedRef.current.clear()
+      historyMediaObjectUrlsRef.current.forEach((objectUrl) => URL.revokeObjectURL(objectUrl))
+      historyMediaObjectUrlsRef.current.clear()
+      setGenerationHistory(auxiliary.generationHistory as GenerationRecord[])
+      setOutputHistory(auxiliary.outputHistory as OutputHistoryRecord[])
+      setSavedAssets((await loadLocalAssets<SavedAsset>()) ?? [])
+      const importedApiSettings = auxiliary.publicSettings as Partial<ApiSettings>
+      if (Array.isArray(importedApiSettings.connections)) {
+        saveApiSettings({
+          connections: importedApiSettings.connections.map((connection) => ({
+            ...connection,
+            apiKey: '',
+          })),
+          selectedTextModel: importedApiSettings.selectedTextModel,
+          selectedImageModel: importedApiSettings.selectedImageModel,
+        })
+      }
+      setTransferProgress('正在打开导入的项目…')
+      const owner = projects[0]
+      const canvases = await listWorkspaceCanvases(owner.id)
+      setWorkspaceCanvases(canvases)
+      await openWorkspaceCanvas(owner.activeCanvasId, owner.id, true)
+      setProjectOpen(false)
+      setTransferProgress(null)
+      setToastMessage('完整项目已导入；API Key 出于安全原因未导入')
+    } catch (error) {
+      setTransferProgress(null)
+      throw error
+    }
   }
 
   useEffect(() => {
@@ -3866,6 +3970,55 @@ function App() {
     })
   }
 
+  const captureImageAdminLog = (
+    log: GenerationAdminLog,
+    meta: { prompt: string; modelName: string; connectionName: string; projectId?: string },
+  ) => {
+    appendOperatorRecoveryLog({
+      projectId: meta.projectId ?? activeProjectId,
+      provider: log.provider,
+      taskId: log.taskId,
+      model: log.model,
+      modelName: meta.modelName,
+      connectionName: meta.connectionName,
+      prompt: meta.prompt,
+      durationMs: log.durationMs,
+      resultType: log.resultType,
+      requestJson: log.requestJson,
+      resultJson: log.resultJson,
+      createdAt: log.finishedAt,
+    })
+    if (operatorUnlocked) setOperatorLogs(listOperatorRecoveryLogs(activeProjectId))
+  }
+
+  const lockOperatorView = () => {
+    lockOperatorSession()
+    setOperatorUnlocked(false)
+    setOperatorPassDraft('')
+    setOperatorGateError('')
+    setOperatorLogs([])
+    setExpandedOperatorLogId(null)
+  }
+
+  const submitOperatorGate = async () => {
+    const ok = await verifyOperatorAccess(operatorPassDraft)
+    if (!ok) {
+      setOperatorGateError('通行凭证无效')
+      setOperatorPassDraft('')
+      return
+    }
+    unlockOperatorSession()
+    setOperatorUnlocked(true)
+    setOperatorPassDraft('')
+    setOperatorGateError('')
+    setOperatorLogs(listOperatorRecoveryLogs(activeProjectId))
+  }
+
+  const selectOutputHistoryFilter = (value: typeof outputHistoryFilter) => {
+    if (outputHistoryFilter === 'ops' && value !== 'ops') lockOperatorView()
+    setOutputHistoryFilter(value)
+  }
+
   const deleteOutputHistoryRecord = (recordId: string) => {
     setOutputHistory((current) => {
       const next = current.filter((record) => record.id !== recordId)
@@ -4154,6 +4307,12 @@ function App() {
             resolution: activeImageResolution,
             detail: activeImageDetail,
             signal: controller.signal,
+            captureAdminLog: (log) => captureImageAdminLog(log, {
+              prompt: promptText,
+              modelName: activeNodeImageModel.model.name,
+              connectionName: activeNodeImageModel.connection.name,
+              projectId: generationOrigin.projectId,
+            }),
           })
           if (!batch.length) throw new Error('图像模型没有返回图片')
           images.push(...batch.slice(0, remaining))
@@ -4498,6 +4657,12 @@ function App() {
               resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
               detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
               signal: controller.signal,
+              captureAdminLog: (log) => captureImageAdminLog(log, {
+                prompt: plan.prompt,
+                modelName: model.model.name,
+                connectionName: model.connection.name,
+                projectId: origin.projectId,
+              }),
             },
           )
           if (!batch.length) throw new Error('图像模型没有返回图片')
@@ -5103,7 +5268,14 @@ function App() {
     return groups
   }, new Map<string, GenerationRecord[]>()).entries()).reverse()
   const outputFailureCount = currentOutputHistory.filter((record) => record.status === 'failed').length
+  const filteredOperatorLogs = operatorLogs.filter((log) => {
+    const query = outputHistorySearch.trim().toLowerCase()
+    if (!query) return true
+    return [log.taskId, log.model, log.modelName, log.prompt, log.provider, log.resultJson]
+      .some((value) => value?.toLowerCase().includes(query))
+  })
   const filteredOutputHistory = currentOutputHistory.filter((record) => {
+    if (outputHistoryFilter === 'ops') return false
     if (outputHistoryFilter === 'failed' && record.status !== 'failed') return false
     if (outputHistoryFilter === 'text' && record.kind !== 'text') return false
     if (outputHistoryFilter === 'image' && record.kind !== 'image') return false
@@ -7103,16 +7275,16 @@ function App() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {toastMessage && (
+          {(transferProgress || toastMessage) && (
             <motion.div
-              className={`canvas-toast ${activeTextNode ? 'with-editor' : ''}`}
+              className={`canvas-toast ${activeTextNode ? 'with-editor' : ''} ${transferProgress ? 'is-progress' : ''}`}
               role="status"
               initial={{ opacity: 0, y: 8, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.98 }}
             >
-              <span className="toast-dot" />
-              {toastMessage}
+              <span className={`toast-dot ${transferProgress ? 'is-busy' : ''}`} />
+              {transferProgress || toastMessage}
             </motion.div>
           )}
         </AnimatePresence>
@@ -7120,7 +7292,10 @@ function App() {
 
       <AnimatePresence>
         {outputHistoryOpen && (
-          <motion.div className="output-history-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setOutputHistoryOpen(false)}>
+          <motion.div className="output-history-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => {
+            if (outputHistoryFilter === 'ops') lockOperatorView()
+            setOutputHistoryOpen(false)
+          }}>
             <motion.section
               role="dialog"
               aria-modal="true"
@@ -7135,7 +7310,10 @@ function App() {
                 <div><History size={18} /><h2 id="output-history-title">输出历史</h2><span>共 {currentOutputHistory.length} 条</span></div>
                 <div>
                   {currentOutputHistory.length > 0 && <button type="button" className="output-history-clear" onClick={() => { setOutputHistory((current) => current.filter((record) => record.projectId ? record.projectId !== activeProjectId : activeProjectId !== CURRENT_PROJECT_ID)); setExpandedOutputErrorId(null) }}>清空当前项目记录</button>}
-                  <button type="button" aria-label="关闭输出历史" onClick={() => setOutputHistoryOpen(false)}><X size={18} /></button>
+                  <button type="button" aria-label="关闭输出历史" onClick={() => {
+                    if (outputHistoryFilter === 'ops') lockOperatorView()
+                    setOutputHistoryOpen(false)
+                  }}><X size={18} /></button>
                 </div>
               </header>
               <div className="output-history-toolbar">
@@ -7145,14 +7323,118 @@ function App() {
                     ['text', '文本'],
                     ['image', '图像'],
                     ['failed', `失败 ${outputFailureCount || ''}`],
+                    ['ops', operatorUnlocked ? '运维日志' : '···'],
                   ] as Array<[typeof outputHistoryFilter, string]>).map(([value, label]) => (
-                    <button type="button" key={value} className={outputHistoryFilter === value ? 'is-active' : ''} onClick={() => setOutputHistoryFilter(value)}>{label}</button>
+                    <button
+                      type="button"
+                      key={value}
+                      className={outputHistoryFilter === value ? 'is-active' : ''}
+                      onClick={() => selectOutputHistoryFilter(value)}
+                    >{label}</button>
                   ))}
                 </div>
-                <label className="output-history-search"><Search size={14} /><input value={outputHistorySearch} placeholder="搜索提示词、模型或错误" onChange={(event) => setOutputHistorySearch(event.target.value)} /></label>
+                <label className="output-history-search"><Search size={14} /><input className="allow-text-select" value={outputHistorySearch} placeholder={outputHistoryFilter === 'ops' ? '搜索任务 ID / 结果' : '搜索提示词、模型或错误'} onChange={(event) => setOutputHistorySearch(event.target.value)} /></label>
               </div>
               <div className="output-history-content">
-                {filteredOutputHistory.length ? filteredOutputHistory.map((record) => {
+                {outputHistoryFilter === 'ops' ? (
+                  !operatorUnlocked ? (
+                    <div className="operator-gate">
+                      <Lock size={22} />
+                      <strong>受限区域</strong>
+                      <span>仅授权运维可查看任务请求与结果数据，用于画布未回写时的人工找回。</span>
+                      <form
+                        className="operator-gate-form"
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          void submitOperatorGate()
+                        }}
+                      >
+                        <input
+                          className="allow-text-select"
+                          type="password"
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="通行凭证"
+                          value={operatorPassDraft}
+                          onChange={(event) => {
+                            setOperatorPassDraft(event.target.value)
+                            setOperatorGateError('')
+                          }}
+                        />
+                        <button type="submit">进入</button>
+                      </form>
+                      {operatorGateError && <em>{operatorGateError}</em>}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="operator-log-toolbar">
+                        <span>本机运维日志 · {filteredOperatorLogs.length} 条（含 GRS AI 任务结果）</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            lockOperatorView()
+                            setOutputHistoryFilter('all')
+                          }}
+                        ><Unlock size={13} />退出运维</button>
+                      </div>
+                      {filteredOperatorLogs.length ? (
+                        <div className="operator-log-table allow-text-select">
+                          <div className="operator-log-head">
+                            <span>任务 ID</span>
+                            <span>模型</span>
+                            <span>耗时</span>
+                            <span>结果</span>
+                            <span>提示词</span>
+                            <span>操作</span>
+                          </div>
+                          {filteredOperatorLogs.map((log) => {
+                            const resultUrls = extractImageUrlsFromAdminResult(log.resultJson)
+                            const expanded = expandedOperatorLogId === log.id
+                            return (
+                              <article key={log.id} className={`operator-log-row ${log.resultType === 'failed' ? 'is-failed' : ''}`}>
+                                <code title={log.taskId || '—'}>{log.taskId || '—'}</code>
+                                <span>{log.modelName || log.model}</span>
+                                <span>{Math.max(1, Math.round(log.durationMs / 1000))}s</span>
+                                <em>{log.resultType === 'success' ? '成功' : '失败'}</em>
+                                <p title={log.prompt}>{log.prompt}</p>
+                                <div className="operator-log-actions">
+                                  <button type="button" title="复制结果数据" onClick={() => void navigator.clipboard.writeText(log.resultJson)}><Copy size={12} />结果</button>
+                                  <button type="button" title="复制请求参数" onClick={() => void navigator.clipboard.writeText(log.requestJson)}><Copy size={12} />请求</button>
+                                  <button type="button" onClick={() => setExpandedOperatorLogId(expanded ? null : log.id)}>{expanded ? '收起' : '展开'}</button>
+                                </div>
+                                {expanded && (
+                                  <div className="operator-log-detail">
+                                    <div>
+                                      <strong>请求参数</strong>
+                                      <pre>{log.requestJson}</pre>
+                                    </div>
+                                    <div>
+                                      <strong>结果数据</strong>
+                                      <pre>{log.resultJson}</pre>
+                                      {resultUrls.length > 0 && (
+                                        <div className="operator-log-urls">
+                                          <p className="operator-log-url-tip">结果图 URL 约 2 小时后失效，请尽快下载或写回画布</p>
+                                          {resultUrls.map((url) => (
+                                            <div key={url} className="operator-log-url-row">
+                                              <a href={url} target="_blank" rel="noreferrer">{url}</a>
+                                              <button type="button" title="复制图片 URL" onClick={() => void navigator.clipboard.writeText(url)}><Copy size={12} /></button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </article>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div className="output-history-empty"><History size={30} /><strong>还没有运维日志</strong><span>图像生成（含 GRS AI）成功或失败后都会写入本机运维日志，便于找回结果数据。</span></div>
+                      )}
+                    </>
+                  )
+                ) : filteredOutputHistory.length ? filteredOutputHistory.map((record) => {
                   const failed = record.status === 'failed'
                   const categoryLabel = record.error?.category === 'api' ? 'API 服务' : record.error?.category === 'network' ? '网络连接' : 'Disy 本地处理'
                   return (
@@ -7677,7 +7959,12 @@ function App() {
                   <Upload size={15} />
                   导入项目
                 </button>
-                <button onClick={() => void exportWholeWorkspace()}>
+                <button
+                  disabled={transferBusy}
+                  onClick={() => void exportWholeWorkspace().catch((error) => {
+                    if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
+                  })}
+                >
                   <Download size={15} />
                   完整导出
                 </button>
