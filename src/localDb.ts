@@ -1,5 +1,5 @@
 const DATABASE_NAME = 'disy-infinite-local'
-const DATABASE_VERSION = 4
+const DATABASE_VERSION = 5
 const LEGACY_PROJECT_STORE = 'projects'
 const ASSET_STORE = 'assets'
 const WORKSPACE_PROJECT_STORE = 'workspace-projects'
@@ -7,6 +7,7 @@ const CANVAS_STORE = 'canvases'
 const WORKSPACE_DATA_STORE = 'workspace-data'
 const AGENT_SESSION_STORE = 'agent-sessions'
 const HISTORY_MEDIA_STORE = 'history-media'
+const IMPORT_BACKUP_STORE = 'import-backups'
 const ASSET_LIBRARY_ID = 'library'
 const WORKSPACE_DATA_ID = 'workspace'
 
@@ -111,8 +112,80 @@ export type WorkspaceSnapshot = {
   historyMedia?: SerializedHistoryMedia[]
 }
 
+export type WorkspaceImportBackup = {
+  id: 'latest'
+  createdAt: string
+  snapshot: WorkspaceSnapshot
+  historyMedia: HistoryMediaRecord[]
+}
+
+export function workspaceSnapshotHasContent(snapshot: WorkspaceSnapshot) {
+  const canvasHasContent = snapshot.canvases.some((canvas) => {
+    const record = canvas as WorkspaceCanvas & Record<string, unknown>
+    const hasConfiguredStylePreset = Array.isArray(record.stylePresets) && record.stylePresets.some((preset) => {
+      if (!preset || typeof preset !== 'object') return false
+      const style = preset as Record<string, unknown>
+      return style.enabled === true
+        || (Array.isArray(style.references) && style.references.length > 0)
+        || (typeof style.keyword === 'string' && style.keyword.trim() !== '' && style.keyword.trim() !== 'Disy')
+        || (typeof style.name === 'string' && style.name.trim() !== '' && style.name.trim() !== '默认风格')
+    })
+    return (Array.isArray(record.nodes) && record.nodes.length > 0)
+      || (Array.isArray(record.edges) && record.edges.length > 0)
+      || Boolean(record.styleReferenceUrl)
+      || (Array.isArray(record.styleReferences) && record.styleReferences.length > 0)
+      || hasConfiguredStylePreset
+      || Boolean(record.promptSuffix)
+  })
+  const sessionHasContent = snapshot.agentSessions.some((session) => {
+    return (Array.isArray(session.messages) && session.messages.length > 0)
+      || (Array.isArray(session.plans) && session.plans.length > 0)
+  })
+  const hasCustomFolders = snapshot.folders.some((folder) => {
+    return Boolean(folder && typeof folder === 'object' && (folder as Record<string, unknown>).preset !== true)
+  })
+  return canvasHasContent
+    || snapshot.assets.length > 0
+    || hasCustomFolders
+    || snapshot.generationHistory.length > 0
+    || snapshot.outputHistory.length > 0
+    || sessionHasContent
+    || Boolean(snapshot.historyMedia?.length)
+}
+
 const now = () => new Date().toISOString()
 const defaultCanvasId = (projectId: string) => `${projectId}--canvas-default`
+
+export function makeUniqueWorkspaceName(requestedName: string, existingNames: Iterable<string>, fallback: string) {
+  const normalized = requestedName.trim() || fallback
+  const comparisonKey = (name: string) => name.trim().normalize('NFKC').toLocaleLowerCase()
+  const taken = new Set([...existingNames].map(comparisonKey))
+  if (!taken.has(comparisonKey(normalized))) return normalized
+  const match = normalized.match(/^(.*?)(?:\s+(\d+))?$/)
+  const base = match?.[1]?.trim() || normalized
+  let index = match?.[2] ? Number(match[2]) + 1 : 1
+  let candidate = `${base} ${index}`
+  while (taken.has(comparisonKey(candidate))) {
+    index += 1
+    candidate = `${base} ${index}`
+  }
+  return candidate
+}
+
+function normalizeWorkspaceSnapshotNames(snapshot: WorkspaceSnapshot) {
+  const projectNames: string[] = []
+  snapshot.projects.forEach((project) => {
+    project.name = makeUniqueWorkspaceName(typeof project.name === 'string' ? project.name : '', projectNames, '未命名项目')
+    projectNames.push(project.name)
+  })
+  const canvasNames = new Map<string, string[]>()
+  snapshot.canvases.forEach((canvas) => {
+    const names = canvasNames.get(canvas.projectId) ?? []
+    canvas.name = makeUniqueWorkspaceName(typeof canvas.name === 'string' ? canvas.name : '', names, '未命名画布')
+    names.push(canvas.name)
+    canvasNames.set(canvas.projectId, names)
+  })
+}
 
 function canvasFromLegacy(project: LocalProject): WorkspaceCanvas {
   return {
@@ -165,6 +238,9 @@ function openDatabase() {
       }
       if (!database.objectStoreNames.contains(HISTORY_MEDIA_STORE)) {
         database.createObjectStore(HISTORY_MEDIA_STORE, { keyPath: 'id' })
+      }
+      if (!database.objectStoreNames.contains(IMPORT_BACKUP_STORE)) {
+        database.createObjectStore(IMPORT_BACKUP_STORE, { keyPath: 'id' })
       }
 
       // v2 and older stored one canvas as one "project". Copy it during the
@@ -287,7 +363,9 @@ export async function saveWorkspaceProject(project: WorkspaceProject) {
 export async function renameWorkspaceProject(projectId: string, name: string) {
   const project = await loadWorkspaceProject(projectId)
   if (!project) throw new Error('项目不存在')
-  const next = { ...project, name: name.trim() || '未命名项目', updatedAt: now() }
+  const projects = await listWorkspaceProjects()
+  const uniqueName = makeUniqueWorkspaceName(name, projects.filter((item) => item.id !== projectId).map((item) => item.name), '未命名项目')
+  const next = { ...project, name: uniqueName, updatedAt: now() }
   await saveWorkspaceProject(next)
   return next
 }
@@ -302,12 +380,13 @@ export async function setActiveWorkspaceCanvas(projectId: string, canvasId: stri
 }
 
 export async function createWorkspaceProject(name = '未命名项目') {
+  const projects = await listWorkspaceProjects()
   const timestamp = now()
   const projectId = crypto.randomUUID()
   const canvasId = crypto.randomUUID()
   const project: WorkspaceProject = {
     id: projectId,
-    name,
+    name: makeUniqueWorkspaceName(name, projects.map((project) => project.name), '未命名项目'),
     activeCanvasId: canvasId,
     canvasIds: [canvasId],
     createdAt: timestamp,
@@ -384,7 +463,9 @@ export async function saveWorkspaceCanvas(canvas: WorkspaceCanvas) {
 export async function renameWorkspaceCanvas(canvasId: string, name: string) {
   const canvas = await loadWorkspaceCanvas(canvasId)
   if (!canvas) throw new Error('画布不存在')
-  const next = { ...canvas, name: name.trim() || '未命名画布', updatedAt: now() }
+  const canvases = await listWorkspaceCanvases(canvas.projectId)
+  const uniqueName = makeUniqueWorkspaceName(name, canvases.filter((item) => item.id !== canvasId).map((item) => item.name), '未命名画布')
+  const next = { ...canvas, name: uniqueName, updatedAt: now() }
   await saveWorkspaceCanvas(next)
   return next
 }
@@ -392,12 +473,13 @@ export async function renameWorkspaceCanvas(canvasId: string, name: string) {
 export async function createWorkspaceCanvas(projectId: string, name?: string, source?: Partial<WorkspaceCanvas>) {
   const project = await loadWorkspaceProject(projectId)
   if (!project) throw new Error('项目不存在')
+  const canvases = await listWorkspaceCanvases(projectId)
   const timestamp = now()
   const id = crypto.randomUUID()
   const canvas: WorkspaceCanvas = {
     id,
     projectId,
-    name: name || `画布 ${project.canvasIds.length + 1}`,
+    name: makeUniqueWorkspaceName(name || `画布 ${project.canvasIds.length + 1}`, canvases.map((canvas) => canvas.name), '未命名画布'),
     nodes: source?.nodes ?? [],
     edges: source?.edges ?? [],
     styleReferenceName: source?.styleReferenceName ?? '',
@@ -590,9 +672,32 @@ export async function replaceHistoryMediaRecords(records: HistoryMediaRecord[]) 
 }
 
 export async function replaceHistoryMedia(serialized: SerializedHistoryMedia[] | undefined) {
+  await replaceHistoryMediaRecords(await deserializeHistoryMedia(serialized))
+}
+
+export async function loadWorkspaceImportBackup() {
+  const database = await openDatabase()
+  try {
+    const value = await requestResult(database.transaction(IMPORT_BACKUP_STORE, 'readonly').objectStore(IMPORT_BACKUP_STORE).get('latest'))
+    return (value as WorkspaceImportBackup | undefined) ?? null
+  } finally {
+    database.close()
+  }
+}
+
+export async function restoreWorkspaceImportBackup() {
+  const backup = await loadWorkspaceImportBackup()
+  if (!backup) throw new Error('没有可恢复的导入前版本')
+  await replaceWorkspace(backup.snapshot, backup.historyMedia)
+  return backup
+}
+
+async function deserializeHistoryMedia(serialized: SerializedHistoryMedia[] | undefined) {
   const records: HistoryMediaRecord[] = []
   for (const item of serialized ?? []) {
-    if (!item?.id || typeof item.dataUrl !== 'string' || !item.dataUrl.startsWith('data:')) continue
+    if (!item?.id || typeof item.dataUrl !== 'string' || !item.dataUrl.startsWith('data:')) {
+      throw new Error('项目包包含无效的历史媒体资料')
+    }
     try {
       records.push({
         id: item.id,
@@ -601,10 +706,10 @@ export async function replaceHistoryMedia(serialized: SerializedHistoryMedia[] |
         blob: await dataUrlToBlob(item.dataUrl),
       })
     } catch {
-      // Skip damaged entries; import of structural data should still succeed.
+      throw new Error(`历史媒体“${item.fileName || item.id}”已损坏，当前工作区未改变`)
     }
   }
-  await replaceHistoryMediaRecords(records)
+  return records
 }
 
 export async function exportWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
@@ -644,32 +749,70 @@ export function validateWorkspaceSnapshot(value: unknown): asserts value is Work
   if (!Array.isArray(snapshot.projects) || !Array.isArray(snapshot.canvases) || !Array.isArray(snapshot.assets) || !Array.isArray(snapshot.agentSessions)) {
     throw new Error('项目包缺少必要数据')
   }
-  const projectIds = new Set(snapshot.projects.map((project) => project.id))
-  if (snapshot.canvases.some((canvas) => !projectIds.has(canvas.projectId))) throw new Error('项目包包含无法归属的画布')
-  const canvasIds = new Set(snapshot.canvases.map((canvas) => canvas.id))
-  if (snapshot.projects.some((project) => !project.canvasIds.length || !project.canvasIds.includes(project.activeCanvasId))) {
+  if (snapshot.historyMedia !== undefined && !Array.isArray(snapshot.historyMedia)) throw new Error('项目包历史媒体格式无效')
+  const projects = snapshot.projects as unknown[]
+  const canvases = snapshot.canvases as unknown[]
+  const validProjects = projects.every((project) => {
+    if (!project || typeof project !== 'object') return false
+    const record = project as Record<string, unknown>
+    return typeof record.id === 'string'
+      && typeof record.activeCanvasId === 'string'
+      && Array.isArray(record.canvasIds)
+      && record.canvasIds.every((id) => typeof id === 'string')
+  })
+  if (!validProjects) throw new Error('项目包中的项目索引无效')
+  const validCanvases = canvases.every((canvas) => {
+    if (!canvas || typeof canvas !== 'object') return false
+    const record = canvas as Record<string, unknown>
+    return typeof record.id === 'string' && typeof record.projectId === 'string'
+  })
+  if (!validCanvases) throw new Error('项目包中的画布数据无效')
+  const typedProjects = snapshot.projects as WorkspaceProject[]
+  const typedCanvases = snapshot.canvases as WorkspaceCanvas[]
+  const projectIds = new Set(typedProjects.map((project) => project.id))
+  if (typedCanvases.some((canvas) => !projectIds.has(canvas.projectId))) throw new Error('项目包包含无法归属的画布')
+  const canvasIds = new Set(typedCanvases.map((canvas) => canvas.id))
+  if (typedProjects.some((project) => !project.canvasIds.length || !project.canvasIds.includes(project.activeCanvasId))) {
     throw new Error('项目包中的画布索引无效')
   }
-  if (snapshot.projects.some((project) => project.canvasIds.some((canvasId) => !canvasIds.has(canvasId)))) {
+  if (typedProjects.some((project) => project.canvasIds.some((canvasId) => !canvasIds.has(canvasId)))) {
     throw new Error('项目包引用了不存在的画布')
   }
 }
 
-export async function replaceWorkspace(snapshotValue: unknown, historyMediaRecords?: HistoryMediaRecord[]) {
+export async function replaceWorkspace(
+  snapshotValue: unknown,
+  historyMediaRecords?: HistoryMediaRecord[],
+  options?: { recoverySnapshot?: WorkspaceSnapshot; recoveryHistoryMedia?: HistoryMediaRecord[] },
+) {
   validateWorkspaceSnapshot(snapshotValue)
   const snapshot = removeSecrets(snapshotValue) as WorkspaceSnapshot
-  await runTransaction<void>([WORKSPACE_PROJECT_STORE, CANVAS_STORE, ASSET_STORE, WORKSPACE_DATA_STORE, AGENT_SESSION_STORE], 'readwrite', (transaction) => {
+  normalizeWorkspaceSnapshotNames(snapshot)
+  const nextHistoryMedia = historyMediaRecords ?? await deserializeHistoryMedia(snapshot.historyMedia)
+  await runTransaction<void>([WORKSPACE_PROJECT_STORE, CANVAS_STORE, ASSET_STORE, WORKSPACE_DATA_STORE, AGENT_SESSION_STORE, HISTORY_MEDIA_STORE, IMPORT_BACKUP_STORE], 'readwrite', (transaction) => {
     const projects = transaction.objectStore(WORKSPACE_PROJECT_STORE)
     const canvases = transaction.objectStore(CANVAS_STORE)
     const assets = transaction.objectStore(ASSET_STORE)
     const data = transaction.objectStore(WORKSPACE_DATA_STORE)
     const sessions = transaction.objectStore(AGENT_SESSION_STORE)
+    const historyMedia = transaction.objectStore(HISTORY_MEDIA_STORE)
+    const importBackups = transaction.objectStore(IMPORT_BACKUP_STORE)
     projects.clear()
     canvases.clear()
     sessions.clear()
+    historyMedia.clear()
     snapshot.projects.forEach((project) => projects.put(project))
     snapshot.canvases.forEach((canvas) => canvases.put(canvas))
     snapshot.agentSessions.forEach((session) => sessions.put(session))
+    nextHistoryMedia.forEach((record) => historyMedia.put(record))
+    if (options?.recoverySnapshot) {
+      importBackups.put({
+        id: 'latest',
+        createdAt: now(),
+        snapshot: removeSecrets(options.recoverySnapshot) as WorkspaceSnapshot,
+        historyMedia: options.recoveryHistoryMedia ?? [],
+      } satisfies WorkspaceImportBackup)
+    }
     assets.put({ id: ASSET_LIBRARY_ID, assets: snapshot.assets, updatedAt: now() })
     data.put({
       id: WORKSPACE_DATA_ID,
@@ -680,7 +823,5 @@ export async function replaceWorkspace(snapshotValue: unknown, historyMediaRecor
       updatedAt: now(),
     })
   })
-  if (historyMediaRecords) await replaceHistoryMediaRecords(historyMediaRecords)
-  else await replaceHistoryMedia(snapshot.historyMedia)
   return snapshot
 }

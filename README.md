@@ -28,13 +28,13 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0-77bdf2" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
 </p>
 
-> 这里是 DisyLab v0.3.0。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
+> 这里是 DisyLab v1.0.0。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
 
 ![DisyLab Y2K 角色视觉项目](docs/assets/y2k-canvas-overview.png)
 
@@ -114,13 +114,13 @@ Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择
 | API 厂商模板 | 内置 GRS AI、APIYI、OpenAI、硅基流动名称与 Base URL，密钥不预填。 |
 | 后台生成路由 | 生图期间可切换画布、项目或 Agent 对话；结果会写回任务发起位置，删除等破坏性操作仍会被保护。 |
 | 系统图片粘贴 | 支持将系统剪贴板中的图片直接粘贴到画布，并与内部节点复制粘贴正确区分。 |
-| 完整项目包 | 以 `.disy` 导出/导入项目、多个画布、资产、文件夹、生成历史、输出历史和 Agent 会话；导出包不包含 API Key。 |
+| 完整项目包 | 以 `.disy` 导出/导入全部工作区或当前项目；包含画布、资产、文件夹、生成历史、输出历史和 Agent 会话，不包含 API Key。 |
 
-更完整的功能边界和版本信息见 [v0.3.0 版本功能与技术说明](docs/Disy-v0.3.0-版本功能与技术说明.md)。
+更完整的功能边界和版本信息见 [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)。
 
 ## 当前版本边界
 
-Disy v0.3.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
+Disy v1.0.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 
 - 账号注册、登录和用户权限。
 - 云端项目同步与多人实时协作。
@@ -144,7 +144,7 @@ Disy v0.3.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 | IndexedDB / localStorage / sessionStorage | 本地项目、资产、历史和会话密钥 |
 | Netlify | Web 体验版部署 |
 
-当前实际安装版本可查看 [版本功能与技术说明](docs/Disy-v0.3.0-版本功能与技术说明.md#3-技术栈与版本)。
+当前版本改动可查看 [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)。
 
 ## 快速开始
 
@@ -202,7 +202,7 @@ src/
 ├─ App.tsx             # 画布、节点、资产、历史和设置主界面
 ├─ imageApi.ts         # 模型、文本生成、图像生成与错误处理
 ├─ localDb.ts          # IndexedDB 项目、画布、会话与工作区存储
-├─ projectPackage.ts   # .disy 项目包导入导出与校验
+├─ workspaceBundle.ts  # .disy 二进制项目包、媒体去重与分段读写
 ├─ AgentPanel.tsx      # 右侧 Agent 对话、引用和确认生图面板
 ├─ store.ts            # Zustand 状态与 API 配置
 ├─ styles.css          # 核心样式
@@ -215,6 +215,7 @@ netlify.toml           # Netlify 构建与 SPA 回退配置
 
 ## 项目文档
 
+- [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)
 - [v0.3.0 版本功能与技术说明](docs/Disy-v0.3.0-版本功能与技术说明.md)
 
 ## Roadmap
@@ -248,6 +249,10 @@ npx netlify deploy --prod --dir=dist
 欢迎反馈使用体验、交互问题、模型兼容情况和创作需求。
 
 **小红书：Disy宇宙电波**
+
+**邮箱：ashhaveaniceday@gmail.com**
+
+如需测试 Key，请通过以上小红书账号或邮箱联系；请勿在公开 Issue、截图或聊天记录中发送 API Key。
 
 反馈问题时，建议附上：
 

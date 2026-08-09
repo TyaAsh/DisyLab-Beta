@@ -74,12 +74,12 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
-import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, renameWorkspaceProject, replaceWorkspace, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
-import { extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
+import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspace, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { getRequestedAgentPlanCount, messageExpectsImagePlans, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 type NodeKind = 'text' | 'image' | 'upload' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
@@ -191,7 +191,7 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
-const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement) => void>(() => undefined)
+const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
 const ActiveGenerationNodesContext = createContext<ReadonlySet<string>>(new Set())
 
 type NodeMenuState = {
@@ -200,6 +200,7 @@ type NodeMenuState = {
   flowX: number
   flowY: number
   connectionSourceId?: string
+  connectionDirection?: 'incoming' | 'outgoing'
 }
 
 type NodeContextMenuState = {
@@ -762,7 +763,7 @@ function getCanvasStylePresets(canvas: Pick<WorkspaceCanvas, 'styleReferenceName
       id: preset.id || `style-preset-${index + 1}`,
       name: preset.name?.trim() || `风格预设 ${index + 1}`,
       keyword: preset.keyword ?? '',
-      enabled: preset.enabled !== false,
+      enabled: preset.enabled === true,
       collapsed: Boolean(preset.collapsed),
       references: Array.isArray(preset.references) ? preset.references.slice(0, 5) : [],
     }))
@@ -780,7 +781,7 @@ function getCanvasStylePresets(canvas: Pick<WorkspaceCanvas, 'styleReferenceName
     id: 'default-style-preset',
     name: '默认风格',
     keyword: canvas.styleReferenceKeyword ?? 'Disy',
-    enabled: canvas.styleReferenceEnabled ?? true,
+    enabled: canvas.styleReferenceEnabled ?? false,
     collapsed: false,
     references,
   }]
@@ -1101,7 +1102,12 @@ const NodeCard = memo(function NodeCard({
         type="target"
         position={Position.Left}
         className="handle handle-target node-extension"
-        title="连接到节点"
+        title="引用该节点生成"
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          openExtensionMenu(id, event.currentTarget, 'incoming')
+        }}
       >
         <span className="extension-button extension-button-left" aria-hidden="true">
           <Plus size={18} strokeWidth={1.8} />
@@ -1111,12 +1117,11 @@ const NodeCard = memo(function NodeCard({
         type="source"
         position={Position.Right}
         className="handle handle-source node-extension"
-        title={data.kind === 'image' || data.kind === 'upload' ? '引用该图片生成' : '延伸节点'}
+        title="引用该节点生成"
         onClick={(event) => {
-          if (data.kind !== 'image' && data.kind !== 'upload') return
           event.preventDefault()
           event.stopPropagation()
-          openExtensionMenu(id, event.currentTarget)
+          openExtensionMenu(id, event.currentTarget, 'outgoing')
         }}
       >
         <span className="extension-button" aria-hidden="true">
@@ -1370,6 +1375,7 @@ function App() {
   const [transferProgress, setTransferProgress] = useState<string | null>(null)
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferDropActive, setTransferDropActive] = useState(false)
+  const [hasImportBackup, setHasImportBackup] = useState(false)
   const transferBusy = Boolean(transferProgress)
   const [showGrid, setShowGrid] = useState(true)
   const [canvasZoom, setCanvasZoom] = useState(1)
@@ -1427,7 +1433,7 @@ function App() {
     id: 'default-style-preset',
     name: '默认风格',
     keyword: 'Disy',
-    enabled: true,
+    enabled: false,
     collapsed: false,
     references: [],
   }])
@@ -2001,6 +2007,17 @@ function App() {
   }, [toastMessage, transferBusy])
 
   useEffect(() => {
+    if (!transferOpen) return
+    let cancelled = false
+    void loadWorkspaceImportBackup().then((backup) => {
+      if (!cancelled) setHasImportBackup(Boolean(backup))
+    }).catch(() => {
+      if (!cancelled) setHasImportBackup(false)
+    })
+    return () => { cancelled = true }
+  }, [transferOpen])
+
+  useEffect(() => {
     if (!canvasSwitcherOpen) return
     const closeCanvasSwitcher = (event: PointerEvent) => {
       const target = event.target
@@ -2380,12 +2397,13 @@ function App() {
     ])
 
     if (connectionSourceId && (kind === 'image' || kind === 'text')) {
+      const incoming = nodeMenu?.connectionDirection === 'incoming'
       setEdges((current) =>
         addEdge(
           {
             id: `${connectionSourceId}-${id}`,
-            source: connectionSourceId,
-            target: id,
+            source: incoming ? id : connectionSourceId,
+            target: incoming ? connectionSourceId : id,
             type: 'luminous',
             data: { referenceSelected: true },
           },
@@ -2445,13 +2463,13 @@ function App() {
     setNodeMenu({ x, y, flowX: flowPosition.x, flowY: flowPosition.y })
   }
 
-  const openNodeExtensionMenu = (nodeId: string, anchor: HTMLElement) => {
+  const openNodeExtensionMenu = (nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => {
     closeContextMenu()
     const anchorRect = anchor.getBoundingClientRect()
     const nodeRect = anchor.closest<HTMLElement>('.react-flow__node')?.getBoundingClientRect() ?? anchorRect
     const menuWidth = 238
     const menuHeight = 154
-    const openRight = anchorRect.right + menuWidth + 24 <= window.innerWidth
+    const openRight = direction === 'outgoing'
     const x = openRight
       ? anchorRect.right + 12
       : anchorRect.left - menuWidth - 12
@@ -2469,6 +2487,7 @@ function App() {
       flowX: flowPosition.x,
       flowY: flowPosition.y,
       connectionSourceId: nodeId,
+      connectionDirection: direction,
     })
   }
 
@@ -2874,7 +2893,11 @@ function App() {
   }
 
   const saveCanvasState = async (nameOverride = canvasName, silent = false) => {
-    const normalizedName = nameOverride.trim() || '未命名画布'
+    const normalizedName = makeUniqueWorkspaceName(
+      nameOverride,
+      workspaceCanvases.filter((canvas) => canvas.id !== activeCanvasId).map((canvas) => canvas.name),
+      '未命名画布',
+    )
     const primaryStylePreset = stylePresets.find((preset) => preset.enabled && preset.references.length)
       ?? stylePresets.find((preset) => preset.references.length)
       ?? stylePresets[0]
@@ -2889,7 +2912,7 @@ function App() {
         styleReferenceName: legacyStyleReferences[0]?.name ?? '',
         styleReferenceUrl: legacyStyleReferences[0]?.url,
         styleReferences: legacyStyleReferences,
-        styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+        styleReferenceEnabled: primaryStylePreset?.enabled ?? false,
         styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
         stylePresets,
         promptSuffix: projectPromptSuffix,
@@ -2916,7 +2939,7 @@ function App() {
         styleReferenceName: legacyStyleReferences[0]?.name ?? '',
         styleReferenceUrl: legacyStyleReferences[0]?.url,
         styleReferences: legacyStyleReferences,
-        styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+        styleReferenceEnabled: primaryStylePreset?.enabled ?? false,
         styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
         stylePresets,
         updatedAt: new Date().toISOString(),
@@ -2942,7 +2965,7 @@ function App() {
       styleReferenceName: legacyStyleReferences[0]?.name ?? '',
       styleReferenceUrl: legacyStyleReferences[0]?.url,
       styleReferences: legacyStyleReferences,
-      styleReferenceEnabled: primaryStylePreset?.enabled ?? true,
+      styleReferenceEnabled: primaryStylePreset?.enabled ?? false,
       styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
       stylePresets,
       promptSuffix: projectPromptSuffix,
@@ -3224,9 +3247,11 @@ function App() {
     setToastMessage('项目已删除')
   }
 
-  const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean }) => {
+  const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean; scope?: 'workspace' | 'project' }) => {
     const asBackup = Boolean(options?.asBackup)
     const manageProgress = options?.manageProgress ?? true
+    const scope = asBackup ? 'workspace' : options?.scope ?? 'workspace'
+    const exportingProject = scope === 'project'
     if (manageProgress) setTransferProgress(asBackup ? '正在备份当前项目…' : '正在打包完整项目…')
     try {
       setTransferProgress(asBackup ? '正在保存当前工作区…' : '正在保存画布与对话…')
@@ -3253,9 +3278,32 @@ function App() {
         },
       })
 
-      setTransferProgress(asBackup ? '正在打包备份文件…' : '正在收集本机图片…')
+      // Mutate the export snapshot in place so huge data-URLs are replaced with
+      // media refs before JSON.stringify — never clone the fat graph first.
+      setTransferProgress(asBackup ? '正在写入备份包…' : '正在打包项目数据…')
+      const snapshot = await exportWorkspaceSnapshot()
+      if (exportingProject) {
+        const project = snapshot.projects.find((item) => item.id === activeProjectId)
+        if (!project) throw new Error('当前项目不存在，无法导出')
+        snapshot.projects = [project]
+        snapshot.canvases = snapshot.canvases.filter((canvas) => canvas.projectId === activeProjectId)
+        snapshot.agentSessions = snapshot.agentSessions.filter((session) => session.projectId === activeProjectId)
+        const belongsToCurrentProject = (value: unknown) => {
+          if (!value || typeof value !== 'object') return false
+          const projectId = (value as Record<string, unknown>).projectId
+          return projectId === activeProjectId || (!projectId && activeProjectId === CURRENT_PROJECT_ID)
+        }
+        snapshot.generationHistory = snapshot.generationHistory.filter(belongsToCurrentProject)
+        snapshot.outputHistory = snapshot.outputHistory.filter(belongsToCurrentProject)
+        // Assets and folders are currently shared across projects and have no
+        // projectId. Keep them so a scoped export never drops source material.
+      }
+      const manifest = snapshot as unknown as Record<string, unknown>
+      delete manifest.historyMedia
+      const referencedMediaIds = collectReferencedMediaIds(manifest)
       const media = new Map<string, BundleMediaEntry>()
       for (const record of await listHistoryMedia()) {
+        if (!referencedMediaIds.has(record.id)) continue
         media.set(record.id, {
           id: record.id,
           blob: record.blob,
@@ -3264,25 +3312,30 @@ function App() {
           kind: 'history',
         })
       }
-
-      // Mutate the export snapshot in place so huge data-URLs are replaced with
-      // media refs before JSON.stringify — never clone the fat graph first.
-      setTransferProgress(asBackup ? '正在写入备份包…' : '正在打包项目数据…')
-      const snapshot = await exportWorkspaceSnapshot()
-      const manifest = snapshot as unknown as Record<string, unknown>
-      delete manifest.historyMedia
       const skipped = { count: 0 }
       await extractMediaIntoBundle(manifest, media, { skipped })
+      if (skipped.count) {
+        throw new Error(`有 ${skipped.count} 张图片无法归档。为避免生成缺图项目包，已取消导出；请先修复失效图片后重试。`)
+      }
+      const missingMediaIds = [...collectReferencedMediaIds(manifest)].filter((id) => !media.has(id))
+      if (missingMediaIds.length) {
+        throw new Error(`有 ${missingMediaIds.length} 张本机图片资料缺失。为避免生成缺图项目包，已取消导出。`)
+      }
 
       setTransferProgress(asBackup ? '正在生成备份下载…' : '正在生成下载文件…')
       const bundle = await packWorkspaceBundle(manifest, media.values())
       const projectCount = Array.isArray(manifest.projects) ? manifest.projects.length : 0
       const canvasCount = Array.isArray(manifest.canvases) ? manifest.canvases.length : 0
-      triggerBlobDownload(bundle, `DisyLab-完整项目-${new Date().toISOString().slice(0, 10)}.disy`)
+      const date = new Date().toISOString().slice(0, 10)
+      const safeProjectName = projectName.trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || '当前项目'
+      const fileName = exportingProject
+        ? `DisyLab-${safeProjectName}-${date}.disy`
+        : `DisyLab-完整工作区-${date}.disy`
+      triggerBlobDownload(bundle, fileName)
       const skipNote = skipped.count ? `，${skipped.count} 张外链未能打包` : ''
       const successMessage = asBackup
         ? `备份已开始下载：${projectCount} 个项目、${canvasCount} 张画布`
-        : `导出成功：${projectCount} 个项目、${canvasCount} 张画布、${media.size} 张图片${skipNote}（不含 API Key）`
+        : `导出成功：${projectCount} 个项目、${canvasCount} 张画布、${media.size} 张图片，${(bundle.size / 1024 / 1024).toFixed(1)} MB${skipNote}（不含 API Key）`
       if (manageProgress) {
         setTransferProgress(null)
         setToastMessage(successMessage)
@@ -3302,6 +3355,10 @@ function App() {
     if (isWorkspaceBundle(header)) {
       const unpacked = await unpackWorkspaceBundle(file)
       const snapshot = unpacked.manifest
+      const missingMediaIds = [...collectReferencedMediaIds(snapshot)].filter((id) => !unpacked.media.has(id))
+      if (missingMediaIds.length) {
+        throw new Error(`项目包缺少 ${missingMediaIds.length} 张图片或媒体资料，已停止导入，当前工作区未改变。`)
+      }
       delete snapshot.historyMedia
       // History blobs stay in IndexedDB; only inflate non-history refs for canvas/assets.
       const historyIds = new Set(
@@ -3334,15 +3391,20 @@ function App() {
           fileName: entry.fileName || 'image.png',
           createdAt: entry.createdAt || new Date().toISOString(),
         }))
+      validateWorkspaceSnapshot(snapshot)
       return { snapshot, historyMediaRecords }
     }
 
+    if (file.size > 512 * 1024 * 1024) {
+      throw new Error('旧版 JSON 项目包超过 512 MB，无法安全导入；请先使用新版 DisyLab 重新导出。')
+    }
     let snapshot: unknown
     try {
       snapshot = JSON.parse(await file.text()) as unknown
     } catch {
       throw new Error('项目包不是有效的 DisyLab .disy 文件')
     }
+    validateWorkspaceSnapshot(snapshot)
     return { snapshot, historyMediaRecords: undefined }
   }
 
@@ -3358,14 +3420,25 @@ function App() {
     setTransferProgress('正在读取项目包…')
     try {
       const parsed = await parseWorkspaceImportFile(file)
-      if (!window.confirm('导入会替换当前本机工作区。确认后将先自动导出一份完整备份，再执行导入。')) {
-        setTransferProgress(null)
-        return
+      const currentSnapshot = await exportWorkspaceSnapshot()
+      const hasLiveContent = nodes.length > 0 || edges.length > 0 || savedAssets.length > 0 || generationHistory.length > 0 || outputHistory.length > 0 || agentMessages.length > 0 || agentPlans.length > 0
+      let recoverySnapshot: typeof currentSnapshot | undefined
+      let recoveryHistoryMedia: Awaited<ReturnType<typeof listHistoryMedia>> | undefined
+      if (workspaceSnapshotHasContent(currentSnapshot) || hasLiveContent) {
+        let shouldBackup = window.confirm('检测到当前工作区已有内容。是否先导出完整备份再导入？\n\n选择“确定”备份；选择“取消”表示暂不备份。')
+        if (!shouldBackup) {
+          shouldBackup = window.confirm('再次确认：是否改为先备份？\n\n选择“确定”将备份；再次选择“取消”才会不备份并直接覆盖当前内容。')
+        }
+        if (shouldBackup) {
+          setTransferProgress('正在备份当前项目…')
+          await exportWholeWorkspace({ asBackup: true, manageProgress: false })
+          recoverySnapshot = await exportWorkspaceSnapshot()
+          recoveryHistoryMedia = await listHistoryMedia()
+        }
       }
-      setTransferProgress('正在备份当前项目…')
-      await exportWholeWorkspace({ asBackup: true, manageProgress: false })
       setTransferProgress('正在写入导入数据…')
-      await replaceWorkspace(parsed.snapshot, parsed.historyMediaRecords)
+      await replaceWorkspace(parsed.snapshot, parsed.historyMediaRecords, recoverySnapshot ? { recoverySnapshot, recoveryHistoryMedia } : undefined)
+      if (recoverySnapshot) setHasImportBackup(true)
       const projects = await listWorkspaceProjects()
       if (!projects.length) throw new Error('导入包没有项目')
       setWorkspaceProjects(projects)
@@ -3400,6 +3473,19 @@ function App() {
     } catch (error) {
       setTransferProgress(null)
       throw error
+    }
+  }
+
+  const restoreLastImportBackup = async () => {
+    if (transferBusy || !hasImportBackup) return
+    if (!window.confirm('确认恢复最近一次导入前的完整工作区？当前内容会被替换。')) return
+    setTransferProgress('正在恢复导入前版本…')
+    try {
+      await restoreWorkspaceImportBackup()
+      window.location.reload()
+    } catch (error) {
+      setTransferProgress(null)
+      setToastMessage(error instanceof Error ? error.message : '恢复导入前版本失败')
     }
   }
 
@@ -4522,6 +4608,13 @@ function App() {
     }))
     const invokedStyleReferences = styleInvocation.references.map((reference) => ({ ...reference }))
     const styleInvocationWords = invokedStylePresets.map((preset) => preset.keyword)
+    const explicitPlanCount = getRequestedAgentPlanCount(invocationText)
+    if (explicitPlanCount !== null && explicitPlanCount > 20) {
+      setToastMessage('单次最多提供 20 个独立方案，请减少方案数量后重试')
+      return
+    }
+    const requestedPlanCount = explicitPlanCount ?? 3
+    const expectsImagePlans = messageExpectsImagePlans(invocationText)
     const availableStyleKeywords = stylePresets
       .filter((preset) => preset.enabled && preset.references.length && preset.keyword.trim())
       .map((preset) => `${preset.name}：“${preset.keyword.trim()}”`)
@@ -4533,12 +4626,27 @@ function App() {
       const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
       const agentReferenceGuide = buildNumberedReferenceGuide(agentReferences)
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。如果只需一个方向，imagePlans 也只放一项；如果你在 reply 中提出方案一、方案二、方案三等多个方向，必须在 imagePlans 中一一对应拆成独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
-      const raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
-      const parsed = parseAgentReply(raw)
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；未明确数量时默认三个方案。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
+      let parsed = parseAgentReply(raw)
+      let parsedPlans = parsed.imagePlans ?? (parsed.imagePlan ? [parsed.imagePlan] : [])
+      if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
+        raw = await generateRemoteText(
+          { baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id },
+          `${instruction}\n\n你上一次返回了 ${parsedPlans.length} 个方案，数量不符合要求。请重新返回恰好 ${requestedPlanCount} 个彼此独立的 imagePlans。`,
+          { referenceImages: images },
+        )
+        const corrected = parseAgentReply(raw)
+        const correctedPlans = corrected.imagePlans ?? (corrected.imagePlan ? [corrected.imagePlan] : [])
+        parsed = corrected
+        parsedPlans = correctedPlans
+      }
+      if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
+        throw new Error(`Agent 未能返回要求的 ${requestedPlanCount} 个方案，请重试一次`)
+      }
       const assistantMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: parsed.reply || '我已经整理好了。', createdAt: new Date().toISOString() }
       setAgentMessages((current) => [...current, assistantMessage])
-      const parsedPlans = parsed.imagePlans ?? (parsed.imagePlan ? [parsed.imagePlan] : [])
+      parsedPlans = parsedPlans.slice(0, requestedPlanCount)
       if (parsedPlans.length) {
         const [imageConnectionId, imageModelId] = agentImageModelKey.split('::')
         const createdAt = new Date().toISOString()
@@ -5942,7 +6050,7 @@ function App() {
                         id: `style-preset-${crypto.randomUUID()}`,
                         name: `风格预设 ${current.length + 1}`,
                         keyword: '',
-                        enabled: true,
+                        enabled: false,
                         collapsed: false,
                         references: [],
                       }])}
@@ -6085,7 +6193,7 @@ function App() {
                 if (preset.id !== target.presetId) return preset
                 return {
                   ...preset,
-                  enabled: target.referenceId ? preset.enabled : true,
+                  enabled: preset.enabled,
                   references: target.referenceId
                     ? preset.references.map((reference) => reference.id === target.referenceId ? { ...uploaded[0], id: reference.id } : reference)
                     : [...preset.references, ...uploaded].slice(0, 5),
@@ -6112,12 +6220,10 @@ function App() {
           <button
             type="button"
             className="chrome-icon-button"
-            aria-label="导出完整工作区"
-            title="导出当前工作区（含全部画布、生成历史、资产）"
+            aria-label="导出项目"
+            title="选择导出全部工作区或当前项目"
             disabled={transferBusy}
-            onClick={() => void exportWholeWorkspace().catch((error) => {
-              if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
-            })}
+            onClick={() => setTransferOpen(true)}
           >
             <Download size={16} />
           </button>
@@ -8000,12 +8106,13 @@ function App() {
                 </button>
                 <button
                   disabled={transferBusy}
-                  onClick={() => void exportWholeWorkspace().catch((error) => {
-                    if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
-                  })}
+                  onClick={() => {
+                    setProjectOpen(false)
+                    setTransferOpen(true)
+                  }}
                 >
                   <Download size={15} />
-                  完整导出
+                  选择导出
                 </button>
                 <label className="card-scale-control project-card-scale" title="调整项目卡片大小"><Grid3X3 size={14} /><input type="range" min="0.8" max="1.35" step="0.05" value={projectCardScale} onChange={(event) => setProjectCardScale(Number(event.target.value))} /></label>
                 <button className="project-create-button" onClick={() => void createNewProject()}>
@@ -8141,24 +8248,58 @@ function App() {
                 <Upload size={28} />
                 <strong>导入项目或画布备份</strong>
                 <span>拖拽 `.disy` / `.json` 到此处，或点击选择文件</span>
-                <em>导入会先自动导出一份当前备份，再替换本机工作区</em>
+                <em>空工作区直接导入；已有内容时可选择备份，连续两次拒绝备份才会直接覆盖</em>
               </button>
 
-              <div className="transfer-export-card">
+              {hasImportBackup && <div className="transfer-export-card">
                 <div>
-                  <strong>导出完整工作区</strong>
-                  <span>包含全部项目与画布、生成历史、资产库；适合换机或备份</span>
+                  <strong>恢复导入前版本</strong>
+                  <span>本机保留了最近一次导入前的完整恢复点，可一键还原项目、画布、历史与图片</span>
                 </div>
                 <button
                   type="button"
                   className="transfer-export-button"
                   disabled={transferBusy}
-                  onClick={() => void exportWholeWorkspace().then(() => setTransferOpen(false)).catch((error) => {
+                  onClick={() => void restoreLastImportBackup()}
+                >
+                  <History size={16} />
+                  立即恢复
+                </button>
+              </div>}
+
+              <div className="transfer-export-card">
+                <div>
+                  <strong>导出全部工作区</strong>
+                  <span>包含全部项目、画布、历史、会话与资产库；适合完整备份或换机</span>
+                </div>
+                <button
+                  type="button"
+                  className="transfer-export-button"
+                  disabled={transferBusy}
+                  onClick={() => void exportWholeWorkspace({ scope: 'workspace' }).then(() => setTransferOpen(false)).catch((error) => {
                     if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
                   })}
                 >
                   <Download size={16} />
-                  立即导出
+                  导出全部
+                </button>
+              </div>
+
+              <div className="transfer-export-card">
+                <div>
+                  <strong>仅导出当前项目</strong>
+                  <span>包含“{projectName}”及其全部画布、历史、会话与共享资产资料</span>
+                </div>
+                <button
+                  type="button"
+                  className="transfer-export-button"
+                  disabled={transferBusy}
+                  onClick={() => void exportWholeWorkspace({ scope: 'project' }).then(() => setTransferOpen(false)).catch((error) => {
+                    if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '当前项目导出失败')
+                  })}
+                >
+                  <Download size={16} />
+                  导出当前
                 </button>
               </div>
             </motion.section>
