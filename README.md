@@ -216,7 +216,6 @@ netlify.toml           # Netlify 构建与 SPA 回退配置
 ## 项目文档
 
 - [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)
-- [v0.3.0 版本功能与技术说明](docs/Disy-v0.3.0-版本功能与技术说明.md)
 
 ## Roadmap
 
