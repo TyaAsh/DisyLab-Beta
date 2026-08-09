@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://disy-infinite.netlify.app">在线体验</a>
+  <a href="https://disylab.netlify.app">在线体验</a>
   ·
   <a href="https://ashhaveaniceday.github.io/Disy-Infinite/">项目官网</a>
   ·
@@ -40,7 +40,7 @@
 
 ## 在线体验
 
-访问：[https://disy-infinite.netlify.app](https://disy-infinite.netlify.app)
+访问：[https://disylab.netlify.app](https://disylab.netlify.app)
 
 体验版适合测试画布、节点、连线、资产库和生成工作流。首次使用 AI 生成功能前，需要在右上角 API 设置中填写自己的接口地址和 API Key。
 
