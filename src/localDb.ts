@@ -825,3 +825,139 @@ export async function replaceWorkspace(
   })
   return snapshot
 }
+
+function remapImportedMediaIds(value: unknown, mediaIdMap: Map<string, string>): void {
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    value.forEach((item) => remapImportedMediaIds(item, mediaIdMap))
+    return
+  }
+  const record = value as Record<string, unknown>
+  Object.entries(record).forEach(([key, item]) => {
+    if (typeof item === 'string' && mediaIdMap.has(item)) record[key] = mediaIdMap.get(item)!
+    else remapImportedMediaIds(item, mediaIdMap)
+  })
+}
+
+function prepareImportedProjectData(snapshotValue: unknown, historyMediaRecords?: HistoryMediaRecord[]) {
+  validateWorkspaceSnapshot(snapshotValue)
+  const snapshot = structuredClone(removeSecrets(snapshotValue)) as WorkspaceSnapshot
+  const timestamp = now()
+  const projectIdMap = new Map(snapshot.projects.map((project) => [project.id, crypto.randomUUID()]))
+  const canvasIdMap = new Map(snapshot.canvases.map((canvas) => [canvas.id, crypto.randomUUID()]))
+  const mediaIdMap = new Map((historyMediaRecords ?? []).map((record) => [record.id, `history-media-${crypto.randomUUID()}`]))
+  remapImportedMediaIds(snapshot, mediaIdMap)
+
+  const projects = snapshot.projects.map((project) => ({
+    ...project,
+    id: projectIdMap.get(project.id)!,
+    activeCanvasId: canvasIdMap.get(project.activeCanvasId)!,
+    canvasIds: project.canvasIds.map((id) => canvasIdMap.get(id)!),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }))
+  const canvases = snapshot.canvases.map((canvas) => ({
+    ...canvas,
+    id: canvasIdMap.get(canvas.id)!,
+    projectId: projectIdMap.get(canvas.projectId)!,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }))
+  const sessions = snapshot.agentSessions
+    .filter((session) => projectIdMap.has(session.projectId) && canvasIdMap.has(session.canvasId))
+    .map((session) => ({
+      ...session,
+      id: crypto.randomUUID(),
+      projectId: projectIdMap.get(session.projectId)!,
+      canvasId: canvasIdMap.get(session.canvasId)!,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }))
+  const historyMedia = (historyMediaRecords ?? []).map((record) => ({
+    ...record,
+    id: mediaIdMap.get(record.id)!,
+  }))
+  return { projects, canvases, sessions, historyMedia }
+}
+
+/** Append imported packages as independent projects without touching existing workspace data. */
+export async function appendWorkspaceProjects(snapshotValue: unknown, historyMediaRecords?: HistoryMediaRecord[]) {
+  const imported = prepareImportedProjectData(snapshotValue, historyMediaRecords)
+  const existingProjects = await listWorkspaceProjects()
+  const usedNames = existingProjects.map((project) => project.name)
+  imported.projects.forEach((project) => {
+    project.name = makeUniqueWorkspaceName(project.name, usedNames, '导入项目')
+    usedNames.push(project.name)
+  })
+  await runTransaction<void>([WORKSPACE_PROJECT_STORE, CANVAS_STORE, AGENT_SESSION_STORE, HISTORY_MEDIA_STORE], 'readwrite', (transaction) => {
+    const projects = transaction.objectStore(WORKSPACE_PROJECT_STORE)
+    const canvases = transaction.objectStore(CANVAS_STORE)
+    const sessions = transaction.objectStore(AGENT_SESSION_STORE)
+    const historyMedia = transaction.objectStore(HISTORY_MEDIA_STORE)
+    imported.projects.forEach((project) => projects.put(project))
+    imported.canvases.forEach((canvas) => canvases.put(canvas))
+    imported.sessions.forEach((session) => sessions.put(session))
+    imported.historyMedia.forEach((record) => historyMedia.put(record))
+  })
+  return imported.projects
+}
+
+/** Replace only one open project; every other project and global workspace data is preserved. */
+export async function replaceWorkspaceProject(
+  targetProjectId: string,
+  snapshotValue: unknown,
+  historyMediaRecords?: HistoryMediaRecord[],
+  options?: { recoverySnapshot?: WorkspaceSnapshot; recoveryHistoryMedia?: HistoryMediaRecord[] },
+) {
+  const target = await loadWorkspaceProject(targetProjectId)
+  if (!target) throw new Error('当前项目不存在')
+  const imported = prepareImportedProjectData(snapshotValue, historyMediaRecords)
+  const sourceProject = imported.projects[0]
+  if (!sourceProject) throw new Error('导入包没有项目')
+  const sourceCanvases = imported.canvases.filter((canvas) => canvas.projectId === sourceProject.id)
+  if (!sourceCanvases.length) throw new Error('导入项目没有画布')
+  const sourceCanvasIds = new Set(sourceCanvases.map((canvas) => canvas.id))
+  const nextProject: WorkspaceProject = {
+    ...sourceProject,
+    id: targetProjectId,
+    name: sourceProject.name || target.name,
+    createdAt: target.createdAt,
+    updatedAt: now(),
+  }
+  const nextCanvases = sourceCanvases.map((canvas) => ({ ...canvas, projectId: targetProjectId }))
+  const nextSessions = imported.sessions
+    .filter((session) => sourceCanvasIds.has(session.canvasId))
+    .map((session) => ({ ...session, projectId: targetProjectId }))
+  const stores = [WORKSPACE_PROJECT_STORE, CANVAS_STORE, AGENT_SESSION_STORE, HISTORY_MEDIA_STORE, IMPORT_BACKUP_STORE]
+  await runTransaction<void>(stores, 'readwrite', (transaction) => {
+    const canvases = transaction.objectStore(CANVAS_STORE)
+    const sessions = transaction.objectStore(AGENT_SESSION_STORE)
+    const oldCanvases = canvases.index('projectId').openKeyCursor(IDBKeyRange.only(targetProjectId))
+    oldCanvases.onsuccess = () => {
+      const cursor = oldCanvases.result
+      if (!cursor) return
+      canvases.delete(cursor.primaryKey)
+      cursor.continue()
+    }
+    const oldSessions = sessions.index('projectId').openKeyCursor(IDBKeyRange.only(targetProjectId))
+    oldSessions.onsuccess = () => {
+      const cursor = oldSessions.result
+      if (!cursor) return
+      sessions.delete(cursor.primaryKey)
+      cursor.continue()
+    }
+    transaction.objectStore(WORKSPACE_PROJECT_STORE).put(nextProject)
+    nextCanvases.forEach((canvas) => canvases.put(canvas))
+    nextSessions.forEach((session) => sessions.put(session))
+    imported.historyMedia.forEach((record) => transaction.objectStore(HISTORY_MEDIA_STORE).put(record))
+    if (options?.recoverySnapshot) {
+      transaction.objectStore(IMPORT_BACKUP_STORE).put({
+        id: 'latest',
+        createdAt: now(),
+        snapshot: removeSecrets(options.recoverySnapshot) as WorkspaceSnapshot,
+        historyMedia: options.recoveryHistoryMedia ?? [],
+      } satisfies WorkspaceImportBackup)
+    }
+  })
+  return { project: nextProject, canvases: nextCanvases }
+}

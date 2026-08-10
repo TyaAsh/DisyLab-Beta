@@ -1,11 +1,59 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { ArrowUp, Check, ChevronDown, ChevronsUp, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
 import type { AgentImagePlan, AgentImageReference, AgentMessage } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
 export type AgentConversationOption = { id: string; title: string; updatedAt: string }
 
-type SelectOption = { value: string; label: string; detail?: string }
+type ModelBrand = 'openai' | 'gemini' | 'claude' | 'doubao' | 'jimeng' | 'google' | 'generic'
+type SelectOption = { value: string; label: string; brand?: ModelBrand }
+
+const brandMeta: Record<ModelBrand, { label: string; glyph: string; color: string; background: string }> = {
+  openai: { label: 'OpenAI', glyph: '◎', color: '#e8f3ef', background: 'rgba(90, 145, 128, .2)' },
+  gemini: { label: 'Gemini', glyph: '✦', color: '#9fc5ff', background: 'rgba(68, 119, 216, .2)' },
+  claude: { label: 'Claude', glyph: 'C', color: '#e8b994', background: 'rgba(181, 102, 55, .2)' },
+  doubao: { label: '豆包', glyph: '豆', color: '#a9b8ff', background: 'rgba(92, 104, 224, .2)' },
+  jimeng: { label: '即梦', glyph: '即', color: '#f1a8dc', background: 'rgba(203, 72, 161, .2)' },
+  google: { label: 'Google', glyph: 'G', color: '#9fcbff', background: 'rgba(65, 133, 221, .2)' },
+  generic: { label: 'AI 模型', glyph: 'AI', color: '#b8c1cb', background: 'rgba(126, 139, 153, .16)' },
+}
+
+function getModelBrand(name: string): ModelBrand {
+  const normalized = name.toLowerCase().replace(/[\s_-]+/g, '')
+  if (/gpt|openai|dall|sora/.test(normalized)) return 'openai'
+  if (/gemini/.test(normalized)) return 'gemini'
+  if (/claude|anthropic/.test(normalized)) return 'claude'
+  if (/即梦|jimeng|dreamina|seedream|seedance/.test(normalized)) return 'jimeng'
+  if (/豆包|doubao/.test(normalized)) return 'doubao'
+  if (/nanobanana|imagen|google/.test(normalized)) return 'google'
+  return 'generic'
+}
+
+const brandMarkStyle: CSSProperties = {
+  width: 20,
+  height: 20,
+  flex: '0 0 20px',
+  borderRadius: 7,
+  display: 'inline-grid',
+  placeItems: 'center',
+  fontSize: 8,
+  fontWeight: 800,
+  lineHeight: 1,
+  letterSpacing: '-.02em',
+}
+
+function ModelBrandMark({ brand }: { brand: ModelBrand }) {
+  const meta = brandMeta[brand]
+  return (
+    <span
+      aria-hidden="true"
+      title={meta.label}
+      style={{ ...brandMarkStyle, color: meta.color, background: meta.background }}
+    >
+      {meta.glyph}
+    </span>
+  )
+}
 
 function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, className = '' }: {
   ariaLabel: string
@@ -18,6 +66,8 @@ function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, c
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuId = useId()
   const selected = options.find((option) => option.value === value)
 
   useEffect(() => {
@@ -29,6 +79,22 @@ function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, c
     return () => document.removeEventListener('pointerdown', close)
   }, [open])
 
+  useEffect(() => {
+    if (!open) return
+    const optionButtons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')
+    const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value))
+    window.requestAnimationFrame(() => optionButtons?.[selectedIndex]?.focus())
+  }, [open, value])
+
+  const moveOptionFocus = (direction: 1 | -1) => {
+    const optionButtons = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [])]
+    if (!optionButtons.length) return
+    const currentIndex = optionButtons.indexOf(document.activeElement as HTMLButtonElement)
+    optionButtons[(currentIndex + direction + optionButtons.length) % optionButtons.length]?.focus()
+  }
+
+  const selectedBrand = selected?.brand
+
   return (
     <div ref={rootRef} className={`agent-custom-select ${className} ${open ? 'is-open' : ''}`}>
       <button
@@ -37,14 +103,43 @@ function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, c
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
         onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            setOpen(true)
+          }
+        }}
       >
-        <span className="agent-select-icon">{icon}</span>
+        <span className="agent-select-icon" style={{ width: 20, display: 'inline-grid', placeItems: 'center' }}>
+          {selectedBrand ? <ModelBrandMark brand={selectedBrand} /> : icon}
+        </span>
         <span className={`agent-select-value ${selected ? '' : 'is-placeholder'}`}>{selected?.label ?? placeholder}</span>
         <ChevronDown size={14} className="agent-select-chevron" />
       </button>
       {open && (
-        <div className="agent-select-menu" role="listbox" aria-label={`${ariaLabel}选项`}>
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="agent-select-menu"
+          role="listbox"
+          aria-label={`${ariaLabel}选项`}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setOpen(false)
+              rootRef.current?.querySelector<HTMLButtonElement>('.agent-select-trigger')?.focus()
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              moveOptionFocus(event.key === 'ArrowDown' ? 1 : -1)
+            } else if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault()
+              const optionButtons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')
+              optionButtons?.[event.key === 'Home' ? 0 : optionButtons.length - 1]?.focus()
+            }
+          }}
+        >
           {options.length ? options.map((option) => (
             <button
               type="button"
@@ -55,9 +150,13 @@ function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, c
               onClick={() => {
                 onChange(option.value)
                 setOpen(false)
+                window.requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>('.agent-select-trigger')?.focus())
               }}
             >
-              <span><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
+              <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {option.brand && <ModelBrandMark brand={option.brand} />}
+                <strong style={{ minWidth: 0 }}>{option.label}</strong>
+              </span>
               {option.value === value && <Check size={14} />}
             </button>
           )) : <p>暂无可用选项</p>}
@@ -82,13 +181,17 @@ type Props = {
   detailOptions: SelectOption[]
   textModelKey: string
   imageModelKey: string
+  imageDefaults: { aspectRatio: string; resolution: string; detail: string; count: number }
   busy: boolean
+  onStop: () => void
   onClose: () => void
   onNewConversation: () => void
   onDeleteConversation: () => void
   onSelectConversation: (id: string) => void
   onTextModelChange: (key: string) => void
   onImageModelChange: (key: string) => void
+  onImageDefaultsChange: (patch: Partial<{ aspectRatio: string; resolution: string; detail: string; count: number }>) => void
+  onVideoUnavailable: () => void
   onReferencesChange: (references: AgentImageReference[]) => void
   onCreateUploadedReference: (reference: Omit<AgentImageReference, 'nodeId'>) => AgentImageReference
   onPendingReferenceConsumed: () => void
@@ -103,10 +206,12 @@ type Props = {
 
 export function AgentPanel(props: Props) {
   const [mentionOpen, setMentionOpen] = useState(false)
-  const [offscreenReadyIds, setOffscreenReadyIds] = useState<string[]>([])
+  const [offscreenActionableIds, setOffscreenActionableIds] = useState<string[]>([])
   const [highlightPlanId, setHighlightPlanId] = useState<string | null>(null)
   const [activeReadyPlanId, setActiveReadyPlanId] = useState<string | null>(null)
-  const [parametersOpen, setParametersOpen] = useState(false)
+  const [imageSettingsOpen, setImageSettingsOpen] = useState(false)
+  const [mediaKind, setMediaKind] = useState<'choose' | 'image'>('choose')
+  const [imageModelChosen, setImageModelChosen] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
@@ -114,10 +219,13 @@ export function AgentPanel(props: Props) {
   const pinnedToBottomRef = useRef(true)
   const highlightTimerRef = useRef<number | null>(null)
   const savedRangeRef = useRef<Range | null>(null)
-  const parameterToolRef = useRef<HTMLDivElement>(null)
   const readyPlanIdsRef = useRef<string[]>([])
   const readyPlans = props.plans.filter((plan) => plan.status === 'ready')
   const activeReadyPlan = readyPlans.find((plan) => plan.id === activeReadyPlanId) ?? readyPlans[readyPlans.length - 1]
+
+  useEffect(() => {
+    if (!props.imageModelKey) setImageSettingsOpen(false)
+  }, [props.imageModelKey])
 
   useEffect(() => {
     const previousIds = readyPlanIdsRef.current
@@ -126,28 +234,12 @@ export function AgentPanel(props: Props) {
     readyPlanIdsRef.current = nextIds
     if (!readyPlans.length) {
       setActiveReadyPlanId(null)
-      setParametersOpen(false)
       return
     }
     if (newestAddedId || !readyPlans.some((plan) => plan.id === activeReadyPlanId)) {
       setActiveReadyPlanId(newestAddedId ?? readyPlans[readyPlans.length - 1].id)
     }
   }, [activeReadyPlanId, props.plans])
-  useEffect(() => {
-    if (!parametersOpen) return
-    const closeOnOutside = (event: PointerEvent) => {
-      if (!parameterToolRef.current?.contains(event.target as Node)) setParametersOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setParametersOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutside)
-    window.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutside)
-      window.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [parametersOpen])
 
   const getEditorText = () => {
     const editor = editorRef.current
@@ -158,14 +250,24 @@ export function AgentPanel(props: Props) {
       const reference = props.references.find((item) => item.nodeId === id)
       chip.replaceWith(document.createTextNode(reference ? ` @${reference.name} ` : ' '))
     })
-    return clone.innerText.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+    return clone.innerText
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\t\f\v ]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
   }
   const getInvocationText = () => {
     const editor = editorRef.current
     if (!editor) return ''
     const clone = editor.cloneNode(true) as HTMLElement
     clone.querySelectorAll('.agent-inline-reference').forEach((chip) => chip.replaceWith(document.createTextNode(' ')))
-    return clone.innerText.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+    return clone.innerText
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\t\f\v ]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
   }
   const rememberSelection = () => {
     const selection = window.getSelection()
@@ -187,6 +289,34 @@ export function AgentPanel(props: Props) {
     range.selectNodeContents(editor!)
     range.collapse(false)
     selection.addRange(range)
+  }
+  const insertPlainTextAtSelection = (text: string) => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection) return
+
+    const range = selection.rangeCount && editor.contains(selection.anchorNode)
+      ? selection.getRangeAt(0)
+      : (() => {
+          const fallback = document.createRange()
+          fallback.selectNodeContents(editor)
+          fallback.collapse(false)
+          return fallback
+        })()
+
+    range.deleteContents()
+    const lines = text.replace(/\r\n?/g, '\n').split('\n')
+    const fragment = document.createDocumentFragment()
+    lines.forEach((line, index) => {
+      if (index) fragment.append(document.createElement('br'))
+      if (line) fragment.append(document.createTextNode(line))
+    })
+    if (!text) fragment.append(document.createTextNode(''))
+    range.insertNode(fragment)
+    range.collapse(false)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    savedRangeRef.current = range.cloneRange()
   }
   const createChip = (reference: AgentImageReference) => {
     const chip = document.createElement('span')
@@ -279,7 +409,7 @@ export function AgentPanel(props: Props) {
       pinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 72
       const bounds = container.getBoundingClientRect()
       const hidden = props.plans
-        .filter((plan) => plan.status === 'ready')
+        .filter((plan) => plan.status === 'ready' || plan.status === 'proposed')
         .filter((plan) => {
           const element = planRefs.current.get(plan.id)
           if (!element) return true
@@ -287,7 +417,7 @@ export function AgentPanel(props: Props) {
           return rect.bottom <= bounds.top + 6 || rect.top >= bounds.bottom - 6
         })
         .map((plan) => plan.id)
-      setOffscreenReadyIds((current) => current.length === hidden.length && current.every((id, index) => id === hidden[index]) ? current : hidden)
+      setOffscreenActionableIds((current) => current.length === hidden.length && current.every((id, index) => id === hidden[index]) ? current : hidden)
     }
     const frame = window.requestAnimationFrame(update)
     const observer = new ResizeObserver(update)
@@ -312,9 +442,9 @@ export function AgentPanel(props: Props) {
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
   }, [])
   const locatePendingPlan = () => {
-    const planId = offscreenReadyIds[0]
+    const planId = offscreenActionableIds[0]
     if (!planId) return
-    setActiveReadyPlanId(planId)
+    if (props.plans.find((plan) => plan.id === planId)?.status === 'ready') setActiveReadyPlanId(planId)
     planRefs.current.get(planId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     setHighlightPlanId(planId)
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
@@ -322,7 +452,7 @@ export function AgentPanel(props: Props) {
   }
   const submit = () => {
     const value = getEditorText()
-    if (!value || props.busy) return
+    if (!value) return
     props.onSend(value, getInvocationText())
     if (editorRef.current) editorRef.current.innerHTML = ''
     setMentionOpen(false)
@@ -365,7 +495,6 @@ export function AgentPanel(props: Props) {
       >
         <header><span><ImagePlus size={15} />图像生成确认</span><em>{statusLabel}</em></header>
         <textarea value={plan.prompt} disabled={disabled} onChange={(event) => props.onPlanChange(plan.id, { prompt: event.target.value })} aria-label="编辑图像方案提示词" />
-        <div className="agent-plan-summary"><SlidersHorizontal size={12} />{plan.aspectRatio} · {plan.resolution} · {props.detailOptions.find((option) => option.value === plan.detail)?.label ?? plan.detail} · {plan.count} 张</div>
         {!!plan.referenceNodeIds.length && <div className="agent-plan-references">{plan.referenceNodeIds.map((nodeId, index) => {
           const reference = plan.references?.find((item) => item.nodeId === nodeId) || props.candidates.find((item) => item.nodeId === nodeId) || props.references.find((item) => item.nodeId === nodeId)
           return reference ? <button type="button" className="agent-plan-reference" key={nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button> : null
@@ -386,24 +515,35 @@ export function AgentPanel(props: Props) {
       </section>
     )
   }
-  const renderProposedPlans = (plans: AgentImagePlan[]) => {
-    if (!plans.length) return null
-    const planIds = plans.map((plan) => plan.id)
+  const renderDirectionChoices = (plans: AgentImagePlan[]) => {
+    const selectablePlans = plans.filter((plan) => plan.status === 'proposed' || plan.status === 'ready')
+    if (!selectablePlans.length) return null
+    const planIds = selectablePlans.map((plan) => plan.id)
+    const proposedIds = selectablePlans.filter((plan) => plan.status === 'proposed').map((plan) => plan.id)
     return (
       <section className="agent-plan-choice" key={`choice-${planIds.join('-')}`}>
-        <header><span><Sparkles size={14} />选择创作方向</span><em>{plans.length} 个方案</em></header>
-        <p>先选择你想继续的方向，我会为每个选择分别准备确认卡；确认后才会创建节点并生成。</p>
+        <header><span><Sparkles size={14} />选择创作方向</span><em>{selectablePlans.length} 个方案</em></header>
+        <p>{proposedIds.length ? '选择你想继续的方向；已展开的方案会保留在下方，取消后可重新选择。' : '所有方向已展开为确认卡；你仍可取消任意一项后重新选择。'}</p>
         <div>
-          {plans.map((plan, index) => (
-            <button type="button" key={plan.id} onClick={() => props.onSelectPlanOptions(planIds, [plan.id])}>
+          {selectablePlans.map((plan, index) => {
+            const isSelected = plan.status === 'ready'
+            return <button
+              type="button"
+              key={plan.id}
+              className={isSelected ? 'is-selected' : ''}
+              disabled={isSelected}
+              aria-label={isSelected ? `${plan.label || `方案${index + 1}`} 已选择，等待确认` : `选择 ${plan.label || `方案${index + 1}`}`}
+              onClick={() => props.onSelectPlanOptions(planIds, [plan.id])}
+            >
               <strong>{plan.label || `方案${index + 1}`}</strong>
-              <span>{plan.prompt}</span>
+              <span>{isSelected ? '已选择，等待确认；取消后可回到这里重新选择' : plan.prompt}</span>
             </button>
-          ))}
-          <button type="button" className="is-all" onClick={() => props.onSelectPlanOptions(planIds, planIds)}>
+          })}
+          {!!proposedIds.length && <button type="button" className="is-all" onClick={() => props.onSelectPlanOptions(planIds, planIds)}>
             <strong>全部方案</strong>
-            <span>为以上 {plans.length} 个方向分别创建确认卡</span>
+            <span>为全部 {planIds.length} 个方向分别创建确认卡</span>
           </button>
+          }
         </div>
       </section>
     )
@@ -417,8 +557,9 @@ export function AgentPanel(props: Props) {
   const orphanPlans = props.plans.filter((plan) => !plan.assistantMessageId || !messageIds.has(plan.assistantMessageId))
   const renderAttachedPlans = (plans: AgentImagePlan[]) => (
     <>
-      {renderProposedPlans(plans.filter((plan) => plan.status === 'proposed'))}
-      {plans.filter((plan) => plan.status !== 'proposed').map(renderPlan)}
+      {renderDirectionChoices(plans)}
+      {plans.filter((plan) => plan.status !== 'proposed' && plan.status !== 'ready').map(renderPlan)}
+      {plans.filter((plan) => plan.status === 'ready').map(renderPlan)}
     </>
   )
   return (
@@ -447,32 +588,17 @@ export function AgentPanel(props: Props) {
             <article className={`agent-message is-${message.role}`}>
               <p>{message.content}</p>
               {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference, index) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title="定位到画布节点"><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button>)}</div>}
+              {message.textNode?.nodeId && <button type="button" className="agent-message-to-canvas" onClick={() => props.onLocateCanvasNode(message.textNode!.nodeId!)}><Focus size={13} />查看整合文本节点</button>}
             </article>
             {renderAttachedPlans(plansByMessage.get(message.id) ?? [])}
           </Fragment>)}
-          {props.busy && <div className="agent-thinking"><LoaderCircle size={14} className="is-spinning" /> 正在构思…</div>}
+          {props.busy && <div className="agent-thinking"><LoaderCircle size={14} className="is-spinning" /><span>正在理解你的创作目标...</span></div>}
           {renderAttachedPlans(orphanPlans)}
         </div>
-        {!!offscreenReadyIds.length && <button type="button" className="agent-pending-locate" onClick={locatePendingPlan} title="定位待确认的图像方案"><ChevronsUp size={16} /><span>{offscreenReadyIds.length}</span></button>}
+        {!!offscreenActionableIds.length && <button type="button" className="agent-pending-locate" onClick={locatePendingPlan} title="定位待选择或待确认的创作方向"><ChevronsUp size={16} /><span>{offscreenActionableIds.length}</span></button>}
       </div>
       <div className="agent-panel-composer">
         <div className="agent-composer-box">
-          <div className="agent-composer-reference-bar">
-            <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>
-            <button type="button" onMouseDown={rememberSelection} onClick={() => uploadInputRef.current?.click()} title="从本地上传参考图" aria-label="从本地上传参考图"><ImageUp size={15} /><span>上传参考图</span></button>
-            <input
-              ref={uploadInputRef}
-              className="agent-reference-upload-input"
-              type="file"
-              accept="image/*"
-              aria-label="上传 Agent 参考图"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) uploadReference(file)
-                event.target.value = ''
-              }}
-            />
-          </div>
           <div
             className="agent-composer-input"
             ref={editorRef}
@@ -482,6 +608,14 @@ export function AgentPanel(props: Props) {
             data-placeholder="和 Disy 对话，输入 @ 引用画布图片，或上传参考图"
             onInput={() => {
               rememberSelection()
+              const text = getEditorText()
+              setMentionOpen(/@[^\s@]*$/.test(text))
+              syncReferencesFromEditor()
+            }}
+            onPaste={(event) => {
+              event.preventDefault()
+              const plainText = event.clipboardData.getData('text/plain')
+              insertPlainTextAtSelection(plainText)
               const text = getEditorText()
               setMentionOpen(/@[^\s@]*$/.test(text))
               syncReferencesFromEditor()
@@ -510,58 +644,67 @@ export function AgentPanel(props: Props) {
               ariaLabel="对话模型"
               value={props.textModelKey}
               placeholder="选择对话模型"
-              options={props.textModels.map((model) => ({ value: model.key, label: model.name, detail: model.connectionName }))}
+              options={props.textModels.map((model) => ({ value: model.key, label: model.name, brand: getModelBrand(model.name) }))}
               icon={<MessageCircle size={14} />}
               onChange={props.onTextModelChange}
             />
-            <AgentSelect
+            {mediaKind === 'choose' ? <AgentSelect
+              className="agent-model-select"
+              ariaLabel="选择生成类型"
+              value=""
+              placeholder="请选择"
+              options={[{ value: 'image', label: '图像' }, { value: 'video', label: '视频（暂未开放）' }]}
+              icon={<Plus size={14} />}
+              onChange={(value) => {
+                if (value === 'video') {
+                  props.onVideoUnavailable()
+                  return
+                }
+                props.onImageModelChange('')
+                setImageModelChosen(false)
+                setMediaKind('image')
+              }}
+            /> : <AgentSelect
               className="agent-model-select"
               ariaLabel="生图模型"
-              value={props.imageModelKey}
+              value={imageModelChosen ? props.imageModelKey : ''}
               placeholder="选择生图模型"
-              options={props.imageModels.map((model) => ({ value: model.key, label: model.name, detail: model.connectionName }))}
+              options={[
+                { value: '__choose_type__', label: '返回生成类型' },
+                ...props.imageModels.map((model) => ({ value: model.key, label: model.name, brand: getModelBrand(model.name) })),
+              ]}
               icon={<ImagePlus size={14} />}
-              onChange={props.onImageModelChange}
-            />
+              onChange={(value) => {
+                if (value === '__choose_type__') {
+                  setMediaKind('choose')
+                  setImageModelChosen(false)
+                  setImageSettingsOpen(false)
+                  return
+                }
+                props.onImageModelChange(value)
+                setImageModelChosen(true)
+              }}
+            />}
           </div>
           <footer className="agent-composer-footer">
-            <div className="agent-composer-tools">
-              {activeReadyPlan && <div className="agent-parameter-tool" ref={parameterToolRef}>
-                <button
-                  type="button"
-                  className={`agent-parameter-trigger ${parametersOpen ? 'is-open' : ''}`}
-                  title="设置当前待确认方案参数"
-                  aria-label="设置当前待确认方案参数"
-                  aria-expanded={parametersOpen}
-                  onClick={() => setParametersOpen((open) => !open)}
-                >
-                  <SlidersHorizontal size={15} />
-                  <span>{activeReadyPlan.aspectRatio} · {activeReadyPlan.resolution} · {activeReadyPlan.count} 张</span>
-                  {readyPlans.length > 1 && <em>{readyPlans.findIndex((plan) => plan.id === activeReadyPlan.id) + 1}/{readyPlans.length}</em>}
-                </button>
-                {parametersOpen && <div className="agent-parameter-popover">
-                  <header><span><SlidersHorizontal size={14} />生成参数</span><small>{activeReadyPlan.aspectRatio} · {activeReadyPlan.resolution} · {activeReadyPlan.count} 张</small></header>
-                  <div className="agent-plan-control is-ratio">
-                    <span>比例</span>
-                    <div>{props.aspectOptions.map((option) => <button type="button" className={activeReadyPlan.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onPlanChange(activeReadyPlan.id, { aspectRatio: option.value })}>{option.label}</button>)}</div>
-                  </div>
-                  <div className="agent-plan-control">
-                    <span>清晰度</span>
-                    <div>{props.resolutionOptions.map((option) => <button type="button" className={activeReadyPlan.resolution === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onPlanChange(activeReadyPlan.id, { resolution: option.value })}>{option.label}</button>)}</div>
-                  </div>
-                  <div className="agent-plan-control">
-                    <span>画质</span>
-                    <div>{props.detailOptions.map((option) => <button type="button" className={activeReadyPlan.detail === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onPlanChange(activeReadyPlan.id, { detail: option.value })}>{option.label}</button>)}</div>
-                  </div>
-                  <div className="agent-plan-control">
-                    <span>数量</span>
-                    <div>{[1, 2, 3, 4].map((count) => <button type="button" className={activeReadyPlan.count === count ? 'is-selected' : ''} key={count} onClick={() => props.onPlanChange(activeReadyPlan.id, { count })}>{count} 张</button>)}</div>
-                  </div>
-                </div>}
-              </div>}
+            <div className="agent-composer-reference-bar">
+              <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>
+              <button type="button" onMouseDown={rememberSelection} onClick={() => uploadInputRef.current?.click()} title="从本地上传参考图" aria-label="从本地上传参考图"><ImageUp size={15} /><span>上传参考图</span></button>
+              {mediaKind === 'image' && imageModelChosen && props.imageModelKey && <button type="button" className={`agent-image-settings-button ${imageSettingsOpen ? 'is-open' : ''}`} onClick={() => setImageSettingsOpen((open) => !open)} title="图像设置" aria-label="图像设置" aria-expanded={imageSettingsOpen}><SlidersHorizontal size={15} /><span>图像设置</span></button>}
+              <input ref={uploadInputRef} className="agent-reference-upload-input" type="file" accept="image/*" aria-label="上传 Agent 参考图" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadReference(file); event.target.value = '' }} />
             </div>
-            <button className="agent-send-button" disabled={props.busy} onClick={submit}><ArrowUp size={17} /></button>
+            <div className="agent-composer-actions">
+              {props.busy && <button type="button" className="agent-stop-button" onClick={props.onStop} title="中止本次对话" aria-label="中止本次对话"><X size={16} /></button>}
+              <button type="button" className="agent-send-button" onClick={submit} title={props.busy ? '发送并调整方向' : '发送'} aria-label={props.busy ? '发送并调整方向' : '发送'}><ArrowUp size={17} /></button>
+            </div>
           </footer>
+          {imageSettingsOpen && mediaKind === 'image' && imageModelChosen && props.imageModelKey && <div className="agent-image-parameter-popover" role="dialog" aria-label="图像参数">
+            <header><strong>图像参数</strong><button type="button" onClick={() => setImageSettingsOpen(false)} title="关闭图像参数"><X size={14} /></button></header>
+            <div className="agent-image-parameter-section"><span>画质</span><div>{props.detailOptions.map((option) => <button type="button" className={props.imageDefaults.detail === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ detail: option.value })}>{option.label}</button>)}</div></div>
+            <div className="agent-image-parameter-section"><span>清晰度</span><div>{props.resolutionOptions.map((option) => <button type="button" className={props.imageDefaults.resolution === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ resolution: option.value })}>{option.label}</button>)}</div></div>
+            <div className="agent-image-parameter-section is-aspect"><span>比例</span><div>{props.aspectOptions.map((option) => <button type="button" className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" />{option.label}</button>)}</div></div>
+            <div className="agent-image-parameter-section"><span>数量</span><div>{[1, 2, 3, 4].map((count) => <button type="button" className={props.imageDefaults.count === count ? 'is-selected' : ''} key={count} onClick={() => props.onImageDefaultsChange({ count })}>{count} 张</button>)}</div></div>
+          </div>}
         </div>
       </div>
     </aside>

@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .netlify/
+.netlify-appdata/
+.netlify-config/
+.netlify-npm-cache/
+disylab-online-debug/
 .env
 .env.*
 !.env.example

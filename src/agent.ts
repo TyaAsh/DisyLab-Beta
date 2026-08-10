@@ -4,6 +4,11 @@ export type AgentMessage = {
   content: string
   createdAt: string
   references?: AgentImageReference[]
+  textNode?: {
+    title: string
+    content: string
+    nodeId?: string
+  }
 }
 
 export type AgentImageReference = {
@@ -64,6 +69,10 @@ export type AgentReply = {
   reply: string
   imagePlan?: AgentImagePlanDraft
   imagePlans?: AgentImagePlanDraft[]
+  textNode?: {
+    title: string
+    content: string
+  }
 }
 
 export type AgentImagePlanDraft = Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count' | 'label'>
@@ -91,8 +100,9 @@ export function getRequestedAgentPlanCount(content: string) {
 }
 
 export function messageExpectsImagePlans(content: string) {
-  if (getRequestedAgentPlanCount(content) !== null) return true
-  return /(?:生成|制作|设计|创作|画|做|出)(?:.{0,12})(?:图像|图片|图|海报|视觉|方案|方向)|(?:方案|方向)(?:.{0,8})(?:给|来|要|做|出)/i.test(content)
+  const explicitImageIntent = /(?:生图|出图|绘图|画图|生成图片|生成图像|制作图片|制作海报|设计海报|视觉稿|效果图|封面图|配图)/i.test(content)
+    || /(?:生成|制作|设计|创作|画|做|出)(?:.{0,10})(?:图像|图片|海报|视觉画面)/i.test(content)
+  return explicitImageIntent
 }
 
 export function parseAgentReply(raw: string): AgentReply {
@@ -119,10 +129,21 @@ export function parseAgentReply(raw: string): AgentReply {
         }
       })
       .filter((candidate): candidate is AgentImagePlanDraft => Boolean(candidate))
+    const rawTextNode = value.textNode && typeof value.textNode === 'object'
+      ? value.textNode as Record<string, unknown>
+      : null
+    const textNodeContent = typeof rawTextNode?.content === 'string' ? rawTextNode.content.trim() : ''
+    const textNode = textNodeContent
+      ? {
+          title: typeof rawTextNode?.title === 'string' && rawTextNode.title.trim() ? rawTextNode.title.trim() : 'Agent 文本',
+          content: textNodeContent,
+        }
+      : undefined
     return {
       reply: reply || (imagePlans.length ? `我已整理好${imagePlans.length > 1 ? `${imagePlans.length}份` : '一份'}图像方案，请选择并确认后生成。` : raw.trim()),
       imagePlan: imagePlans[0],
       imagePlans: imagePlans.length ? imagePlans : undefined,
+      textNode,
     }
   } catch {
     return { reply: raw.trim() }

@@ -233,6 +233,7 @@ export function resolveProviderLabel(baseUrl: string) {
   if (/grsaiapi\.com|grsai\.dakka\.com\.cn/.test(normalized)) return 'GRS AI'
   if (/api\.apiyi\.com|apiyi\.com/.test(normalized)) return 'APIYI'
   if (/gptgod\.online|gptgod\.com/.test(normalized)) return 'GPTGod'
+  if (/ark\.cn-beijing\.volces\.com/.test(normalized)) return '即梦'
   if (/api\.openai\.com/.test(normalized)) return 'OpenAI'
   if (/api\.siliconflow\.cn|siliconflow/.test(normalized)) return '硅基流动'
   if (/api\.deepseek\.com/.test(normalized)) return 'DeepSeek'

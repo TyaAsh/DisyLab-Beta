@@ -267,3 +267,5 @@ npx netlify deploy --prod --dir=dist
 ## License
 
 当前仓库尚未附加开源许可证，默认不代表授权复制、再分发、白标销售或商业使用。后续如开放特定范围的使用或协作，会在仓库中提供明确的 LICENSE 文件。
+
+bug fixed

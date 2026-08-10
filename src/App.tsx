@@ -1,5 +1,7 @@
 import { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import gsap from 'gsap'
+import { useGSAP } from '@gsap/react'
 import {
   ArrowUp,
   ArrowUpRight,
@@ -7,6 +9,7 @@ import {
   BookOpen,
   Box,
   Check,
+  ChevronDown,
   CircleHelp,
   ChevronLeft,
   ChevronRight,
@@ -42,6 +45,7 @@ import {
   Type,
   Trash2,
   Upload,
+  ArrowUpDown,
   Unlink2,
   Unlock,
   WandSparkles,
@@ -74,18 +78,21 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
-import { createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspace, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { getRequestedAgentPlanCount, messageExpectsImagePlans, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
+gsap.registerPlugin(useGSAP)
+
 type NodeKind = 'text' | 'image' | 'upload' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
 type ImageAspectRatio = 'auto' | '1:1' | '2:1' | '4:3' | '3:4' | '5:4' | '4:5' | '3:2' | '2:3' | '16:9' | '9:16' | '21:9' | '9:21'
 type ImageResolution = '1K' | '2K' | '4K'
 type ImageDetail = 'low' | 'medium' | 'high'
+type TransferScope = 'workspace-append' | 'project-replace'
 type ImageReference = {
   id: string
   name: string
@@ -189,6 +196,7 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 }
 
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
+const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
@@ -276,6 +284,7 @@ const ASSET_FOLDERS_KEY = 'disy-asset-folders'
 const GENERATION_HISTORY_KEY = 'disy-generation-history'
 const OUTPUT_HISTORY_KEY = 'disy-output-history-v1'
 const ACTIVE_PROJECT_KEY = 'disy-active-project-id'
+const WORKSPACE_INITIALIZED_KEY = 'disy-workspace-initialized-v1'
 const OUTPUT_HISTORY_RETENTION_MS = 24 * 60 * 60 * 1000
 const DEFAULT_ASSET_FOLDERS: AssetFolder[] = [
   { id: 'people', name: '人物', preset: true },
@@ -291,9 +300,8 @@ const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
 const API_PROVIDER_PRESETS = [
   { id: 'grsai', name: 'GRS AI', baseUrl: 'https://grsai.dakka.com.cn/v1', detail: '国内直连 · 图像与文本' },
   { id: 'apiyi', name: 'APIYI', baseUrl: 'https://api.apiyi.com/v1', detail: 'OpenAI 兼容聚合平台' },
-  { id: 'gptgod', name: 'GPTGod', baseUrl: 'https://api.gptgod.online/v1', detail: 'OpenAI 兼容中转' },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: '官方 GPT 与图像模型' },
-  { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', detail: '国内开源模型平台' },
+  { id: 'jimeng', name: '即梦', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', detail: '字节跳动 · 即梦 / Seedream' },
 ] as const
 
 function readSavedAssets() {
@@ -374,10 +382,98 @@ type FilePickerWindow = Window & {
 }
 
 function getNodeDisplayTitle(data: CanvasNode['data']) {
-  if (data.kind === 'text') return '文本'
-  if (data.kind === 'image') return '图像'
-  if (data.kind === 'group') return '分组'
-  return data.title
+  if (data.kind === 'text') return data.title || '文本'
+  if (data.kind === 'image') return data.title || '图像'
+  if (data.kind === 'group') return data.title || '分组'
+  return data.title || data.fileName || '图像'
+}
+
+function getWelcomeModelGlyph(name: string, image = false) {
+  const normalized = name.toLowerCase().replace(/[\s_-]+/g, '')
+  if (/gpt|openai|dall|sora/.test(normalized)) return '◎'
+  if (/gemini|nanobanana|imagen|google/.test(normalized)) return '✦'
+  if (/claude|anthropic/.test(normalized)) return 'C'
+  if (/即梦|jimeng|dreamina|seedream|seedance/.test(normalized)) return '即'
+  if (/豆包|doubao/.test(normalized)) return '豆'
+  return image ? '✦' : 'AI'
+}
+
+function WelcomeModelSelect({ value, placeholder, options, image, onChange }: {
+  value: string
+  placeholder: string
+  options: Array<{ key: string; name: string }>
+  image?: boolean
+  onChange: (key: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selected = options.find((model) => model.key === value)
+  useEffect(() => {
+    if (!open) return
+    const close = (event: PointerEvent) => {
+      if (!(event.target instanceof HTMLElement) || !rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [open])
+  return <div ref={rootRef} className={`welcome-model-select ${open ? 'is-open' : ''}`}>
+    <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+      <span className={`welcome-model-badge ${image ? 'is-image' : ''}`}>{getWelcomeModelGlyph(selected?.name ?? '', image)}</span>
+      <strong>{selected?.name ?? placeholder}</strong>
+      <ChevronDown size={13} />
+    </button>
+    {open && <div className="welcome-model-menu" role="listbox">
+      {options.length ? options.map((model) => <button type="button" role="option" aria-selected={model.key === value} key={model.key} onClick={() => { onChange(model.key); setOpen(false) }}><span>{model.name}</span>{model.key === value && <Check size={13} />}</button>) : <p>{placeholder}</p>}
+    </div>}
+  </div>
+}
+
+function WelcomeAgentComposer({
+  textModels,
+  imageModels,
+  textModelKey,
+  imageModelKey,
+  onTextModelChange,
+  onImageModelChange,
+  onSend,
+  busy,
+}: {
+  textModels: Array<{ key: string; name: string }>
+  imageModels: Array<{ key: string; name: string }>
+  textModelKey: string
+  imageModelKey: string
+  onTextModelChange: (key: string) => void
+  onImageModelChange: (key: string) => void
+  onSend: (content: string) => void
+  busy: boolean
+}) {
+  const [value, setValue] = useState('')
+  const [placeholder, setPlaceholder] = useState('比如：做一组夏日咖啡店的视觉方案')
+  const prompts = ['比如：做一组夏日咖啡店的视觉方案', '比如：电商头脑风暴，帮我找 3 个方向', '比如：把这个产品做成更有记忆点的海报', '比如：为我的品牌整理一套视觉灵感']
+  useEffect(() => {
+    let promptIndex = 0
+    let characterIndex = 0
+    let deleting = false
+    const timer = window.setInterval(() => {
+      const prompt = prompts[promptIndex]
+      characterIndex += deleting ? -1 : 1
+      if (characterIndex >= prompt.length + 1) deleting = true
+      if (characterIndex <= 0) { deleting = false; promptIndex = (promptIndex + 1) % prompts.length }
+      setPlaceholder(prompt.slice(0, Math.max(0, characterIndex)))
+    }, 72)
+    return () => window.clearInterval(timer)
+  }, [])
+  const submit = () => {
+    const message = value.trim()
+    if (!message || busy) return
+    onSend(message)
+    setValue('')
+  }
+  return <section className="welcome-agent-composer" aria-label="Disy Agent 快速对话">
+    <div className="welcome-agent-title"><span className="welcome-agent-orb"><img src="/disy-logo.png" alt="" /></span><strong>今天想做点什么？</strong></div>
+    <div className="welcome-agent-input-wrap"><textarea value={value} rows={2} placeholder={placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit() } }} /><button type="button" className="welcome-agent-send" disabled={!value.trim() || busy} onClick={submit}>{busy ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} />}</button></div>
+    <div className="welcome-agent-footer"><WelcomeModelSelect value={textModelKey} placeholder={textModels.length ? '选择对话模型' : '请先配置对话模型'} options={textModels} onChange={onTextModelChange} /><WelcomeModelSelect value={imageModelKey} placeholder={imageModels.length ? '自动选择生图模型' : '请先配置生图模型'} options={imageModels} image onChange={onImageModelChange} /></div>
+  </section>
 }
 
 function getReferenceLabel(name: string, fallbackIndex: number) {
@@ -387,6 +483,23 @@ function getReferenceLabel(name: string, fallbackIndex: number) {
 
 function getReferenceMention(label: string) {
   return `@[${label}]`
+}
+
+function formatRelativeTime(value: string) {
+  const elapsed = Math.max(0, Date.now() - Date.parse(value))
+  const minutes = Math.floor(elapsed / 60000)
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  return `${days} 天前`
+}
+
+function formatProjectDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function getConnectedReferenceLabel(node: CanvasNode) {
@@ -1064,6 +1177,7 @@ const NodeCard = memo(function NodeCard({
 }) {
   const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
+  const updateNodeTitle = useContext(NodeTitleUpdateContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
   const openExtensionMenu = useContext(NodeExtensionMenuContext)
@@ -1073,6 +1187,18 @@ const NodeCard = memo(function NodeCard({
   const [inlineDraft, setInlineDraft] = useState(data.body)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
   const inlineComposingRef = useRef(false)
+  const [titleEditing, setTitleEditing] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(getNodeDisplayTitle(data))
+
+  const commitNodeTitle = () => {
+    const nextTitle = titleDraft.trim() || getNodeDisplayTitle(data)
+    updateNodeTitle(id, nextTitle)
+    setTitleDraft(nextTitle)
+    setTitleEditing(false)
+  }
+  const nodeTitle = titleEditing
+    ? <input className="node-title-input nodrag nowheel" autoFocus value={titleDraft} maxLength={48} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => setTitleDraft(event.target.value)} onBlur={commitNodeTitle} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setTitleDraft(getNodeDisplayTitle(data)); setTitleEditing(false) } }} />
+    : <span className="node-title-label" title="双击重命名" onDoubleClick={(event) => { event.stopPropagation(); setTitleDraft(getNodeDisplayTitle(data)); setTitleEditing(true) }}>{getNodeDisplayTitle(data)}</span>
 
   useEffect(() => {
     if (!inlineEditing) return
@@ -1085,13 +1211,17 @@ const NodeCard = memo(function NodeCard({
     if (!inlineEditing) setInlineDraft(data.body)
   }, [data.body, inlineEditing])
 
+  useEffect(() => {
+    if (!titleEditing) setTitleDraft(getNodeDisplayTitle(data))
+  }, [data.title, data.fileName, data.kind, titleEditing])
+
   if (data.kind === 'group') {
     return (
       <div
         className={`canvas-group-node ${selected ? 'is-selected' : ''}`}
         style={{ background: data.groupColor || 'rgba(72, 76, 73, .2)' }}
       >
-        <span><Box size={13} />{data.title || '分组'}</span>
+        <span><Box size={13} />{nodeTitle}</span>
       </div>
     )
   }
@@ -1137,7 +1267,7 @@ const NodeCard = memo(function NodeCard({
       <div className={`disy-node asset-image-node ${selected ? 'is-selected' : ''}`}>
         <div className="asset-image-label" title={data.fileName}>
           <FileImage size={13} strokeWidth={1.8} />
-          <span>{data.fileName || data.title}</span>
+          {nodeTitle}
         </div>
         <div className="asset-image-frame">
           <img
@@ -1196,7 +1326,7 @@ const NodeCard = memo(function NodeCard({
         <span className={`node-icon node-icon-${data.kind}`}>
           <Icon size={15} strokeWidth={2.2} />
         </span>
-        <span>{getNodeDisplayTitle(data)}</span>
+        {nodeTitle}
       </div>
 
       {data.kind === 'upload' ? (
@@ -1374,6 +1504,7 @@ function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [transferProgress, setTransferProgress] = useState<string | null>(null)
   const [transferOpen, setTransferOpen] = useState(false)
+  const [transferScope, setTransferScope] = useState<TransferScope>('project-replace')
   const [transferDropActive, setTransferDropActive] = useState(false)
   const [hasImportBackup, setHasImportBackup] = useState(false)
   const transferBusy = Boolean(transferProgress)
@@ -1402,8 +1533,47 @@ function App() {
   const [apiOpen, setApiOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
+  const [projectHomeOpen, setProjectHomeOpen] = useState(true)
+  const projectHomeOpenRef = useRef(true)
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [createProjectOpen, setCreateProjectOpen] = useState(false)
+  const [createProjectName, setCreateProjectName] = useState('')
+  const [createProjectCanvasCount, setCreateProjectCanvasCount] = useState(1)
+  const [createProjectBusy, setCreateProjectBusy] = useState(false)
+  const [projectHomeView, setProjectHomeView] = useState<'grid' | 'list'>('grid')
+  const [projectHomeSort, setProjectHomeSort] = useState<{ key: 'name' | 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' }>({ key: 'updatedAt', direction: 'desc' })
+
+  useEffect(() => {
+    projectHomeOpenRef.current = projectHomeOpen
+    const state = history.state && typeof history.state === 'object' ? history.state : {}
+    if (projectHomeOpen) history.replaceState({ ...state, disyView: 'workspace' }, '')
+    else if (history.state?.disyView !== 'project') history.pushState({ ...state, disyView: 'project' }, '')
+  }, [projectHomeOpen])
+
+  useEffect(() => {
+    const handleBrowserBack = () => {
+      if (agentOpenRef.current) {
+        const state = history.state && typeof history.state === 'object' ? history.state : {}
+        history.pushState({ ...state, disyView: 'project' }, '')
+        setAgentOpen(false)
+        setAgentCanvasPicking(false)
+        return
+      }
+      if (!projectHomeOpenRef.current) {
+        setProjectMenuOpen(false)
+        setProjectOpen(false)
+        setProjectHomeOpen(true)
+      }
+    }
+    window.addEventListener('popstate', handleBrowserBack)
+    return () => window.removeEventListener('popstate', handleBrowserBack)
+  }, [])
+  const [projectHomeSelectionMode, setProjectHomeSelectionMode] = useState(false)
+  const [nodeSearchOpen, setNodeSearchOpen] = useState(false)
+  const [nodeSearchQuery, setNodeSearchQuery] = useState('')
   const [projectSearch, setProjectSearch] = useState('')
-  const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' } | null>(null)
+  const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' | 'home' } | null>(null)
   const [workspaceProjects, setWorkspaceProjects] = useState<WorkspaceProject[]>([])
   const [workspaceCanvases, setWorkspaceCanvases] = useState<WorkspaceCanvas[]>([])
   const [activeProjectId, setActiveProjectId] = useState(CURRENT_PROJECT_ID)
@@ -1413,6 +1583,12 @@ function App() {
   const [projectCardScale, setProjectCardScale] = useState(1)
   const [canvasCardScale, setCanvasCardScale] = useState(1)
   const [agentOpen, setAgentOpen] = useState(false)
+  const agentOpenRef = useRef(false)
+  const agentRequestRef = useRef<AbortController | null>(null)
+  const agentRequestVersionRef = useRef(0)
+  useEffect(() => {
+    agentOpenRef.current = agentOpen
+  }, [agentOpen])
   const [agentBusy, setAgentBusy] = useState(false)
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([])
   const [agentPlans, setAgentPlans] = useState<AgentImagePlan[]>([])
@@ -1423,6 +1599,12 @@ function App() {
   const [agentCanvasPicking, setAgentCanvasPicking] = useState(false)
   const [agentTextModelKey, setAgentTextModelKey] = useState('')
   const [agentImageModelKey, setAgentImageModelKey] = useState('')
+  const [agentImageDefaults, setAgentImageDefaults] = useState<{
+    aspectRatio: ImageAspectRatio
+    resolution: ImageResolution
+    detail: ImageDetail
+    count: number
+  }>({ aspectRatio: '1:1', resolution: '1K', detail: 'medium', count: 1 })
   const [canvasName, setCanvasName] = useState('DisyLab')
   const [canvasNameDraft, setCanvasNameDraft] = useState('DisyLab')
   const [canvasNameEditing, setCanvasNameEditing] = useState(false)
@@ -1445,6 +1627,7 @@ function App() {
   const [apiError, setApiError] = useState('')
 
   const shellRef = useRef<HTMLDivElement>(null)
+  const projectHomeContentRef = useRef<HTMLDivElement>(null)
   const nodeMenuButtonRef = useRef<HTMLButtonElement>(null)
   const firstApiInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
@@ -1490,7 +1673,7 @@ function App() {
   const currentHistorySnapshotRef = useRef<CanvasHistorySnapshot | null>(null)
   const historyCaptureTimerRef = useRef<number | null>(null)
   const historyReadyRef = useRef(false)
-  const { fitView: fitCanvas, screenToFlowPosition, zoomTo } = useReactFlow()
+  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
   const resetCanvasHistory = useCallback((nextNodes: CanvasNode[], nextEdges: Edge[]) => {
@@ -1614,6 +1797,7 @@ function App() {
   useEffect(() => {
     if (!projectOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
+      if (transferOpen) return
       if (event.key === 'Escape') {
         if (projectRename?.source === 'modal') setProjectRename(null)
         setProjectOpen(false)
@@ -1621,7 +1805,46 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [projectOpen, projectRename])
+  }, [projectOpen, projectRename, transferOpen])
+
+  useEffect(() => {
+    if (!transferOpen) return
+    const closeTransfer = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !transferBusy) {
+        event.stopImmediatePropagation()
+        setTransferOpen(false)
+      }
+    }
+    window.addEventListener('keydown', closeTransfer, true)
+    return () => window.removeEventListener('keydown', closeTransfer, true)
+  }, [transferOpen, transferBusy])
+
+  useEffect(() => {
+    if (!projectMenuOpen) return
+    const closeProjectMenu = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.brand-only, .project-brand-menu')) return
+      setProjectMenuOpen(false)
+    }
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProjectMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeProjectMenu, true)
+    window.addEventListener('keydown', closeWithEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeProjectMenu, true)
+      window.removeEventListener('keydown', closeWithEscape)
+    }
+  }, [projectMenuOpen])
+
+  useEffect(() => {
+    if (!createProjectOpen || createProjectBusy) return
+    const closeCreateProject = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCreateProjectOpen(false)
+    }
+    window.addEventListener('keydown', closeCreateProject)
+    return () => window.removeEventListener('keydown', closeCreateProject)
+  }, [createProjectBusy, createProjectOpen])
 
   useEffect(() => {
     if (!assetLibraryOpen) return
@@ -1840,10 +2063,23 @@ function App() {
     void (async () => {
       await loadLocalProject(CURRENT_PROJECT_ID)
       let projects = await listWorkspaceProjects()
-      if (!projects.length) {
-        const created = await createWorkspaceProject('DisyLab')
+      const workspaceInitialized = localStorage.getItem(WORKSPACE_INITIALIZED_KEY) === '1'
+      if (!projects.length && !workspaceInitialized) {
+        const created = await createWorkspaceProject('第一张画布')
         projects = [created.project]
       }
+      if (!projects.length) {
+        if (!cancelled) {
+          setWorkspaceProjects([])
+          setProjectHomeOpen(true)
+        }
+        return
+      }
+      if (!workspaceInitialized && projects.length === 1 && /^新项目\s*1$/.test(projects[0].name)) {
+        const renamed = await renameWorkspaceProject(projects[0].id, '第一张画布')
+        projects = [renamed]
+      }
+      localStorage.setItem(WORKSPACE_INITIALIZED_KEY, '1')
       if (cancelled) return
       const preferredProjectId = localStorage.getItem(ACTIVE_PROJECT_KEY)
       const owner = projects.find((project) => project.id === preferredProjectId) ?? projects[0]
@@ -1853,6 +2089,7 @@ function App() {
       if (!canvas || cancelled) return
       setWorkspaceProjects(projects)
       setWorkspaceCanvases(canvases)
+      setProjectHomeOpen(true)
       hydrate(canvas, owner)
       const sessions = await listAgentSessions(canvas.id)
       if (cancelled) return
@@ -2429,6 +2666,32 @@ function App() {
     createNode(kind, { x: center.x - 138, y: center.y - 72 })
   }
 
+  const createAgentTextNode = (content: string, title = 'Agent 文本') => {
+    const body = content.trim()
+    if (!body) return null
+    const id = `text-agent-${crypto.randomUUID()}`
+    const position = screenToFlowPosition({
+      x: Math.max(320, window.innerWidth - (agentOpen ? 660 : 420)),
+      y: Math.max(180, window.innerHeight * 0.3),
+    })
+    setNodes((current) => [
+      ...current.map((node) => ({ ...node, selected: false })),
+      {
+        id,
+        type: 'disy',
+        position,
+        selected: true,
+        style: { width: 360, height: 210 },
+        data: { kind: 'text', title, body, promptText: '' },
+      },
+    ])
+    setActiveImageNodeId(null)
+    setActiveGenerationNodeId(null)
+    setActiveEditorNodeId(null)
+    setToastMessage('已添加文本节点到画布')
+    return id
+  }
+
   const openCenteredNodeMenu = () => {
     const x = window.innerWidth / 2
     const y = window.innerHeight / 2 + 28
@@ -2504,6 +2767,12 @@ function App() {
         node.id === nodeId ? { ...node, data: { ...node.data, body } } : node,
       ),
     )
+  }, [setNodes])
+
+  const updateNodeTitle = useCallback((nodeId: string, title: string) => {
+    setNodes((current) => current.map((node) => node.id === nodeId
+      ? { ...node, data: { ...node.data, title } }
+      : node))
   }, [setNodes])
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -2664,6 +2933,10 @@ function App() {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
       const key = event.key.toLowerCase()
       const target = event.target
+      if (target instanceof HTMLElement && target.closest('#disy-agent-panel')) {
+        if (key === 'c') internalNodePastePreferredRef.current = false
+        return
+      }
       if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) {
         if (key === 'c') internalNodePastePreferredRef.current = false
         return
@@ -2679,7 +2952,25 @@ function App() {
         copyNodeToClipboard(selectedNode)
       }
     }
-    const onNativeCopy = () => { internalNodePastePreferredRef.current = false }
+    const onNativeCopy = (event: ClipboardEvent) => {
+      internalNodePastePreferredRef.current = false
+
+      // Agent 对话内容是展示文本；将浏览器默认的富文本复制统一为纯文本，
+      // 避免粘贴到外部工具时把气泡、颜色与字体样式一并带走。
+      const selection = window.getSelection()
+      const panel = document.getElementById('disy-agent-panel')
+      const toElement = (node: unknown): HTMLElement | null => {
+        if (node instanceof HTMLElement) return node
+        const parent = (node as { parentElement?: unknown } | null)?.parentElement
+        return parent instanceof HTMLElement ? parent : null
+      }
+      const anchor = toElement(selection?.anchorNode ?? null)
+      const focus = toElement(selection?.focusNode ?? null)
+      if (!panel || !selection || selection.isCollapsed || !anchor || !focus || !panel.contains(anchor) || !panel.contains(focus) || !event.clipboardData) return
+
+      event.preventDefault()
+      event.clipboardData.setData('text/plain', selection.toString())
+    }
 
     window.addEventListener('keydown', onClipboardShortcut)
     window.addEventListener('copy', onNativeCopy)
@@ -3197,18 +3488,39 @@ function App() {
     setToastMessage('画布已删除')
   }
 
-  const createNewProject = async () => {
+  const createNewProject = () => {
     if (workspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能新建项目')
       return
     }
-    await saveCanvasState(canvasName, true)
-    const created = await createWorkspaceProject(`新项目 ${workspaceProjects.length + 1}`)
-    setWorkspaceProjects((current) => [created.project, ...current])
-    setProjectOpen(false)
-    await openWorkspaceCanvas(created.canvas.id, created.project.id)
-    setProjectName(created.project.name)
-    setToastMessage('新项目已创建')
+    setCreateProjectName(workspaceProjects.length ? `新项目 ${workspaceProjects.length + 1}` : '第一张画布')
+    setCreateProjectCanvasCount(1)
+    setCreateProjectOpen(true)
+  }
+
+  const confirmCreateProject = async () => {
+    const requestedName = createProjectName.trim()
+    if (!requestedName || createProjectBusy) return
+    setCreateProjectBusy(true)
+    try {
+      if (workspaceProjects.length) await saveCanvasState(canvasName, true)
+      const created = await createWorkspaceProject(requestedName)
+      for (let index = 2; index <= createProjectCanvasCount; index += 1) {
+        await createWorkspaceCanvas(created.project.id, `画布 ${index}`)
+      }
+      const projects = await listWorkspaceProjects()
+      setWorkspaceProjects(projects)
+      setCreateProjectOpen(false)
+      setProjectOpen(false)
+      setProjectHomeOpen(false)
+      await openWorkspaceCanvas(created.canvas.id, created.project.id, true)
+      setProjectName(projects.find((project) => project.id === created.project.id)?.name ?? requestedName)
+      setToastMessage(`项目已创建，包含 ${createProjectCanvasCount} 张画布`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : '项目创建失败')
+    } finally {
+      setCreateProjectBusy(false)
+    }
   }
 
   const commitProjectRename = async (projectId: string, draft: string) => {
@@ -3233,18 +3545,48 @@ function App() {
     }
     const project = workspaceProjects.find((item) => item.id === projectId)
     if (!project || !window.confirm(`确认删除项目“${project.name}”及其全部画布？此操作不可撤销。`)) return
-    let fallback = workspaceProjects.find((item) => item.id !== projectId)
-    if (!fallback) {
-      const created = await createWorkspaceProject('新项目')
-      fallback = created.project
-    }
+    const fallback = workspaceProjects.find((item) => item.id !== projectId)
     await deleteWorkspaceProject(projectId)
     const projects = await listWorkspaceProjects()
     setWorkspaceProjects(projects)
+    setSelectedProjectIds((current) => current.filter((id) => id !== projectId))
     setGenerationHistory((current) => current.filter((record) => record.projectId ? record.projectId !== projectId : projectId !== CURRENT_PROJECT_ID))
     setOutputHistory((current) => current.filter((record) => record.projectId ? record.projectId !== projectId : projectId !== CURRENT_PROJECT_ID))
-    if (projectId === activeProjectId) await openWorkspaceCanvas(fallback.activeCanvasId, fallback.id, true)
+    if (projectId === activeProjectId && fallback) await openWorkspaceCanvas(fallback.activeCanvasId, fallback.id, true)
+    if (!projects.length) {
+      setProjectOpen(false)
+      setProjectMenuOpen(false)
+      setProjectHomeOpen(true)
+    }
     setToastMessage('项目已删除')
+  }
+
+  const removeProjects = async (projectIds: string[]) => {
+    const ids = Array.from(new Set(projectIds)).filter((id) => workspaceProjects.some((project) => project.id === id))
+    if (!ids.length || destructiveWorkspaceMutationBlocked()) return
+    const deletingAll = ids.length === workspaceProjects.length
+    const message = deletingAll
+      ? `确认删除全部 ${ids.length} 个项目及其所有画布吗？此操作不可撤销。`
+      : `确认删除选中的 ${ids.length} 个项目及其所有画布吗？此操作不可撤销。`
+    if (!window.confirm(message)) return
+    await Promise.all(ids.map((id) => deleteWorkspaceProject(id)))
+    const deleted = new Set(ids)
+    const projects = await listWorkspaceProjects()
+    setWorkspaceProjects(projects)
+    setSelectedProjectIds([])
+    setProjectHomeSelectionMode(false)
+    setGenerationHistory((current) => current.filter((record) => !record.projectId || !deleted.has(record.projectId)))
+    setOutputHistory((current) => current.filter((record) => !record.projectId || !deleted.has(record.projectId)))
+    if (deleted.has(activeProjectId) && projects.length) {
+      const fallbackProject = projects[0]
+      await openWorkspaceCanvas(fallbackProject.activeCanvasId, fallbackProject.id, true)
+    }
+    if (!projects.length) {
+      setProjectOpen(false)
+      setProjectMenuOpen(false)
+      setProjectHomeOpen(true)
+    }
+    setToastMessage(deletingAll ? '全部项目已删除' : `已删除 ${ids.length} 个项目`)
   }
 
   const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean; scope?: 'workspace' | 'project' }) => {
@@ -3252,6 +3594,31 @@ function App() {
     const manageProgress = options?.manageProgress ?? true
     const scope = asBackup ? 'workspace' : options?.scope ?? 'workspace'
     const exportingProject = scope === 'project'
+    const date = new Date().toISOString().slice(0, 10)
+    const safeProjectName = projectName.trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || '当前项目'
+    const fileName = exportingProject
+      ? `DisyLab-${safeProjectName}-${date}.disy`
+      : `DisyLab-完整工作区-${date}.disy`
+    type SaveFileHandle = { createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> }
+    const savePicker = (window as Window & {
+      showSaveFilePicker?: (options: {
+        suggestedName: string
+        types: Array<{ description: string; accept: Record<string, string[]> }>
+      }) => Promise<SaveFileHandle>
+    }).showSaveFilePicker
+    let saveHandle: SaveFileHandle | null = null
+    if (!asBackup && savePicker) {
+      try {
+        saveHandle = await savePicker({
+          suggestedName: fileName,
+          types: [{ description: 'DisyLab 项目包', accept: { 'application/octet-stream': ['.disy'] } }],
+        })
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        // Browsers with an incomplete File System Access implementation fall
+        // back to the regular download path below.
+      }
+    }
     if (manageProgress) setTransferProgress(asBackup ? '正在备份当前项目…' : '正在打包完整项目…')
     try {
       setTransferProgress(asBackup ? '正在保存当前工作区…' : '正在保存画布与对话…')
@@ -3314,9 +3681,6 @@ function App() {
       }
       const skipped = { count: 0 }
       await extractMediaIntoBundle(manifest, media, { skipped })
-      if (skipped.count) {
-        throw new Error(`有 ${skipped.count} 张图片无法归档。为避免生成缺图项目包，已取消导出；请先修复失效图片后重试。`)
-      }
       const missingMediaIds = [...collectReferencedMediaIds(manifest)].filter((id) => !media.has(id))
       if (missingMediaIds.length) {
         throw new Error(`有 ${missingMediaIds.length} 张本机图片资料缺失。为避免生成缺图项目包，已取消导出。`)
@@ -3326,12 +3690,13 @@ function App() {
       const bundle = await packWorkspaceBundle(manifest, media.values())
       const projectCount = Array.isArray(manifest.projects) ? manifest.projects.length : 0
       const canvasCount = Array.isArray(manifest.canvases) ? manifest.canvases.length : 0
-      const date = new Date().toISOString().slice(0, 10)
-      const safeProjectName = projectName.trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || '当前项目'
-      const fileName = exportingProject
-        ? `DisyLab-${safeProjectName}-${date}.disy`
-        : `DisyLab-完整工作区-${date}.disy`
-      triggerBlobDownload(bundle, fileName)
+      if (saveHandle) {
+        const writable = await saveHandle.createWritable()
+        await writable.write(bundle)
+        await writable.close()
+      } else {
+        triggerBlobDownload(bundle, fileName)
+      }
       const skipNote = skipped.count ? `，${skipped.count} 张外链未能打包` : ''
       const successMessage = asBackup
         ? `备份已开始下载：${projectCount} 个项目、${canvasCount} 张画布`
@@ -3408,7 +3773,27 @@ function App() {
     return { snapshot, historyMediaRecords: undefined }
   }
 
-  const importWholeWorkspace = async (file: File) => {
+  const appendImportedProjects = async (file: File) => {
+    if (transferBusy) {
+      setToastMessage('正在导入或导出，请稍候')
+      return
+    }
+    setTransferProgress('正在读取项目包…')
+    try {
+      const parsed = await parseWorkspaceImportFile(file)
+      setTransferProgress('正在添加独立项目…')
+      const imported = await appendWorkspaceProjects(parsed.snapshot, parsed.historyMediaRecords)
+      const projects = await listWorkspaceProjects()
+      setWorkspaceProjects(projects)
+      setTransferProgress(null)
+      setToastMessage(`已添加 ${imported.length} 个独立项目，现有项目未作改动`)
+    } catch (error) {
+      setTransferProgress(null)
+      throw error
+    }
+  }
+
+  const importIntoCurrentProject = async (file: File) => {
     if (destructiveWorkspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能导入项目')
       return
@@ -3421,55 +3806,46 @@ function App() {
     try {
       const parsed = await parseWorkspaceImportFile(file)
       const currentSnapshot = await exportWorkspaceSnapshot()
-      const hasLiveContent = nodes.length > 0 || edges.length > 0 || savedAssets.length > 0 || generationHistory.length > 0 || outputHistory.length > 0 || agentMessages.length > 0 || agentPlans.length > 0
-      let recoverySnapshot: typeof currentSnapshot | undefined
+      const currentProjectHasCanvasContent = currentSnapshot.canvases
+        .filter((canvas) => canvas.projectId === activeProjectId)
+        .some((canvas) => (
+        (Array.isArray(canvas.nodes) && canvas.nodes.length > 0)
+        || (Array.isArray(canvas.edges) && canvas.edges.length > 0)
+      ))
+      let recoverySnapshot: Awaited<ReturnType<typeof exportWorkspaceSnapshot>> | undefined
       let recoveryHistoryMedia: Awaited<ReturnType<typeof listHistoryMedia>> | undefined
-      if (workspaceSnapshotHasContent(currentSnapshot) || hasLiveContent) {
-        let shouldBackup = window.confirm('检测到当前工作区已有内容。是否先导出完整备份再导入？\n\n选择“确定”备份；选择“取消”表示暂不备份。')
-        if (!shouldBackup) {
-          shouldBackup = window.confirm('再次确认：是否改为先备份？\n\n选择“确定”将备份；再次选择“取消”才会不备份并直接覆盖当前内容。')
-        }
-        if (shouldBackup) {
+      if (currentProjectHasCanvasContent) {
+        const shouldCreateBackup = window.confirm('检测到当前项目已有内容。是否先导出当前项目备份再覆盖？\n\n选择“确定”备份；选择“取消”表示不备份。')
+        if (shouldCreateBackup) {
           setTransferProgress('正在备份当前项目…')
-          await exportWholeWorkspace({ asBackup: true, manageProgress: false })
+          await exportWholeWorkspace({ scope: 'project', asBackup: true, manageProgress: false })
           recoverySnapshot = await exportWorkspaceSnapshot()
           recoveryHistoryMedia = await listHistoryMedia()
+        } else {
+          const confirmedOverwrite = window.confirm('你选择了不备份。继续导入只会覆盖当前项目，当前项目中的画布、节点和对话将无法恢复。\n\n请再次确认：确定覆盖当前项目吗？')
+          if (!confirmedOverwrite) {
+            // `replaceWorkspace` is intentionally below both confirmation
+            // gates, so cancelling here leaves IndexedDB and the canvas intact.
+            setTransferProgress(null)
+            setToastMessage('已取消导入，当前工作区未作任何改动')
+            return
+          }
         }
       }
       setTransferProgress('正在写入导入数据…')
-      await replaceWorkspace(parsed.snapshot, parsed.historyMediaRecords, recoverySnapshot ? { recoverySnapshot, recoveryHistoryMedia } : undefined)
+      const replaced = await replaceWorkspaceProject(activeProjectId, parsed.snapshot, parsed.historyMediaRecords, recoverySnapshot ? { recoverySnapshot, recoveryHistoryMedia } : undefined)
       if (recoverySnapshot) setHasImportBackup(true)
       const projects = await listWorkspaceProjects()
-      if (!projects.length) throw new Error('导入包没有项目')
       setWorkspaceProjects(projects)
-      const auxiliary = await loadWorkspaceAuxiliaryData()
-      setAssetFolders(auxiliary.folders as AssetFolder[])
       setBrokenHistoryIds([])
       historyArchiveAttemptedRef.current.clear()
       historyMediaObjectUrlsRef.current.forEach((objectUrl) => URL.revokeObjectURL(objectUrl))
       historyMediaObjectUrlsRef.current.clear()
-      setGenerationHistory(auxiliary.generationHistory as GenerationRecord[])
-      setOutputHistory(auxiliary.outputHistory as OutputHistoryRecord[])
-      setSavedAssets((await loadLocalAssets<SavedAsset>()) ?? [])
-      const importedApiSettings = auxiliary.publicSettings as Partial<ApiSettings>
-      if (Array.isArray(importedApiSettings.connections)) {
-        saveApiSettings({
-          connections: importedApiSettings.connections.map((connection) => ({
-            ...connection,
-            apiKey: '',
-          })),
-          selectedTextModel: importedApiSettings.selectedTextModel,
-          selectedImageModel: importedApiSettings.selectedImageModel,
-        })
-      }
       setTransferProgress('正在打开导入的项目…')
-      const owner = projects[0]
-      const canvases = await listWorkspaceCanvases(owner.id)
-      setWorkspaceCanvases(canvases)
-      await openWorkspaceCanvas(owner.activeCanvasId, owner.id, true)
-      setProjectOpen(false)
+      setWorkspaceCanvases(replaced.canvases)
+      await openWorkspaceCanvas(replaced.project.activeCanvasId, activeProjectId, true)
       setTransferProgress(null)
-      setToastMessage('完整项目已导入；API Key 出于安全原因未导入')
+      setToastMessage('当前项目已更新，其他项目未作改动')
     } catch (error) {
       setTransferProgress(null)
       throw error
@@ -4036,8 +4412,10 @@ function App() {
   const hasCatalogImageModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'image'))
 
   useEffect(() => {
-    if (!agentTextModelKey && enabledTextModels[0]) setAgentTextModelKey(`${enabledTextModels[0].connection.id}::${enabledTextModels[0].model.id}`)
-    if (!agentImageModelKey && enabledImageModels[0]) setAgentImageModelKey(`${enabledImageModels[0].connection.id}::${enabledImageModels[0].model.id}`)
+    const validTextKeys = new Set(enabledTextModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
+    const validImageKeys = new Set(enabledImageModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
+    if (!validTextKeys.has(agentTextModelKey)) setAgentTextModelKey(enabledTextModels[0] ? `${enabledTextModels[0].connection.id}::${enabledTextModels[0].model.id}` : '')
+    if (agentImageModelKey && !validImageKeys.has(agentImageModelKey)) setAgentImageModelKey('')
   }, [agentImageModelKey, agentTextModelKey, enabledImageModels, enabledTextModels])
 
   const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt' | 'projectId'>, projectId = activeProjectId) => {
@@ -4585,7 +4963,6 @@ function App() {
   }
 
   const sendAgentMessage = async (content: string, invocationText = content) => {
-    if (agentBusy) return
     const [connectionId, modelId] = agentTextModelKey.split('::')
     const selection = enabledTextModels.find((item) => item.connection.id === connectionId && item.model.id === modelId)
     if (!selection) {
@@ -4593,6 +4970,8 @@ function App() {
       setApiOpen(true)
       return
     }
+    setAgentOpen(true)
+    setAgentCanvasPicking(false)
     const uniqueAgentReferenceCount = new Set(agentReferences.map((reference) => reference.url)).size
     if (uniqueAgentReferenceCount > 16) {
       setToastMessage(`Agent 参考图最多 16 张，当前共 ${uniqueAgentReferenceCount} 张`)
@@ -4620,22 +4999,30 @@ function App() {
       .map((preset) => `${preset.name}：“${preset.keyword.trim()}”`)
     const userMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'user', content, createdAt: new Date().toISOString(), references: sentReferences }
     const nextMessages = [...agentMessages, userMessage]
+    agentRequestRef.current?.abort()
+    const controller = new AbortController()
+    const requestVersion = ++agentRequestVersionRef.current
+    agentRequestRef.current = controller
     setAgentMessages(nextMessages)
     setAgentBusy(true)
     try {
-      const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url)))
+      const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
       const agentReferenceGuide = buildNumberedReferenceGuide(agentReferences)
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复","imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；未明确数量时默认三个方案。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
-      let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images })
+      const orchestrationGuide = `你不是只负责生图的助手，而是创作流程的总控。先识别用户的目标属于脚本/文案、设计提案、图像、视频或混合任务。只要缺少会影响结果的关键信息，先用 1 到 3 个简洁问题逐步澄清：目标受众、交付物、风格、素材、时长/规格与优先级；不要一次抛出冗长问卷。用户说“写脚本”时，先确认题材、平台、时长、人物和结构，再给大纲，确认后再给分场/镜头/台词；用户说“设计提案”时，先确认品牌目标、受众、场景与约束，再给可选方向；用户说“视频”时，先确认时长、平台、画幅、节奏与素材，再规划脚本、分镜、画面与声音。信息已足够时，按内容类型给出明确下一步：文本内容应结构化、可直接放入文本节点；图像才提出 imagePlans；视频先拆为脚本、分镜、素材和生成任务，暂不假装视频已生成。不要为了凑方案而在信息不足时直接生成。`
+      const textNodeGuide = `文本节点有严格门槛：需求澄清、创作方向、大纲提案、用户尚未确认的草稿都只能放在 reply 中，绝对不要返回 textNode。只有用户已经明确选择或确认方向，并且你已产出一份完整、整合、可直接交付的最终脚本/文案/提案正文时，才返回 textNode。textNode 只能有一个，content 必须是完整交付物，不能是追问、方案列表或解释。`
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；未明确数量时默认三个方案。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images, signal: controller.signal })
+      if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       let parsed = parseAgentReply(raw)
       let parsedPlans = parsed.imagePlans ?? (parsed.imagePlan ? [parsed.imagePlan] : [])
       if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
         raw = await generateRemoteText(
           { baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id },
           `${instruction}\n\n你上一次返回了 ${parsedPlans.length} 个方案，数量不符合要求。请重新返回恰好 ${requestedPlanCount} 个彼此独立的 imagePlans。`,
-          { referenceImages: images },
+          { referenceImages: images, signal: controller.signal },
         )
+        if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
         const corrected = parseAgentReply(raw)
         const correctedPlans = corrected.imagePlans ?? (corrected.imagePlan ? [corrected.imagePlan] : [])
         parsed = corrected
@@ -4644,7 +5031,14 @@ function App() {
       if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
         throw new Error(`Agent 未能返回要求的 ${requestedPlanCount} 个方案，请重试一次`)
       }
-      const assistantMessage: AgentMessage = { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: parsed.reply || '我已经整理好了。', createdAt: new Date().toISOString() }
+      const textNodeId = parsed.textNode ? createAgentTextNode(parsed.textNode.content, parsed.textNode.title) : null
+      const assistantMessage: AgentMessage = {
+        id: `agent-message-${crypto.randomUUID()}`,
+        role: 'assistant',
+        content: parsed.reply || '我已经整理好了。',
+        createdAt: new Date().toISOString(),
+        textNode: parsed.textNode ? { ...parsed.textNode, nodeId: textNodeId ?? undefined } : undefined,
+      }
       setAgentMessages((current) => [...current, assistantMessage])
       parsedPlans = parsedPlans.slice(0, requestedPlanCount)
       if (parsedPlans.length) {
@@ -4661,10 +5055,10 @@ function App() {
           invokedStyleReferences,
           styleInvocationWord: styleInvocationWords.length ? styleInvocationWords.join('、') : undefined,
           invokedStylePresets,
-          aspectRatio: draft.aspectRatio,
-          resolution: draft.resolution,
-          detail: draft.detail,
-          count: draft.count,
+          aspectRatio: agentImageDefaults.aspectRatio,
+          resolution: agentImageDefaults.resolution,
+          detail: agentImageDefaults.detail,
+          count: agentImageDefaults.count,
           imageConnectionId,
           imageModelId,
           assistantMessageId: assistantMessage.id,
@@ -4673,18 +5067,39 @@ function App() {
       }
       setAgentReferences([])
     } catch (error) {
+      if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       setAgentMessages((current) => [...current, { id: `agent-message-${crypto.randomUUID()}`, role: 'assistant', content: `这次没有成功：${error instanceof Error ? error.message : '对话请求失败'}`, createdAt: new Date().toISOString() }])
     } finally {
-      setAgentBusy(false)
+      if (requestVersion === agentRequestVersionRef.current) {
+        agentRequestRef.current = null
+        setAgentBusy(false)
+      }
     }
+  }
+
+  const openTransferDialog = (scope: TransferScope) => {
+    setTransferScope(scope)
+    setTransferOpen(true)
+  }
+
+  const importWorkspaceFile = (file: File) => (
+    transferScope === 'workspace-append' ? appendImportedProjects(file) : importIntoCurrentProject(file)
+  )
+
+  const stopAgentThinking = () => {
+    const controller = agentRequestRef.current
+    if (!controller || controller.signal.aborted) return
+    controller.abort()
+    setToastMessage('已中止本次思考，你可以继续调整方向')
   }
 
   const selectAgentPlanOptions = (groupPlanIds: string[], selectedPlanIds: string[]) => {
     const groupSet = new Set(groupPlanIds)
     const selectedSet = new Set(selectedPlanIds)
-    setAgentPlans((current) => current
-      .filter((plan) => !groupSet.has(plan.id) || selectedSet.has(plan.id))
-      .map((plan) => selectedSet.has(plan.id) && plan.status === 'proposed' ? { ...plan, status: 'ready' as const } : plan))
+    setAgentPlans((current) => current.map((plan) => {
+      if (!groupSet.has(plan.id) || (plan.status !== 'proposed' && plan.status !== 'ready')) return plan
+      return { ...plan, status: selectedSet.has(plan.id) ? 'ready' as const : 'proposed' as const }
+    }))
     setToastMessage(selectedPlanIds.length > 1 ? `已展开 ${selectedPlanIds.length} 个独立方案，请分别确认` : '方案已展开，请确认后生成')
   }
 
@@ -4854,12 +5269,53 @@ function App() {
   const imageQuickToolbarPlacedBelow = Boolean(nodeOverlayRect && nodeOverlayRect.top < 58)
   const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
     || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
+  const normalizedNodeSearch = nodeSearchQuery.trim().toLocaleLowerCase()
+  const nodeSearchResults = nodes.filter((node) => {
+    if (!normalizedNodeSearch) return true
+    const searchable = [node.data.title, node.data.body, node.data.promptText, node.data.fileName, node.data.status]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toLocaleLowerCase()
+    return searchable.includes(normalizedNodeSearch)
+  })
+  const sortedHomeProjects = [...filteredWorkspaceProjects].sort((left, right) => {
+    const { key, direction } = projectHomeSort
+    const result = key === 'name'
+      ? left.name.localeCompare(right.name, 'zh-CN')
+      : left[key].localeCompare(right[key])
+    return direction === 'asc' ? result : -result
+  })
+  const toggleProjectHomeSort = (key: 'name' | 'createdAt' | 'updatedAt') => {
+    setProjectHomeSort((current) => current.key === key
+      ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+      : { key, direction: key === 'name' ? 'asc' : 'desc' })
+  }
   const latestProjectCoverById = new Map<string, GenerationRecord>()
   generationHistory.forEach((record) => {
     const projectId = record.projectId ?? CURRENT_PROJECT_ID
     const current = latestProjectCoverById.get(projectId)
     if (!current || record.createdAt > current.createdAt) latestProjectCoverById.set(projectId, record)
   })
+
+  useGSAP(() => {
+    if (!projectHomeOpen || !projectHomeContentRef.current) return
+    const targets = projectHomeContentRef.current.querySelectorAll('.project-home-card, .project-home-list-row')
+    if (!targets.length) return
+    gsap.fromTo(targets, {
+      autoAlpha: reduceMotion ? 1 : 0,
+      y: reduceMotion ? 0 : 14,
+      scale: reduceMotion ? 1 : projectHomeView === 'grid' ? .975 : 1,
+    }, {
+      autoAlpha: 1,
+      y: 0,
+      scale: 1,
+      duration: reduceMotion ? 0 : .38,
+      stagger: reduceMotion ? 0 : .045,
+      ease: 'power2.out',
+      overwrite: 'auto',
+      clearProps: 'transform,opacity,visibility',
+    })
+  }, { scope: projectHomeContentRef, dependencies: [projectHomeOpen, projectSearch, projectHomeSort, projectHomeView, workspaceProjects.length], revertOnUpdate: true })
 
   const selectedGroupNode = selectedNodeIds.length === 1
     ? nodes.find((node) => node.id === selectedNodeIds[0] && node.data.kind === 'group')
@@ -5456,11 +5912,81 @@ function App() {
 
   return (
     <div ref={shellRef} className={`disy-shell ${agentOpen ? 'has-agent-open' : ''} ${automaticPerformanceMode ? 'is-performance-mode' : ''} ${isNodeDragging ? 'is-node-dragging' : ''}`}>
+      <AnimatePresence>
+        {projectHomeOpen && (
+          <motion.section className="project-home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <header className="project-home-header">
+              <div className="project-home-brand"><img src="/logo-light.png" alt="DisyLab" /></div>
+              <nav><button className="is-active">个人</button></nav>
+              <div className="project-home-actions">
+                <label className="project-home-search"><Search size={16} /><input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="搜索" /></label>
+                <button className={`project-home-select-all ${projectHomeSelectionMode ? 'is-active' : ''}`} disabled={!sortedHomeProjects.length} onClick={() => {
+                  const allIds = sortedHomeProjects.map((project) => project.id)
+                  const allSelected = allIds.every((id) => selectedProjectIds.includes(id))
+                  setProjectHomeSelectionMode(!allSelected)
+                  setSelectedProjectIds(allSelected ? [] : allIds)
+                }}><Check size={15} />{projectHomeSelectionMode ? '取消全选' : '全选'}</button>
+                {projectHomeSelectionMode && selectedProjectIds.length > 0 && <button className="project-home-batch-delete" onClick={() => void removeProjects(selectedProjectIds)}><Trash2 size={15} />批量删除 ({selectedProjectIds.length})</button>}
+                <button className={`project-home-icon ${projectHomeView === 'list' ? 'is-active' : ''}`} onClick={() => setProjectHomeView((view) => view === 'grid' ? 'list' : 'grid')} aria-label={projectHomeView === 'grid' ? '切换到列表视图' : '切换到宫格视图'} title={projectHomeView === 'grid' ? '列表视图' : '宫格视图'}>{projectHomeView === 'grid' ? <List size={18} /> : <Grid3X3 size={17} />}</button>
+                <button className="project-home-icon" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
+                <button className="project-home-create" onClick={() => void createNewProject()}><Plus size={16} /> 新建项目</button>
+              </div>
+            </header>
+            <div ref={projectHomeContentRef} className="project-home-content">
+              {projectHomeView === 'grid' ? <div className="project-home-grid">
+                <button className="project-home-card project-home-new" onClick={() => void createNewProject()}><span><Plus size={25} /></span><strong>新建项目</strong></button>
+                {sortedHomeProjects.map((project, index) => {
+                  const cover = latestProjectCoverById.get(project.id)
+                  const isSelected = selectedProjectIds.includes(project.id)
+                  const isRenaming = projectRename?.id === project.id && projectRename.source === 'home'
+                  return <article className={`project-home-card ${isSelected ? 'is-selected' : ''}`} key={project.id} onClick={() => {
+                    if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
+                    if (isRenaming) return
+                    setCreateProjectOpen(false); void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectHomeOpen(false))
+                  }}>
+                    {projectHomeSelectionMode && <button className="project-home-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={14} />}</button>}
+                    <button className="project-home-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
+                    <button className="project-home-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
+                    <div className={`project-home-cover cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <div className="cover-orbit"><i /><i /><i /></div>}</div>
+                    <div className="project-home-meta">{isRenaming ? <input autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<small>{project.canvasIds.length} 张画布 · 编辑于 {formatRelativeTime(project.updatedAt)}</small></div>
+                  </article>
+                })}
+              </div> : <div className="project-home-list" role="table" aria-label="项目列表">
+                <div className="project-home-list-head" role="row"><span>预览</span><button onClick={() => toggleProjectHomeSort('name')}>名称 {projectHomeSort.key === 'name' ? (projectHomeSort.direction === 'asc' ? '↑' : '↓') : ''}</button><span>类型</span><span>内容</span><button onClick={() => toggleProjectHomeSort('createdAt')}>创建时间 {projectHomeSort.key === 'createdAt' ? (projectHomeSort.direction === 'asc' ? '↑' : '↓') : ''}</button><button onClick={() => toggleProjectHomeSort('updatedAt')}>最近更新 {projectHomeSort.key === 'updatedAt' ? (projectHomeSort.direction === 'asc' ? '↑' : '↓') : ''}</button></div>
+                {sortedHomeProjects.map((project, index) => {
+                  const cover = latestProjectCoverById.get(project.id)
+                  const isSelected = selectedProjectIds.includes(project.id)
+                  const isRenaming = projectRename?.id === project.id && projectRename.source === 'home'
+                  return <div className={`project-home-list-row ${isSelected ? 'is-selected' : ''}`} role="row" tabIndex={0} key={project.id} onClick={() => {
+                    if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
+                    if (isRenaming) return
+                    setCreateProjectOpen(false); void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectHomeOpen(false))
+                  }}>
+                    {projectHomeSelectionMode && <button className="project-home-list-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={13} />}</button>}
+                    <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span>{project.canvasIds.length} 张画布</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
+                    <button className="project-home-list-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
+                    <button className="project-home-list-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
+                  </div>
+                })}
+                {!sortedHomeProjects.length && <div className="project-home-list-empty">没有匹配的项目</div>}
+              </div>}
+            </div>
+          </motion.section>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {transferProgress && <motion.div className="transfer-progress-hud" role="status" aria-live="polite" initial={{ opacity: 0, y: 18, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }}>
+          <div className="transfer-progress-icon"><LoaderCircle size={18} className="is-spinning" /></div>
+          <div><strong>项目数据处理中</strong><span>{transferProgress}</span><div className="transfer-progress-track"><i /></div></div>
+          <em>请勿关闭页面</em>
+        </motion.div>}
+      </AnimatePresence>
       <main className="canvas-area">
         <ActiveGenerationNodesContext.Provider value={activeGeneratingNodeIds}>
         <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
+              <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
               <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
           <ReactFlow
           nodes={nodes}
@@ -5655,6 +6181,7 @@ function App() {
           />
           </ReactFlow>
               </NodeExtensionMenuContext.Provider>
+              </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
         </ImagePreviewOpenContext.Provider>
@@ -5775,6 +6302,18 @@ function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
+            <AnimatePresence initial={false}>
+              {!agentOpen && <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><WelcomeAgentComposer
+                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name }))}
+                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name }))}
+                textModelKey={agentTextModelKey}
+                imageModelKey={agentImageModelKey}
+                onTextModelChange={setAgentTextModelKey}
+                onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
+                onSend={(message) => void sendAgentMessage(message, message)}
+                busy={agentBusy}
+              /></motion.div>}
+            </AnimatePresence>
             <div className="empty-canvas-heading">
               <button onClick={openCenteredNodeMenu}>
                 <Sparkles size={14} />
@@ -5905,7 +6444,7 @@ function App() {
         </button>
 
         <div className="floating-chrome top-left-cluster canvas-identity-cluster">
-          <button className="brand-chip brand-only" aria-label="打开项目" onClick={() => setProjectOpen(true)}>
+          <button className={`brand-chip brand-only ${projectMenuOpen ? 'is-active' : ''}`} aria-label="打开项目菜单" aria-expanded={projectMenuOpen} onClick={() => setProjectMenuOpen((open) => !open)}>
             <img className="brand-logo" src="/disy-logo.png" alt="" />
           </button>
           <span className="cluster-divider" />
@@ -5961,6 +6500,25 @@ function App() {
             {canvasSaved ? <Check size={13} /> : <span className="unsaved-dot" />}
           </button>
         </div>
+
+        <AnimatePresence>
+          {projectMenuOpen && (
+            <motion.section className="project-brand-menu" initial={{ opacity: 0, y: -6, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -5, scale: .98 }}>
+              <button className="project-brand-menu-primary" onClick={() => {
+                void saveCanvasState(canvasName, true).finally(() => {
+                  setProjectMenuOpen(false)
+                  setProjectHomeOpen(true)
+                })
+              }}><ChevronLeft size={15} /><span>返回工作空间</span></button>
+              <div className="project-brand-menu-section"><small>项目</small>
+                <button onClick={() => { setProjectMenuOpen(false); setCanvasSwitcherOpen(true); setProjectRename({ id: activeProjectId, draft: projectName, source: 'switcher' }) }}><Pencil size={14} /><span>重命名</span></button>
+                <button onClick={() => { setProjectMenuOpen(false); void createNewProject() }}><Plus size={15} /><span>新建项目</span></button>
+                <button onClick={() => { setProjectMenuOpen(false); setSelectedProjectIds([]); setProjectOpen(true) }}><Folder size={14} /><span>管理项目</span></button>
+              </div>
+              <button className="project-brand-menu-danger" onClick={() => { setProjectMenuOpen(false); void removeProject(activeProjectId) }}><Trash2 size={14} /><span>删除当前项目</span></button>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {canvasSwitcherOpen && (
@@ -6213,7 +6771,7 @@ function App() {
             aria-label="导入项目"
             title="导入项目或画布备份"
             disabled={transferBusy}
-            onClick={() => setTransferOpen(true)}
+            onClick={() => openTransferDialog('project-replace')}
           >
             <Upload size={16} />
           </button>
@@ -6223,7 +6781,7 @@ function App() {
             aria-label="导出项目"
             title="选择导出全部工作区或当前项目"
             disabled={transferBusy}
-            onClick={() => setTransferOpen(true)}
+            onClick={() => openTransferDialog('project-replace')}
           >
             <Download size={16} />
           </button>
@@ -6255,9 +6813,10 @@ function App() {
             <PanelsTopLeft size={18} />
           </button>
           <button
+            className={nodeSearchOpen ? 'is-active' : ''}
             aria-label="搜索节点"
             data-tooltip="搜索节点"
-            onClick={() => setToastMessage('节点搜索将在下一阶段开放')}
+            onClick={() => { setNodeSearchOpen((open) => !open); setNodeSearchQuery('') }}
           >
             <Search size={18} />
           </button>
@@ -6286,6 +6845,24 @@ function App() {
             <img src="/disy-logo.png" alt="" />
           </button>
         </nav>
+
+        <AnimatePresence>
+          {nodeSearchOpen && <motion.section className="node-search-panel" initial={{ opacity: 0, x: -8, scale: .98 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -6, scale: .98 }}>
+            <header><div><Search size={15} /><strong>搜索节点</strong></div><button aria-label="关闭搜索节点" onClick={() => setNodeSearchOpen(false)}><X size={16} /></button></header>
+            <label><Search size={14} /><input autoFocus value={nodeSearchQuery} placeholder="搜索名称、内容或文件名" onChange={(event) => setNodeSearchQuery(event.target.value)} /></label>
+            <div className="node-search-results">
+              {nodeSearchResults.map((node) => <button key={node.id} onClick={() => {
+                const size = getNodeSize(node)
+                setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })))
+                setSelectedNodeIds([node.id])
+                setCenter(node.position.x + size.width / 2, node.position.y + size.height / 2, { zoom: Math.max(canvasZoom, .85), duration: reduceMotion ? 0 : 320 })
+                setNodeSearchOpen(false)
+              }}><span className={`node-search-kind is-${node.data.kind}`}>{node.data.kind === 'group' ? <Box size={13} /> : node.data.kind === 'text' ? <Type size={13} /> : <FileImage size={13} />}</span><span><strong>{getNodeDisplayTitle(node.data)}</strong><small>{node.data.body || node.data.fileName || (node.data.kind === 'group' ? '分组' : '无附加内容')}</small></span></button>)}
+              {!nodeSearchResults.length && <div className="node-search-empty"><Search size={20} /><span>没有找到匹配节点</span></div>}
+            </div>
+            <footer>{nodeSearchResults.length} / {nodes.length} 个节点</footer>
+          </motion.section>}
+        </AnimatePresence>
 
         <button
           type="button"
@@ -6371,13 +6948,23 @@ function App() {
                 detailOptions={(Object.keys(IMAGE_DETAIL_LABELS) as ImageDetail[]).map((value) => ({ value, label: IMAGE_DETAIL_LABELS[value] }))}
                 textModelKey={agentTextModelKey}
                 imageModelKey={agentImageModelKey}
+                imageDefaults={agentImageDefaults}
                 busy={agentBusy}
+                onStop={stopAgentThinking}
                 onClose={() => { setAgentOpen(false); setAgentCanvasPicking(false) }}
                 onNewConversation={beginNewAgentConversation}
                 onDeleteConversation={() => void deleteCurrentAgentConversation()}
                 onSelectConversation={(id) => void selectAgentConversation(id)}
                 onTextModelChange={setAgentTextModelKey}
-                onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId, modelId] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'ready' ? { ...plan, imageConnectionId: connectionId, imageModelId: modelId } : plan)) }}
+                onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
+                onImageDefaultsChange={(patch) => setAgentImageDefaults((current) => ({
+                  ...current,
+                  ...(patch.aspectRatio ? { aspectRatio: patch.aspectRatio as ImageAspectRatio } : {}),
+                  ...(patch.resolution ? { resolution: patch.resolution as ImageResolution } : {}),
+                  ...(patch.detail ? { detail: patch.detail as ImageDetail } : {}),
+                  ...(typeof patch.count === 'number' ? { count: patch.count } : {}),
+                }))}
+                onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
                 onReferencesChange={setAgentReferences}
                 onCreateUploadedReference={createAgentUploadedReference}
                 onPendingReferenceConsumed={() => setAgentPendingReference(null)}
@@ -6386,7 +6973,7 @@ function App() {
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
                 onSelectPlanOptions={selectAgentPlanOptions}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
-                onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'cancelled' } : plan))}
+                onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'proposed' } : plan))}
                 onLocateCanvasNode={locateAgentCanvasNode}
               />
             </motion.div>
@@ -8052,6 +8639,20 @@ function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {createProjectOpen && (
+          <motion.div className="create-project-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !createProjectBusy && setCreateProjectOpen(false)}>
+            <motion.form className="create-project-dialog" initial={{ opacity: 0, y: 14, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: .98 }} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void confirmCreateProject() }}>
+              <header><div><small>NEW PROJECT</small><h2>创建新项目</h2><p>设置项目名称和初始画布数量，创建完成后进入第一张画布。</p></div><button type="button" aria-label="关闭" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}><X size={18} /></button></header>
+              <label className="create-project-name-field"><span>项目名称</span><input autoFocus maxLength={48} value={createProjectName} placeholder="输入项目名称" onChange={(event) => setCreateProjectName(event.target.value)} /></label>
+              <div className="create-project-count-field"><div><span>初始画布</span><small>后续仍可在项目中继续添加</small></div><div className="create-project-stepper"><button type="button" disabled={createProjectCanvasCount <= 1 || createProjectBusy} onClick={() => setCreateProjectCanvasCount((count) => Math.max(1, count - 1))}><Minus size={15} /></button><strong>{createProjectCanvasCount}</strong><button type="button" disabled={createProjectCanvasCount >= 20 || createProjectBusy} onClick={() => setCreateProjectCanvasCount((count) => Math.min(20, count + 1))}><Plus size={15} /></button></div></div>
+              <div className="create-project-presets"><span>快速选择</span><div>{[1, 2, 3, 5, 10].map((count) => <button type="button" key={count} className={createProjectCanvasCount === count ? 'is-active' : ''} onClick={() => setCreateProjectCanvasCount(count)}>{count} 张</button>)}</div></div>
+              <footer><button type="button" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}>取消</button><button type="submit" className="create-project-confirm" disabled={!createProjectName.trim() || createProjectBusy}>{createProjectBusy ? <><LoaderCircle size={15} className="is-spinning" />正在创建</> : <><Plus size={15} />创建并进入</>}</button></footer>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {projectOpen && (
           <motion.div
             className="project-modal-backdrop"
@@ -8096,25 +8697,20 @@ function App() {
                     onChange={(event) => setProjectSearch(event.target.value)}
                   />
                 </label>
-                <button className="project-sort-button">
-                  <History size={15} />
-                  最近更新
-                </button>
-                <button onClick={() => workspaceImportInputRef.current?.click()}>
-                  <Upload size={15} />
-                  导入项目
-                </button>
                 <button
+                  className="project-toolbar-icon"
+                  aria-label="导入/导出"
+                  title="导入/导出"
                   disabled={transferBusy}
-                  onClick={() => {
-                    setProjectOpen(false)
-                    setTransferOpen(true)
-                  }}
+                  onClick={() => openTransferDialog('workspace-append')}
                 >
-                  <Download size={15} />
-                  选择导出
+                  <ArrowUpDown size={16} />
                 </button>
                 <label className="card-scale-control project-card-scale" title="调整项目卡片大小"><Grid3X3 size={14} /><input type="range" min="0.8" max="1.35" step="0.05" value={projectCardScale} onChange={(event) => setProjectCardScale(Number(event.target.value))} /></label>
+                <button className="project-select-all" disabled={!workspaceProjects.length} onClick={() => setSelectedProjectIds((current) => current.length === workspaceProjects.length ? [] : workspaceProjects.map((project) => project.id))}>
+                  <Check size={15} />{selectedProjectIds.length === workspaceProjects.length && workspaceProjects.length ? '取消全选' : '全选'}
+                </button>
+                {selectedProjectIds.length > 0 && <button className="project-batch-delete" onClick={() => void removeProjects(selectedProjectIds)}><Trash2 size={15} />删除选中 ({selectedProjectIds.length})</button>}
                 <button className="project-create-button" onClick={() => void createNewProject()}>
                   <Plus size={16} />
                   新建
@@ -8131,7 +8727,9 @@ function App() {
                   const projectCanvases = isCurrent ? workspaceCanvases : []
                   const cover = latestProjectCoverById.get(project.id)
                   const isRenaming = projectRename?.id === project.id && projectRename.source === 'modal'
-                  return <div key={project.id} className={`project-card-wrap ${isCurrent ? 'is-current' : ''}`}>
+                  const isSelected = selectedProjectIds.includes(project.id)
+                  return <div key={project.id} className={`project-card-wrap ${isCurrent ? 'is-current' : ''} ${isSelected ? 'is-selected' : ''}`}>
+                    <button className="project-card-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} aria-pressed={isSelected} onClick={() => setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id])}>{isSelected && <Check size={13} />}</button>
                     <button className={`project-card ${isCurrent ? 'is-current' : ''}`} onClick={() => {
                       if (isRenaming) return
                       void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectOpen(false)).catch(() => setToastMessage('项目打开失败'))
@@ -8184,8 +8782,7 @@ function App() {
       <input ref={workspaceImportInputRef} className="image-file-input" type="file" accept=".json,.disy" aria-label="导入完整 Disy 项目" onChange={(event) => {
         const file = event.target.files?.[0]
         if (file) {
-          setTransferOpen(false)
-          void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+          void importWorkspaceFile(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
         }
         event.target.value = ''
       }} />
@@ -8212,7 +8809,7 @@ function App() {
               <header className="transfer-modal-header">
                 <div>
                   <h2 id="transfer-dialog-title">导入 / 导出</h2>
-                  <span>备份与恢复完整工作区（画布、生成历史、资产；不含 API Key）</span>
+                  <span>{transferScope === 'workspace-append' ? '导入会添加为独立项目，不会覆盖现有内容' : '项目内导入会替换当前项目，其他项目不受影响'}（不含 API Key）</span>
                 </div>
                 <button type="button" aria-label="关闭导入导出" disabled={transferBusy} onClick={() => setTransferOpen(false)}><X size={18} /></button>
               </header>
@@ -8241,14 +8838,13 @@ function App() {
                   setTransferDropActive(false)
                   const file = event.dataTransfer.files?.[0]
                   if (!file) return
-                  setTransferOpen(false)
-                  void importWholeWorkspace(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
+                  void importWorkspaceFile(file).catch((error) => setToastMessage(error instanceof Error ? error.message : '项目导入失败'))
                 }}
               >
                 <Upload size={28} />
-                <strong>导入项目或画布备份</strong>
+                <strong>{transferScope === 'workspace-append' ? '导入为独立项目' : '导入并替换当前项目'}</strong>
                 <span>拖拽 `.disy` / `.json` 到此处，或点击选择文件</span>
-                <em>空工作区直接导入；已有内容时可选择备份，连续两次拒绝备份才会直接覆盖</em>
+                <em>{transferScope === 'workspace-append' ? '可重复导入同一个项目包，每次都会创建新的独立项目' : '当前项目为空时直接导入；有内容时会先询问备份，并在不备份时二次确认'}</em>
               </button>
 
               {hasImportBackup && <div className="transfer-export-card">
@@ -8276,7 +8872,7 @@ function App() {
                   type="button"
                   className="transfer-export-button"
                   disabled={transferBusy}
-                  onClick={() => void exportWholeWorkspace({ scope: 'workspace' }).then(() => setTransferOpen(false)).catch((error) => {
+                  onClick={() => void exportWholeWorkspace({ scope: 'workspace' }).catch((error) => {
                     if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '完整导出失败')
                   })}
                 >
@@ -8294,7 +8890,7 @@ function App() {
                   type="button"
                   className="transfer-export-button"
                   disabled={transferBusy}
-                  onClick={() => void exportWholeWorkspace({ scope: 'project' }).then(() => setTransferOpen(false)).catch((error) => {
+                  onClick={() => void exportWholeWorkspace({ scope: 'project' }).catch((error) => {
                     if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '当前项目导出失败')
                   })}
                 >
