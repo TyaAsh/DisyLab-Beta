@@ -83,7 +83,7 @@ import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, p
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { getRequestedAgentPlanCount, messageExpectsImagePlans, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 gsap.registerPlugin(useGSAP)
 
@@ -542,6 +542,7 @@ type AtomicPromptEditorProps = {
   onChange: (value: string, cursor: number) => void
   onRemoveToken: (start: number, end: number) => void
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void
+  onBlur?: () => void
   ariaLabel?: string
   placeholder?: string
 }
@@ -646,12 +647,33 @@ function atomicDeleteTouchesToken(root: HTMLElement, direction: 'backward' | 'fo
   })
 }
 
+function getAtomicBackwardTokenRange(root: HTMLElement) {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount) return null
+  const range = selection.getRangeAt(0)
+  if (!range.collapsed || !root.contains(range.startContainer)) return null
+  const caret = getAtomicPromptCaret(root)
+  const tokens = Array.from(root.querySelectorAll<HTMLElement>('[data-atomic-mention]'))
+  for (const token of tokens) {
+    const prefix = document.createRange()
+    prefix.selectNodeContents(root)
+    prefix.setEndBefore(token)
+    const holder = document.createElement('div')
+    holder.append(prefix.cloneContents())
+    const start = serializeAtomicPromptRoot(holder).length
+    const end = start + (token.dataset.atomicMention?.length ?? 0)
+    if (caret > start && caret <= end) return { start, end }
+  }
+  return null
+}
+
 const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEditorProps>(function AtomicPromptEditor({
   value,
   references,
   onChange,
   onRemoveToken,
   onKeyDown,
+  onBlur,
   ariaLabel = '图像提示词',
   placeholder = '描述任何你想生成的图像，按 @ 引用参考素材',
 }, forwardedRef) {
@@ -799,9 +821,13 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
       }}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || composingRef.current) return
-        if (event.key === 'Backspace' && atomicDeleteTouchesToken(event.currentTarget, 'backward')) {
-          event.preventDefault()
-          return
+        if (event.key === 'Backspace') {
+          const tokenRange = getAtomicBackwardTokenRange(event.currentTarget)
+          if (tokenRange) {
+            event.preventDefault()
+            onRemoveToken(tokenRange.start, tokenRange.end)
+            return
+          }
         }
         if (event.key === 'Delete' && atomicDeleteTouchesToken(event.currentTarget, 'forward')) {
           event.preventDefault()
@@ -814,6 +840,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
           lastCaretRef.current = getAtomicPromptCaret(event.currentTarget)
         }
       }}
+      onBlur={onBlur}
     />
   )
 })
@@ -4202,7 +4229,8 @@ function App() {
     } : node))
     const beforeCursor = value.slice(0, cursor)
     const match = beforeCursor.match(/@(?:\[([^\]]*)\]|([^@\s]*))$/)
-    if (match && activeGenerationReferences.length) {
+    const matchedExistingReference = match && activeGenerationReferences.some((reference) => reference.mention === match[0])
+    if (match && !matchedExistingReference && activeGenerationReferences.length) {
       setImageMentionRange({ start: cursor - match[0].length, end: cursor })
       setImageMentionQuery(match[1] ?? match[2] ?? '')
       setImageMentionIndex(0)
@@ -4260,7 +4288,8 @@ function App() {
     updateActiveTextNode(value)
     const beforeCursor = value.slice(0, cursor)
     const match = beforeCursor.match(/@(?:\[([^\]]*)\]|([^@\s]*))$/)
-    if (match && activeTextReferences.length) {
+    const matchedExistingReference = match && activeTextReferences.some((reference) => reference.mention === match[0])
+    if (match && !matchedExistingReference && activeTextReferences.length) {
       setTextMentionRange({ start: cursor - match[0].length, end: cursor })
       setTextMentionQuery(match[1] ?? match[2] ?? '')
       setTextMentionIndex(0)
@@ -4983,7 +5012,7 @@ function App() {
     return { ...reference, nodeId }
   }
 
-  const sendAgentMessage = async (content: string, invocationText = content) => {
+  const sendAgentMessage = async (content: string, invocationText = content, messageReferences = agentReferences) => {
     const [connectionId, modelId] = agentTextModelKey.split('::')
     const selection = enabledTextModels.find((item) => item.connection.id === connectionId && item.model.id === modelId)
     if (!selection) {
@@ -4993,12 +5022,12 @@ function App() {
     }
     setAgentOpen(true)
     setAgentCanvasPicking(false)
-    const uniqueAgentReferenceCount = new Set(agentReferences.map((reference) => reference.url)).size
+    const uniqueAgentReferenceCount = new Set(messageReferences.map((reference) => reference.url)).size
     if (uniqueAgentReferenceCount > 16) {
       setToastMessage(`Agent 参考图最多 16 张，当前共 ${uniqueAgentReferenceCount} 张`)
       return
     }
-    const sentReferences = agentReferences.map((reference) => ({ ...reference }))
+    const sentReferences = messageReferences.map((reference) => ({ ...reference }))
     const styleInvocation = resolveStylePresets(stylePresets, invocationText)
     const invokedStylePresets = styleInvocation.matchedPresets.map((preset) => ({
       id: preset.id,
@@ -5013,8 +5042,13 @@ function App() {
       setToastMessage('单次最多提供 20 个独立方案，请减少方案数量后重试')
       return
     }
-    const requestedPlanCount = explicitPlanCount ?? 3
+    const directImagePlanRequested = messageRequestsDirectImagePlan(invocationText)
+    const hasImageConversationContext = sentReferences.length > 0
+      || agentMessages.slice(-6).some((message) => Boolean(message.references?.length))
+      || agentPlans.some((plan) => plan.status === 'proposed' || plan.status === 'ready')
+    const requestedPlanCount = explicitPlanCount ?? (directImagePlanRequested ? 1 : 3)
     const expectsImagePlans = messageExpectsImagePlans(invocationText)
+      || (directImagePlanRequested && hasImageConversationContext)
     const availableStyleKeywords = stylePresets
       .filter((preset) => preset.enabled && preset.references.length && preset.keyword.trim())
       .map((preset) => `${preset.name}：“${preset.keyword.trim()}”`)
@@ -5027,12 +5061,15 @@ function App() {
     setAgentMessages(nextMessages)
     setAgentBusy(true)
     try {
-      const images = await Promise.all(agentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
+      const images = await Promise.all(sentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
-      const agentReferenceGuide = buildNumberedReferenceGuide(agentReferences)
+      const agentReferenceGuide = buildNumberedReferenceGuide(sentReferences)
       const orchestrationGuide = `你不是只负责生图的助手，而是创作流程的总控。先识别用户的目标属于脚本/文案、设计提案、图像、视频或混合任务。只要缺少会影响结果的关键信息，先用 1 到 3 个简洁问题逐步澄清：目标受众、交付物、风格、素材、时长/规格与优先级；不要一次抛出冗长问卷。用户说“写脚本”时，先确认题材、平台、时长、人物和结构，再给大纲，确认后再给分场/镜头/台词；用户说“设计提案”时，先确认品牌目标、受众、场景与约束，再给可选方向；用户说“视频”时，先确认时长、平台、画幅、节奏与素材，再规划脚本、分镜、画面与声音。信息已足够时，按内容类型给出明确下一步：文本内容应结构化、可直接放入文本节点；图像才提出 imagePlans；视频先拆为脚本、分镜、素材和生成任务，暂不假装视频已生成。不要为了凑方案而在信息不足时直接生成。`
       const textNodeGuide = `文本节点有严格门槛：需求澄清、创作方向、大纲提案、用户尚未确认的草稿都只能放在 reply 中，绝对不要返回 textNode。只有用户已经明确选择或确认方向，并且你已产出一份完整、整合、可直接交付的最终脚本/文案/提案正文时，才返回 textNode。textNode 只能有一个，content 必须是完整交付物，不能是追问、方案列表或解释。`
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；未明确数量时默认三个方案。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      const directPlanGuide = directImagePlanRequested
+        ? '用户本次明确不要再选择多个方案。若上下文中的画面目标已经足够清楚，直接把用户要求整合成唯一一项 imagePlans，供界面创建待确认卡；不要再追问创作方向，也不要返回多个备选。仍然不得直接声称已经生图。'
+        : '用户未明确跳过方案选择时，按正常流程提出可选方向。'
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images, signal: controller.signal })
       if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       let parsed = parseAgentReply(raw)
@@ -7599,13 +7636,33 @@ function App() {
                     onChange={handleImagePromptChange}
                     onRemoveToken={(start, end) => {
                       const nodeId = activeGenerationNode.id
+                      const removedMention = activeGenerationNode.data.body.slice(start, end)
+                      const removedReference = activeGenerationReferences.find((reference) => reference.mention === removedMention)
                       setNodes((current) => current.map((node) => {
                         if (node.id !== nodeId) return node
                         const body = node.data.body
                         const nextBody = `${body.slice(0, start)}${body.slice(end)}`
+                        if (!removedReference) return { ...node, data: { ...node.data, promptText: undefined, body: nextBody } }
+                        if (removedReference.source === 'current') return { ...node, data: { ...node.data, promptText: undefined, body: nextBody, useCurrentImageAsReference: false } }
+                        if (removedReference.source === 'manual') return { ...node, data: {
+                          ...node.data,
+                          promptText: undefined,
+                          body: nextBody,
+                          referenceImages: (node.data.referenceImages ?? []).filter((reference) => reference.id !== removedReference.id),
+                          referenceOrder: (node.data.referenceOrder ?? []).filter((id) => id !== removedReference.id),
+                        } }
                         return { ...node, data: { ...node.data, promptText: undefined, body: nextBody } }
                       }))
+                      if (removedReference?.source === 'connection' && removedReference.sourceNodeId) {
+                        setEdges((current) => current.map((edge) => edge.source === removedReference.sourceNodeId && edge.target === nodeId
+                          ? { ...edge, data: { ...edge.data, referenceSelected: false } }
+                          : edge))
+                      }
                       window.requestAnimationFrame(() => imagePromptEditorRef.current?.focusAt(start))
+                    }}
+                    onBlur={() => {
+                      setImageMentionOpen(false)
+                      setImageMentionRange(null)
                     }}
                     onKeyDown={(event) => {
                       event.stopPropagation()
@@ -7882,8 +7939,19 @@ function App() {
                     onChange={handleTextPromptChange}
                     onRemoveToken={(start, end) => {
                       const promptText = activeTextNode.data.promptText ?? ''
+                      const removedMention = promptText.slice(start, end)
+                      const removedReference = activeTextReferences.find((reference) => reference.mention === removedMention)
                       updateActiveTextNode(`${promptText.slice(0, start)}${promptText.slice(end)}`)
+                      if (removedReference) {
+                        setEdges((current) => current.map((edge) => edge.source === removedReference.sourceNodeId && edge.target === activeTextNode.id
+                          ? { ...edge, data: { ...edge.data, referenceSelected: false } }
+                          : edge))
+                      }
                       window.requestAnimationFrame(() => textPromptEditorRef.current?.focusAt(start))
+                    }}
+                    onBlur={() => {
+                      setTextMentionOpen(false)
+                      setTextMentionRange(null)
                     }}
                     onKeyDown={(event) => {
                       event.stopPropagation()

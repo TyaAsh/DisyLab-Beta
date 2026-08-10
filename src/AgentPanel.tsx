@@ -196,7 +196,7 @@ type Props = {
   onCreateUploadedReference: (reference: Omit<AgentImageReference, 'nodeId'>) => AgentImageReference
   onPendingReferenceConsumed: () => void
   onPickFromCanvas: () => void
-  onSend: (message: string, invocationText: string) => void
+  onSend: (message: string, invocationText: string, references: AgentImageReference[]) => void
   onPlanChange: (id: string, patch: Partial<Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count'>>) => void
   onSelectPlanOptions: (groupPlanIds: string[], selectedPlanIds: string[]) => void
   onConfirmPlan: (id: string) => void
@@ -219,6 +219,7 @@ export function AgentPanel(props: Props) {
   const pinnedToBottomRef = useRef(true)
   const highlightTimerRef = useRef<number | null>(null)
   const savedRangeRef = useRef<Range | null>(null)
+  const referenceRegistryRef = useRef(new Map<string, AgentImageReference>())
   const readyPlanIdsRef = useRef<string[]>([])
   const readyPlans = props.plans.filter((plan) => plan.status === 'ready')
   const activeReadyPlan = readyPlans.find((plan) => plan.id === activeReadyPlanId) ?? readyPlans[readyPlans.length - 1]
@@ -229,6 +230,8 @@ export function AgentPanel(props: Props) {
     imageSettingLabel(props.detailOptions, props.imageDefaults.detail),
     `${props.imageDefaults.count}张`,
   ].join(' · ')
+
+  ;[...props.candidates, ...props.references].forEach((reference) => referenceRegistryRef.current.set(reference.nodeId, reference))
 
   useEffect(() => {
     if (!props.imageModelKey) setImageSettingsOpen(false)
@@ -281,6 +284,71 @@ export function AgentPanel(props: Props) {
     const editor = editorRef.current
     if (!selection || !selection.rangeCount || !editor?.contains(selection.anchorNode)) return
     savedRangeRef.current = selection.getRangeAt(0).cloneRange()
+  }
+  const hasTypedMentionTrigger = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    if (!editor.contains(range.endContainer)) return false
+    const prefix = range.cloneRange()
+    prefix.selectNodeContents(editor)
+    prefix.setEnd(range.endContainer, range.endOffset)
+    const holder = document.createElement('div')
+    holder.append(prefix.cloneContents())
+    holder.querySelectorAll('.agent-inline-reference').forEach((chip) => chip.replaceWith(document.createTextNode(' ')))
+    const beforeCaret = holder.innerText.replace(/\u00a0/g, ' ')
+    return /@[^\s@]*$/.test(beforeCaret)
+  }
+  const removeReferenceBeforeCaret = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    if (!range.collapsed || !editor.contains(range.startContainer)) return false
+
+    let candidate: ChildNode | null = null
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const textNode = range.startContainer as Text
+      const beforeCaret = textNode.data.slice(0, range.startOffset)
+      if (beforeCaret.trim()) return false
+      candidate = textNode.previousSibling
+      if (beforeCaret) textNode.deleteData(0, range.startOffset)
+    } else {
+      candidate = range.startContainer.childNodes.item(range.startOffset - 1)
+    }
+    while (candidate?.nodeType === Node.TEXT_NODE && !(candidate.textContent ?? '').trim()) candidate = candidate.previousSibling
+    const chip = candidate instanceof HTMLElement && candidate.matches('.agent-inline-reference') ? candidate : null
+    if (!chip) return false
+
+    const caret = document.createRange()
+    caret.setStartBefore(chip)
+    caret.collapse(true)
+    chip.remove()
+    selection.removeAllRanges()
+    selection.addRange(caret)
+    savedRangeRef.current = caret.cloneRange()
+    syncReferencesFromEditor()
+    setMentionOpen(false)
+    return true
+  }
+  const hasReferenceAfterCaret = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    if (!range.collapsed || !editor.contains(range.startContainer)) return false
+
+    let candidate: ChildNode | null = null
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const textNode = range.startContainer as Text
+      if (textNode.data.slice(range.startOffset).trim()) return false
+      candidate = textNode.nextSibling
+    } else {
+      candidate = range.startContainer.childNodes.item(range.startOffset)
+    }
+    while (candidate?.nodeType === Node.TEXT_NODE && !(candidate.textContent ?? '').trim()) candidate = candidate.nextSibling
+    return candidate instanceof HTMLElement && candidate.matches('.agent-inline-reference')
   }
   const restoreSelection = () => {
     const editor = editorRef.current
@@ -359,15 +427,20 @@ export function AgentPanel(props: Props) {
     selection.removeAllRanges()
     selection.addRange(range)
   }
-  const syncReferencesFromEditor = () => {
+  const getEditorReferences = () => {
     const ids = Array.from(editorRef.current?.querySelectorAll<HTMLElement>('[data-reference-id]') ?? []).map((node) => node.dataset.referenceId).filter(Boolean) as string[]
-    props.onReferencesChange(props.references.filter((reference) => ids.includes(reference.nodeId)))
+    return ids.map((id) => referenceRegistryRef.current.get(id)).filter((reference): reference is AgentImageReference => Boolean(reference))
+  }
+  const syncReferencesFromEditor = () => {
+    props.onReferencesChange(getEditorReferences())
   }
   const addReference = (reference: AgentImageReference) => {
+    referenceRegistryRef.current.set(reference.nodeId, reference)
     restoreSelection()
     clearMentionTrigger()
-    if (!props.references.some((item) => item.nodeId === reference.nodeId)) {
-      props.onReferencesChange([...props.references, reference])
+    const editorReferences = getEditorReferences()
+    if (!editorReferences.some((item) => item.nodeId === reference.nodeId)) {
+      props.onReferencesChange([...editorReferences, reference])
     }
     const selection = window.getSelection()
     if (selection?.rangeCount) {
@@ -460,7 +533,7 @@ export function AgentPanel(props: Props) {
   const submit = () => {
     const value = getEditorText()
     if (!value) return
-    props.onSend(value, getInvocationText())
+    props.onSend(value, getInvocationText(), getEditorReferences())
     if (editorRef.current) editorRef.current.innerHTML = ''
     setMentionOpen(false)
   }
@@ -615,21 +688,22 @@ export function AgentPanel(props: Props) {
             data-placeholder="和 Disy 对话，输入 @ 引用画布图片，或上传参考图"
             onInput={() => {
               rememberSelection()
-              const text = getEditorText()
-              setMentionOpen(/@[^\s@]*$/.test(text))
+              setMentionOpen(hasTypedMentionTrigger())
               syncReferencesFromEditor()
             }}
             onPaste={(event) => {
               event.preventDefault()
               const plainText = event.clipboardData.getData('text/plain')
               insertPlainTextAtSelection(plainText)
-              const text = getEditorText()
-              setMentionOpen(/@[^\s@]*$/.test(text))
+              setMentionOpen(hasTypedMentionTrigger())
               syncReferencesFromEditor()
             }}
             onKeyUp={rememberSelection}
             onMouseUp={rememberSelection}
-            onBlur={rememberSelection}
+            onBlur={() => {
+              rememberSelection()
+              setMentionOpen(false)
+            }}
             onClick={(event) => {
               const target = event.target
               if (target instanceof HTMLButtonElement) {
@@ -638,6 +712,14 @@ export function AgentPanel(props: Props) {
               }
             }}
             onKeyDown={(event) => {
+              if (event.key === 'Backspace' && !event.nativeEvent.isComposing && removeReferenceBeforeCaret()) {
+                event.preventDefault()
+                return
+              }
+              if (event.key === 'Delete' && hasReferenceAfterCaret()) {
+                event.preventDefault()
+                return
+              }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault()
                 submit()

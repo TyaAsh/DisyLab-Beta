@@ -99,6 +99,11 @@ export function getRequestedAgentPlanCount(content: string) {
   return match ? parsePlanCountText(match[1]) : null
 }
 
+export function messageRequestsDirectImagePlan(content: string) {
+  return /(?:不用|不要|无需)(?:再|先)?(?:选择|提供|给出|查看)?(?:任何|多个|这些|三套)?(?:方案|方向)/i.test(content)
+    || /(?:直接|就|照着|按照|按我说的).{0,18}(?:生成|生图|出图|做|制作|设计|修复|修改)/i.test(content)
+}
+
 export function messageExpectsImagePlans(content: string) {
   const explicitImageIntent = /(?:生图|出图|绘图|画图|生成图片|生成图像|制作图片|制作海报|设计海报|视觉稿|效果图|封面图|配图)/i.test(content)
     || /(?:生成|制作|设计|创作|画|做|出)(?:.{0,10})(?:图像|图片|海报|视觉画面)/i.test(content)
