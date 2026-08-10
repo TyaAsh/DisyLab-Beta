@@ -971,6 +971,15 @@ function buildNumberedReferenceGuide(references: Array<{ name: string; url: stri
   ].join('\n')
 }
 
+function getReferencedImageNumbers(prompt: string) {
+  const numbers = new Set<number>()
+  for (const match of prompt.matchAll(/(?:参考图|图片|图)\s*([1-9]\d*)/g)) {
+    const number = Number(match[1])
+    if (Number.isSafeInteger(number)) numbers.add(number)
+  }
+  return numbers
+}
+
 function numberAgentReferenceMentions(content: string, references: Array<{ name: string }>) {
   let cursor = 0
   let numbered = content
@@ -4063,7 +4072,10 @@ function App() {
         id: `connection-${sourceNode.id}`,
         source: 'connection',
         sourceNodeId: sourceNode.id,
-        selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected),
+        // An incoming image edge is an explicit upstream reference. Older
+        // projects do not persist referenceSelected, so treat only an explicit
+        // false as disabled instead of degrading those images into candidates.
+        selected: (edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected !== false,
         name: sourceNode.data.fileName || sourceNode.data.title || (sourceNode.data.kind === 'image' ? '生成主图' : '连接图片'),
         url: sourceNode.data.imageUrl,
       })
@@ -4125,13 +4137,24 @@ function App() {
     const query = imageMentionQuery.trim().toLowerCase()
     return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
   })
-  const selectedImageReferences = activeImageReferences.filter((reference) => (
-    reference.source === 'connection'
-      ? reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
-      : reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
+  const referencedImageNumbers = getReferencedImageNumbers(activeGenerationNode?.data.body ?? '')
+  const highestReferencedImageNumber = referencedImageNumbers.size
+    ? Math.max(...referencedImageNumbers)
+    : 0
+  const selectedImageReferences = activeImageReferences.filter((reference, index) => (
+    reference.selected
+    || activeGenerationNode?.data.body.includes(reference.mention)
+    // Preserve the visible top-row numbering. If the prompt asks for 图3, the
+    // request must carry 图1..图3 in that exact order so the model sees 图3 as
+    // the third input rather than silently renumbering it to 图1.
+    || index < highestReferencedImageNumber
   ))
   const selectedAvailableImageReferences = selectedImageReferences.filter((reference): reference is ActiveImageReference & { url: string } => Boolean(reference.url))
-  const selectedImageReferenceNumberById = new Map(selectedAvailableImageReferences.map((reference, index) => [reference.id, index + 1]))
+  const selectedImageReferenceNumberById = new Map(
+    activeImageReferences
+      .filter((reference): reference is ActiveImageReference & { url: string } => Boolean(reference.url))
+      .map((reference, index) => [reference.id, index + 1]),
+  )
   const selectedGenerationTextReferences = activeGenerationTextReferences.filter((reference) => (
     reference.selected || activeGenerationNode?.data.body.includes(reference.mention)
   ))
@@ -4807,6 +4830,10 @@ function App() {
     }, activeGenerationNode.data.body).replace(/@\[node:[^\]]+\]/g, '').trim()
     if (!promptText) {
       setToastMessage('请先输入图像提示词')
+      return
+    }
+    if (highestReferencedImageNumber > activeImageReferences.filter((reference) => Boolean(reference.url)).length) {
+      setToastMessage(`提示词引用了图${highestReferencedImageNumber}，但顶部只有 ${activeImageReferences.filter((reference) => Boolean(reference.url)).length} 张可用图片`)
       return
     }
     const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), activeGenerationNode.data.body)
@@ -7646,7 +7673,7 @@ function App() {
                         {reference.url
                           ? <img src={reference.url} alt={reference.name} />
                           : <span className="reference-text-thumbnail"><Type size={13} /></span>}
-                        <span className="image-reference-name" title={reference.name}>{selectedImageReferenceNumberById.has(reference.id) ? `图${selectedImageReferenceNumberById.get(reference.id)} · ` : ''}{compactReferenceName(reference.name)}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
+                        <span className="image-reference-name" title={reference.name}>{selectedImageReferenceNumberById.has(reference.id) ? `图${selectedImageReferenceNumberById.get(reference.id)} · ` : ''}{compactReferenceName(reference.name)}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : ''}</span>
                         {(reference.source === 'manual' || reference.source === 'connection' || reference.source === 'current') && (
                           <span
                             className="reference-remove"
