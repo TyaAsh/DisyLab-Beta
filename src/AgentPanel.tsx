@@ -1,9 +1,25 @@
-import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowUp, Check, ChevronDown, ChevronsUp, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { ArrowUp, Check, ChevronDown, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
 import { compactReferenceName, normalizeAgentMessageContent, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
 export type AgentConversationOption = { id: string; title: string; updatedAt: string }
+
+const AGENT_PANEL_WIDTH_KEY = 'disylab.agent-panel-width'
+const AGENT_PANEL_RESIZE_BREAKPOINT = 721
+const AGENT_PANEL_DEFAULT_WIDTH = 420
+
+function getAgentPanelMaxWidth() {
+  return Math.min(window.innerWidth - 24, AGENT_PANEL_DEFAULT_WIDTH + Math.floor(window.innerWidth * .2))
+}
+
+function getInitialAgentPanelWidth() {
+  const saved = Number(window.localStorage.getItem(AGENT_PANEL_WIDTH_KEY))
+  if (window.innerWidth < AGENT_PANEL_RESIZE_BREAKPOINT) return AGENT_PANEL_DEFAULT_WIDTH
+  const maximum = getAgentPanelMaxWidth()
+  const preferred = Number.isFinite(saved) && saved > 0 ? saved : AGENT_PANEL_DEFAULT_WIDTH
+  return Math.min(maximum, Math.max(AGENT_PANEL_DEFAULT_WIDTH, preferred))
+}
 
 type ModelBrand = 'openai' | 'gemini' | 'claude' | 'doubao' | 'jimeng' | 'google' | 'generic'
 type SelectOption = { value: string; label: string; brand?: ModelBrand }
@@ -206,21 +222,20 @@ type Props = {
 
 export function AgentPanel(props: Props) {
   const [mentionOpen, setMentionOpen] = useState(false)
-  const [offscreenActionableIds, setOffscreenActionableIds] = useState<string[]>([])
-  const [highlightPlanId, setHighlightPlanId] = useState<string | null>(null)
   const [activeReadyPlanId, setActiveReadyPlanId] = useState<string | null>(null)
   const [imageSettingsOpen, setImageSettingsOpen] = useState(false)
   const [mediaKind, setMediaKind] = useState<'choose' | 'image'>('choose')
   const [imageModelChosen, setImageModelChosen] = useState(false)
+  const [panelWidth, setPanelWidth] = useState(getInitialAgentPanelWidth)
+  const [panelResizing, setPanelResizing] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
-  const planRefs = useRef(new Map<string, HTMLElement>())
   const pinnedToBottomRef = useRef(true)
-  const highlightTimerRef = useRef<number | null>(null)
   const savedRangeRef = useRef<Range | null>(null)
   const referenceRegistryRef = useRef(new Map<string, AgentImageReference>())
   const readyPlanIdsRef = useRef<string[]>([])
+  const resizeStartRef = useRef({ pointerX: 0, width: AGENT_PANEL_DEFAULT_WIDTH })
   const readyPlans = props.plans.filter((plan) => plan.status === 'ready')
   const activeReadyPlan = readyPlans.find((plan) => plan.id === activeReadyPlanId) ?? readyPlans[readyPlans.length - 1]
   const imageSettingLabel = (options: SelectOption[], value: string) => options.find((option) => option.value === value)?.label ?? value
@@ -232,6 +247,45 @@ export function AgentPanel(props: Props) {
   ].join(' · ')
 
   ;[...props.candidates, ...props.references].forEach((reference) => referenceRegistryRef.current.set(reference.nodeId, reference))
+
+  const startPanelResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (window.innerWidth < AGENT_PANEL_RESIZE_BREAKPOINT) return
+    const panel = event.currentTarget.closest<HTMLElement>('.agent-panel')
+    if (!panel) return
+    resizeStartRef.current = { pointerX: event.clientX, width: panel.getBoundingClientRect().width }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+    setPanelResizing(true)
+  }
+  const resizePanel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!panelResizing) return
+    const maximum = getAgentPanelMaxWidth()
+    const minimum = AGENT_PANEL_DEFAULT_WIDTH
+    const nextWidth = resizeStartRef.current.width + resizeStartRef.current.pointerX - event.clientX
+    setPanelWidth(Math.min(maximum, Math.max(minimum, Math.round(nextWidth))))
+  }
+  const finishPanelResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!panelResizing) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.localStorage.setItem(AGENT_PANEL_WIDTH_KEY, String(panelWidth))
+    setPanelResizing(false)
+  }
+  useEffect(() => {
+    const clampPanelWidth = () => {
+      if (window.innerWidth < AGENT_PANEL_RESIZE_BREAKPOINT) return
+      const maximum = getAgentPanelMaxWidth()
+      setPanelWidth((current) => Math.min(maximum, Math.max(AGENT_PANEL_DEFAULT_WIDTH, current)))
+    }
+    window.addEventListener('resize', clampPanelWidth)
+    return () => {
+      window.removeEventListener('resize', clampPanelWidth)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [])
 
   useEffect(() => {
     if (!props.imageModelKey) setImageSettingsOpen(false)
@@ -509,59 +563,25 @@ export function AgentPanel(props: Props) {
     if (!container) return
     const update = () => {
       pinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 72
-      const bounds = container.getBoundingClientRect()
-      const hidden = props.plans
-        .filter((plan) => plan.status === 'ready' || plan.status === 'proposed')
-        .filter((plan) => {
-          const element = planRefs.current.get(plan.id)
-          if (!element) return true
-          const rect = element.getBoundingClientRect()
-          return rect.bottom <= bounds.top + 6 || rect.top >= bounds.bottom - 6
-        })
-        .map((plan) => plan.id)
-      setOffscreenActionableIds((current) => current.length === hidden.length && current.every((id, index) => id === hidden[index]) ? current : hidden)
     }
-    const frame = window.requestAnimationFrame(update)
-    const observer = new ResizeObserver(update)
-    observer.observe(container)
-    planRefs.current.forEach((element) => observer.observe(element))
+    update()
     container.addEventListener('scroll', update, { passive: true })
-    window.addEventListener('resize', update)
     return () => {
-      window.cancelAnimationFrame(frame)
-      observer.disconnect()
       container.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
     }
-  }, [props.messages, props.plans])
+  }, [])
   useEffect(() => {
     const container = messagesRef.current
     if (!container || !pinnedToBottomRef.current) return
     const frame = window.requestAnimationFrame(() => container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }))
     return () => window.cancelAnimationFrame(frame)
   }, [props.messages.length, props.plans.length, props.busy])
-  useEffect(() => () => {
-    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
-  }, [])
-  const locatePendingPlan = () => {
-    const planId = offscreenActionableIds[0]
-    if (!planId) return
-    if (props.plans.find((plan) => plan.id === planId)?.status === 'ready') setActiveReadyPlanId(planId)
-    planRefs.current.get(planId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setHighlightPlanId(planId)
-    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
-    highlightTimerRef.current = window.setTimeout(() => setHighlightPlanId(null), 1800)
-  }
   const submit = () => {
     const value = getEditorText()
     if (!value) return
     props.onSend(value, getInvocationText(), getEditorReferences())
     if (editorRef.current) editorRef.current.innerHTML = ''
     setMentionOpen(false)
-  }
-  const setPlanRef = (planId: string, element: HTMLElement | null) => {
-    if (element) planRefs.current.set(planId, element)
-    else planRefs.current.delete(planId)
   }
   const renderPlan = (plan: AgentImagePlan) => {
     const statusLabel = plan.status === 'ready' ? '待确认' : plan.status === 'running' ? '生成中' : plan.status === 'completed' ? '已完成' : plan.status === 'cancelled' ? '已取消' : '失败'
@@ -571,9 +591,8 @@ export function AgentPanel(props: Props) {
       return (
         <button
           type="button"
-          ref={(element) => setPlanRef(plan.id, element)}
           key={plan.id}
-          className={`agent-plan-card is-${plan.status} is-collapsed ${highlightPlanId === plan.id ? 'is-locate-highlight' : ''}`}
+          className={`agent-plan-card is-${plan.status} is-collapsed`}
           disabled={!plan.nodeId}
           onClick={() => plan.nodeId && props.onLocateCanvasNode(plan.nodeId)}
         >
@@ -585,8 +604,7 @@ export function AgentPanel(props: Props) {
     }
     return (
       <section
-        ref={(element) => setPlanRef(plan.id, element)}
-        className={`agent-plan-card is-${plan.status} ${activeReadyPlan?.id === plan.id ? 'is-parameter-target' : ''} ${highlightPlanId === plan.id ? 'is-locate-highlight' : ''}`}
+        className={`agent-plan-card is-${plan.status} ${activeReadyPlan?.id === plan.id ? 'is-parameter-target' : ''}`}
         key={plan.id}
         onPointerDown={() => {
           if (plan.status === 'ready') setActiveReadyPlanId(plan.id)
@@ -665,7 +683,8 @@ export function AgentPanel(props: Props) {
     </>
   )
   return (
-    <aside id="disy-agent-panel" className="agent-panel" aria-label="Disy 对话 Agent">
+    <aside id="disy-agent-panel" className={`agent-panel ${panelResizing ? 'is-resizing' : ''}`} style={{ '--agent-panel-width': `${panelWidth}px` } as CSSProperties} aria-label="Disy 对话 Agent">
+      <div className="agent-panel-resize-handle" role="separator" aria-label="调整 Agent 面板宽度" aria-orientation="vertical" onPointerDown={startPanelResize} onPointerMove={resizePanel} onPointerUp={finishPanelResize} onPointerCancel={finishPanelResize}><span /></div>
       <header className="agent-panel-header">
         <div className="agent-panel-title"><img className="agent-panel-logo" src="/disy-logo.png" alt="" /><span><strong>Disy Agent</strong><small>和你一起构思，并在确认后生成</small></span></div>
         <button className="agent-panel-close" onClick={props.onClose} title="关闭"><X size={17} /></button>
@@ -697,7 +716,6 @@ export function AgentPanel(props: Props) {
           {props.busy && <div className="agent-thinking"><LoaderCircle size={14} className="is-spinning" /><span>正在理解你的创作目标...</span></div>}
           {renderAttachedPlans(orphanPlans)}
         </div>
-        {!!offscreenActionableIds.length && <button type="button" className="agent-pending-locate" onClick={locatePendingPlan} title="定位待选择或待确认的创作方向"><ChevronsUp size={16} /><span>{offscreenActionableIds.length}</span></button>}
       </div>
       <div className="agent-panel-composer">
         <div className="agent-composer-box">
@@ -810,7 +828,7 @@ export function AgentPanel(props: Props) {
             </div>
           </footer>
           {imageSettingsOpen && mediaKind === 'image' && imageModelChosen && props.imageModelKey && <div className="agent-image-parameter-popover" role="dialog" aria-label="图像参数">
-            <header><strong>图像参数</strong><button type="button" onClick={() => setImageSettingsOpen(false)} title="关闭图像参数"><X size={14} /></button></header>
+            <header><strong>图像参数</strong><button type="button" className="agent-parameter-close" onClick={() => setImageSettingsOpen(false)} title="关闭图像参数" aria-label="关闭图像参数"><X size={16} strokeWidth={1.8} /></button></header>
             <div className="agent-image-parameter-section"><span>画质</span><div>{props.detailOptions.map((option) => <button type="button" className={props.imageDefaults.detail === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ detail: option.value })}>{option.label}</button>)}</div></div>
             <div className="agent-image-parameter-section"><span>清晰度</span><div>{props.resolutionOptions.map((option) => <button type="button" className={props.imageDefaults.resolution === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ resolution: option.value })}>{option.label}</button>)}</div></div>
             <div className="agent-image-parameter-section is-aspect"><span>比例</span><div>{props.aspectOptions.map((option) => <button type="button" data-aspect={option.value} className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" />{option.label}</button>)}</div></div>

@@ -2195,7 +2195,7 @@ button { border: 0; cursor: pointer; }
   top: 12px;
   right: 12px;
   bottom: 12px;
-  width: min(420px, calc(100vw - 24px));
+  width: min(var(--agent-panel-width, 420px), calc(100vw - 24px));
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ink) 14%, var(--line));
   border-radius: 22px;
@@ -2206,6 +2206,11 @@ button { border: 0; cursor: pointer; }
   box-shadow: -20px 28px 90px rgba(0, 0, 0, .48), inset 0 1px 0 rgba(255, 255, 255, .045);
   backdrop-filter: blur(28px) saturate(125%);
 }
+.agent-panel-resize-handle { position: absolute; z-index: 12; top: 72px; bottom: 72px; left: 0; width: 10px; display: grid; place-items: center; touch-action: none; cursor: ew-resize; }
+.agent-panel-resize-handle span { width: 2px; height: min(96px, 22%); border-radius: 999px; background: color-mix(in srgb, var(--ink) 16%, transparent); opacity: 0; transform: scaleY(.7); transition: opacity .16s ease, transform .16s ease, background .16s ease; }
+.agent-panel-resize-handle:hover span,
+.agent-panel.is-resizing .agent-panel-resize-handle span { opacity: 1; transform: scaleY(1); background: color-mix(in srgb, var(--accent) 64%, var(--ink)); }
+.agent-panel.is-resizing { transition: none; }
 .agent-panel-header { min-height: 64px; padding: 11px 12px 10px 15px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .agent-panel-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .agent-panel-logo { width: 34px; height: 34px; flex: none; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(89, 126, 255, .22)); }
@@ -2324,13 +2329,6 @@ button { border: 0; cursor: pointer; }
 .agent-plan-card.is-collapsed:not(:disabled):hover { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: linear-gradient(145deg, rgba(112,181,255,.13), rgba(167,147,255,.08)); }
 .agent-plan-collapsed-meta { white-space: nowrap; font-size: 9px; }
 .agent-plan-locate { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); white-space: nowrap; font-size: 9px; font-weight: 720; }
-.agent-plan-card.is-locate-highlight { animation: agent-plan-locate-pulse .62s ease 2; }
-.agent-pending-locate { position: absolute; z-index: 4; right: 14px; bottom: 12px; min-width: 40px; height: 36px; padding: 0 10px; border: 1px solid var(--accent-border); border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: #101421; background: var(--brand-gradient); box-shadow: 0 12px 30px rgba(0,0,0,.38); }
-.agent-pending-locate:hover { background: var(--brand-gradient-hover); transform: translateY(-1px); }
-.agent-pending-locate span { min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; display: grid; place-items: center; color: var(--ink); background: rgba(8,12,18,.76); font-size: 9px; }
-@keyframes agent-plan-locate-pulse {
-  50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent); }
-}
 .agent-panel-composer { margin: 0 12px 12px; padding: 8px; border: 1px solid color-mix(in srgb, var(--ink) 14%, var(--line)); border-radius: 16px; background: rgba(4, 7, 10, .28); box-shadow: 0 14px 42px rgba(0, 0, 0, .22); }
 .agent-composer-reference-bar { min-height: 38px; padding: 0 2px 6px; border-bottom: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .agent-composer-reference-bar > button { height: 30px; padding: 0 8px; flex: none; border: 1px solid color-mix(in srgb, var(--ink) 9%, transparent); border-radius: 9px; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); background: color-mix(in srgb, var(--ink) 4%, transparent); font-size: 8px; font-weight: 680; }
@@ -2403,8 +2401,9 @@ button { border: 0; cursor: pointer; }
 @keyframes agent-parameter-dialog-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .agent-image-parameter-popover > header { min-height: 28px; padding-bottom: 8px; border-bottom: 1px solid color-mix(in srgb, var(--ink) 9%, transparent); display: flex; align-items: center; justify-content: space-between; }
 .agent-image-parameter-popover > header strong { font-size: 12px; letter-spacing: .01em; }
-.agent-image-parameter-popover > header button { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; color: var(--muted); }
-.agent-image-parameter-popover > header button:hover { color: var(--ink); background: rgba(255,255,255,.07); }
+.agent-image-parameter-popover > header .agent-parameter-close { width: 30px; height: 30px; flex: none; border: 1px solid transparent; border-radius: 10px; display: grid; place-items: center; color: var(--muted); background: transparent; transition: color .16s ease, border-color .16s ease, background .16s ease; }
+.agent-image-parameter-popover > header .agent-parameter-close:hover { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 10%, transparent); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.agent-image-parameter-popover > header .agent-parameter-close:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent); outline-offset: 2px; }
 .agent-image-parameter-section { display: grid; gap: 7px; }
 .agent-image-parameter-section > span { color: var(--muted); font-size: 9px; font-weight: 680; }
 .agent-image-parameter-section > div { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 5px; }
@@ -2493,6 +2492,7 @@ button { border: 0; cursor: pointer; }
   .modal-buttons { width: 100%; }
   .connect-button { flex: 1; justify-content: center; }
   .agent-panel { inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); width: auto; border-radius: 17px; }
+  .agent-panel-resize-handle { display: none; }
   .agent-composer-models { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .canvas-switcher-menu { left: auto; right: 0; max-width: calc(100vw - 20px); }
 }
