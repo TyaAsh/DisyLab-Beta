@@ -2382,7 +2382,7 @@ button { border: 0; cursor: pointer; }
 .agent-panel-composer { margin: 0 10px 10px; padding: 0; border: 0; border-radius: 18px; background: transparent; box-shadow: none; }
 .agent-composer-box { padding: 10px; border: 1px solid color-mix(in srgb, var(--ink) 15%, var(--line)); border-radius: 18px; overflow: visible; background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 91%, transparent), color-mix(in srgb, #0b0f13 94%, transparent)); box-shadow: 0 18px 54px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.035); }
 .agent-composer-input { min-height: 88px; max-height: 180px; padding: 7px 8px 12px; font-size: 11px; line-height: 1.65; }
-.agent-composer-models { padding: 0; border-top: 0; gap: 2px; }
+.agent-composer-models { padding: 0 0 9px; border-top: 0; gap: 2px; }
 .agent-composer-models .agent-model-select { height: 34px; }
 .agent-composer-models .agent-select-trigger { padding: 0 6px; border-color: transparent; border-radius: 9px; background: transparent; }
 .agent-composer-models .agent-select-trigger:hover,
