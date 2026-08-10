@@ -1392,7 +1392,8 @@ button { border: 0; cursor: pointer; }
 .editor-model-menu-heading button { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); background: transparent; }
 .editor-model-menu > button { width: 100%; min-height: 52px; padding: 8px 9px; border-radius: 10px; display: flex; align-items: center; gap: 9px; color: var(--muted); background: transparent; text-align: left; }
 .editor-model-menu > button:hover, .editor-model-menu > button.is-selected { color: var(--ink); background: rgba(255,255,255,.075); }
-.editor-model-menu > button > span { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.editor-model-menu > button > .welcome-model-badge { width: 18px; min-width: 18px; flex: 0 0 18px; }
+.editor-model-menu > button > span:not(.welcome-model-badge) { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .editor-model-menu strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-model-menu small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-model-menu > p { margin: 0; padding: 14px 9px; color: var(--muted); font-size: 9px; line-height: 1.5; }

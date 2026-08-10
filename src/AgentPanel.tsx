@@ -572,6 +572,15 @@ export function AgentPanel(props: Props) {
   }, [])
   useEffect(() => {
     const container = messagesRef.current
+    if (!container) return
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight
+      pinnedToBottomRef.current = true
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [props.activeConversationId])
+  useEffect(() => {
+    const container = messagesRef.current
     if (!container || !pinnedToBottomRef.current) return
     const frame = window.requestAnimationFrame(() => container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }))
     return () => window.cancelAnimationFrame(frame)
