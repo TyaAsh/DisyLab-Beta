@@ -5,28 +5,36 @@ import { useGSAP } from '@gsap/react'
 import {
   ArrowUp,
   ArrowUpRight,
+  Aperture,
   Bold,
   BookOpen,
   Box,
+  BriefcaseBusiness,
+  Camera,
   Check,
   ChevronDown,
   CircleHelp,
   ChevronLeft,
   ChevronRight,
   Copy,
+  Crown,
   Download,
   FileImage,
   Folder,
   FolderPlus,
   Focus,
+  Film,
   Grid3X3,
   History,
+  Hash,
+  Heart,
   ImagePlus,
   Info,
   Italic,
   KeyRound,
   Keyboard,
   Library,
+  Lightbulb,
   List,
   ListOrdered,
   Lock,
@@ -34,20 +42,25 @@ import {
   Maximize2,
   Minus,
   MessageCircle,
+  Music2,
   PanelsTopLeft,
   Pause,
+  Palette,
   Pencil,
   Plus,
   Pilcrow,
   Search,
   Settings2,
+  Shapes,
   Sparkles,
+  Star,
   Type,
   Trash2,
   Upload,
   ArrowUpDown,
   Unlink2,
   Unlock,
+  Rocket,
   WandSparkles,
   X,
 } from 'lucide-react'
@@ -92,6 +105,7 @@ type CreatableNodeKind = Exclude<NodeKind, 'group'>
 type ImageAspectRatio = 'auto' | '1:1' | '2:1' | '4:3' | '3:4' | '5:4' | '4:5' | '3:2' | '2:3' | '16:9' | '9:16' | '21:9' | '9:21'
 type ImageResolution = '1K' | '2K' | '4K'
 type ImageDetail = 'low' | 'medium' | 'high'
+type GroupIconKey = 'folder' | 'hash' | 'palette' | 'camera' | 'heart' | 'star' | 'crown' | 'film' | 'music' | 'briefcase' | 'idea' | 'rocket' | 'shapes' | 'aperture'
 type TransferScope = 'workspace-append' | 'project-replace'
 type ImageReference = {
   id: string
@@ -131,6 +145,13 @@ type CanvasNode = Node<{
   imageModelName?: string
   generationError?: string
   groupColor?: string
+  groupAccentColor?: string
+  groupIcon?: GroupIconKey
+  groupCollapsed?: boolean
+  groupNodeCount?: number
+  groupPreviewUrls?: string[]
+  groupExpandedWidth?: number
+  groupExpandedHeight?: number
 }>
 
 type ActiveImageReference = Omit<ImageReference, 'url'> & {
@@ -201,7 +222,45 @@ const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => 
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
+const GroupCollapseContext = createContext<(nodeId: string, collapsed: boolean) => void>(() => undefined)
 const ActiveGenerationNodesContext = createContext<ReadonlySet<string>>(new Set())
+
+const GROUP_ICON_OPTIONS: Array<{ key: GroupIconKey; label: string }> = [
+  { key: 'folder', label: '文件夹' },
+  { key: 'hash', label: '主题' },
+  { key: 'palette', label: '视觉' },
+  { key: 'camera', label: '摄影' },
+  { key: 'heart', label: '收藏' },
+  { key: 'star', label: '精选' },
+  { key: 'crown', label: '品牌' },
+  { key: 'film', label: '视频' },
+  { key: 'music', label: '音乐' },
+  { key: 'briefcase', label: '项目' },
+  { key: 'idea', label: '灵感' },
+  { key: 'rocket', label: '发布' },
+  { key: 'shapes', label: '组件' },
+  { key: 'aperture', label: '素材' },
+]
+
+function GroupTypeIcon({ icon = 'folder', size = 15 }: { icon?: GroupIconKey; size?: number }) {
+  const props = { size, strokeWidth: 1.9 }
+  switch (icon) {
+    case 'hash': return <Hash {...props} />
+    case 'palette': return <Palette {...props} />
+    case 'camera': return <Camera {...props} />
+    case 'heart': return <Heart {...props} />
+    case 'star': return <Star {...props} />
+    case 'crown': return <Crown {...props} />
+    case 'film': return <Film {...props} />
+    case 'music': return <Music2 {...props} />
+    case 'briefcase': return <BriefcaseBusiness {...props} />
+    case 'idea': return <Lightbulb {...props} />
+    case 'rocket': return <Rocket {...props} />
+    case 'shapes': return <Shapes {...props} />
+    case 'aperture': return <Aperture {...props} />
+    default: return <Folder {...props} />
+  }
+}
 
 type NodeMenuState = {
   x: number
@@ -1274,6 +1333,7 @@ const NodeCard = memo(function NodeCard({
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
   const openExtensionMenu = useContext(NodeExtensionMenuContext)
+  const setGroupCollapsed = useContext(GroupCollapseContext)
   const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
   const isActivelyGenerating = activeGenerationNodeIds.has(id)
   const hasGenerationFailed = data.kind === 'image' && data.status === '生成失败'
@@ -1283,6 +1343,41 @@ const NodeCard = memo(function NodeCard({
   const inlineComposingRef = useRef(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(getNodeDisplayTitle(data))
+  const groupCardRef = useRef<HTMLDivElement>(null)
+
+  useGSAP(() => {
+    if (data.kind !== 'group' || !groupCardRef.current) return
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const card = groupCardRef.current
+    gsap.fromTo(card, {
+      autoAlpha: reducedMotion ? 1 : 0.45,
+      scale: reducedMotion ? 1 : data.groupCollapsed ? 0.88 : 1.025,
+      transformOrigin: 'left top',
+    }, {
+      autoAlpha: 1,
+      scale: 1,
+      duration: reducedMotion ? 0 : 0.38,
+      ease: 'power3.out',
+      overwrite: 'auto',
+      clearProps: 'transform,opacity,visibility',
+    })
+    if (!reducedMotion && data.groupCollapsed) {
+      gsap.fromTo(card.querySelectorAll('.collapsed-group-preview img'), {
+        autoAlpha: 0,
+        y: 8,
+        rotation: -2,
+      }, {
+        autoAlpha: 1,
+        y: 0,
+        rotation: 0,
+        duration: 0.3,
+        stagger: 0.045,
+        ease: 'power2.out',
+        overwrite: 'auto',
+        clearProps: 'transform,opacity,visibility',
+      })
+    }
+  }, { scope: groupCardRef, dependencies: [data.kind, data.groupCollapsed] })
 
   const commitNodeTitle = () => {
     const nextTitle = titleDraft.trim() || getNodeDisplayTitle(data)
@@ -1310,12 +1405,52 @@ const NodeCard = memo(function NodeCard({
   }, [data.title, data.fileName, data.kind, titleEditing])
 
   if (data.kind === 'group') {
+    if (data.groupCollapsed) {
+      const previews = data.groupPreviewUrls ?? []
+      const accent = data.groupAccentColor || '#78b7ef'
+      return (
+        <div
+          ref={groupCardRef}
+          className={`canvas-group-node is-collapsed ${selected ? 'is-selected' : ''}`}
+          style={{
+            background: `linear-gradient(155deg, color-mix(in srgb, ${accent} 86%, #f7fbff), color-mix(in srgb, ${accent} 78%, #101514))`,
+          }}
+          onDoubleClick={(event) => {
+            event.stopPropagation()
+            setGroupCollapsed(id, false)
+          }}
+        >
+          <Handle type="target" position={Position.Left} className="collapsed-group-handle is-target" isConnectable={false} />
+          <Handle type="source" position={Position.Right} className="collapsed-group-handle is-source" isConnectable={false} />
+          <div className={`collapsed-group-preview ${previews.length ? '' : 'is-empty'}`}>
+            {previews.slice(0, 3).map((url, index) => <img key={`${url}-${index}`} src={url} alt="" draggable={false} />)}
+            {!previews.length && <Folder size={34} strokeWidth={1.3} />}
+          </div>
+          <div className="collapsed-group-meta">
+            <span className="collapsed-group-icon"><GroupTypeIcon icon={data.groupIcon} size={14} /></span>
+            <div>{nodeTitle}<small>{data.groupNodeCount ?? 0} 个节点</small></div>
+            <button
+              type="button"
+              className="collapsed-group-expand nodrag nowheel"
+              title="展开编组"
+              aria-label={`展开编组 ${getNodeDisplayTitle(data)}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                setGroupCollapsed(id, false)
+              }}
+            ><Maximize2 size={13} /></button>
+          </div>
+        </div>
+      )
+    }
     return (
       <div
+        ref={groupCardRef}
         className={`canvas-group-node ${selected ? 'is-selected' : ''}`}
         style={{ background: data.groupColor || 'rgba(72, 76, 73, .2)' }}
       >
-        <span><Box size={13} />{nodeTitle}</span>
+        <span><GroupTypeIcon icon={data.groupIcon} size={13} />{nodeTitle}</span>
       </div>
     )
   }
@@ -1624,6 +1759,7 @@ function App() {
   const [selectionToolbarRect, setSelectionToolbarRect] = useState<SelectionToolbarRect | null>(null)
   const [marqueeSelectionCommitted, setMarqueeSelectionCommitted] = useState(false)
   const [groupColorMenuOpen, setGroupColorMenuOpen] = useState(false)
+  const [groupIconMenuOpen, setGroupIconMenuOpen] = useState(false)
   const [apiOpen, setApiOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
@@ -5523,6 +5659,47 @@ function App() {
     ? nodes.find((node) => node.id === selectedNodeIds[0] && node.data.kind === 'group')
     : undefined
 
+  const renderedEdges = useMemo(() => {
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const collapsedParentByNodeId = new Map<string, string>()
+    nodes.forEach((node) => {
+      if (!node.parentId) return
+      const parent = nodeById.get(node.parentId)
+      if (parent?.data.kind === 'group' && parent.data.groupCollapsed) {
+        collapsedParentByNodeId.set(node.id, parent.id)
+      }
+    })
+
+    const visiblePairs = new Set<string>()
+    return edges.flatMap((edge) => {
+      const sourceGroupId = collapsedParentByNodeId.get(edge.source)
+      const targetGroupId = collapsedParentByNodeId.get(edge.target)
+
+      // Connections completely contained by the same folded group add visual
+      // noise and have no useful destination while its children are hidden.
+      if (sourceGroupId && targetGroupId && sourceGroupId === targetGroupId) return []
+
+      const source = sourceGroupId ?? edge.source
+      const target = targetGroupId ?? edge.target
+      if (source === target) return []
+
+      const remapped = Boolean(sourceGroupId || targetGroupId)
+      if (remapped) {
+        const pairKey = `${source}->${target}`
+        if (visiblePairs.has(pairKey)) return []
+        visiblePairs.add(pairKey)
+      }
+
+      return [{
+        ...edge,
+        source,
+        target,
+        ...(sourceGroupId ? { sourceHandle: undefined } : {}),
+        ...(targetGroupId ? { targetHandle: undefined } : {}),
+      }]
+    })
+  }, [edges, nodes])
+
   const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: CanvasNode[]; edges: Edge[] }) => {
     const ids = selectedNodes.map((node) => node.id)
     latestSelectedNodeIdsRef.current = ids
@@ -5535,7 +5712,10 @@ function App() {
       setActiveGenerationNodeId(null)
       setExpandedEditorNodeId(null)
     }
-    if (!selectedNodes.some((node) => node.data.kind === 'group')) setGroupColorMenuOpen(false)
+    if (!selectedNodes.some((node) => node.data.kind === 'group')) {
+      setGroupColorMenuOpen(false)
+      setGroupIconMenuOpen(false)
+    }
   }, [])
 
   const handleSelectionStart = useCallback(() => {
@@ -5616,6 +5796,10 @@ function App() {
         title: '新分组',
         body: '',
         groupColor: 'rgba(72, 76, 73, .20)',
+        groupAccentColor: '#78b7ef',
+        groupIcon: 'folder',
+        groupCollapsed: false,
+        groupNodeCount: selected.length,
       },
     }
 
@@ -5647,6 +5831,7 @@ function App() {
             ...node,
             parentId: undefined,
             extent: undefined,
+            hidden: false,
             position: {
               x: groupPosition.x + node.position.x,
               y: groupPosition.y + node.position.y,
@@ -5694,13 +5879,66 @@ function App() {
     setToastMessage('已整理为宫格布局')
   }
 
-  const setSelectedGroupColor = (color: string) => {
+  const setSelectedGroupAppearance = (surface: string, accent: string) => {
     if (!selectedGroupNode) return
     setNodes((current) => current.map((node) => node.id === selectedGroupNode.id
-      ? { ...node, data: { ...node.data, groupColor: color } }
+      ? { ...node, data: { ...node.data, groupColor: surface, groupAccentColor: accent } }
       : node))
     setGroupColorMenuOpen(false)
   }
+
+  const setSelectedGroupIcon = (icon: GroupIconKey) => {
+    if (!selectedGroupNode) return
+    setNodes((current) => current.map((node) => node.id === selectedGroupNode.id
+      ? { ...node, data: { ...node.data, groupIcon: icon } }
+      : node))
+    setGroupIconMenuOpen(false)
+  }
+
+  const setGroupCollapsed = useCallback((groupId: string, collapsed: boolean) => {
+    setNodes((current) => {
+      const group = current.find((node) => node.id === groupId && node.data.kind === 'group')
+      if (!group || Boolean(group.data.groupCollapsed) === collapsed) return current
+      const children = current.filter((node) => node.parentId === groupId)
+      const currentSize = getNodeSize(group)
+      const previewUrls = Array.from(new Set(children
+        .filter((node) => (node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl)
+        .map((node) => node.data.imageUrl as string)))
+        .slice(0, 3)
+      return current.map((node) => {
+        if (node.id === groupId) {
+          return {
+            ...node,
+            style: collapsed
+              ? { ...node.style, width: 210, height: 132 }
+              : {
+                  ...node.style,
+                  width: node.data.groupExpandedWidth || 560,
+                  height: node.data.groupExpandedHeight || 420,
+                },
+            data: {
+              ...node.data,
+              groupCollapsed: collapsed,
+              groupIcon: node.data.groupIcon || 'folder',
+              groupAccentColor: node.data.groupAccentColor || '#78b7ef',
+              groupNodeCount: children.length,
+              groupPreviewUrls: collapsed ? previewUrls : node.data.groupPreviewUrls,
+              ...(collapsed ? {
+                groupExpandedWidth: currentSize.width,
+                groupExpandedHeight: currentSize.height,
+              } : {}),
+            },
+          }
+        }
+        if (node.parentId !== groupId) return node
+        return { ...node, hidden: collapsed, selected: false }
+      })
+    })
+    setGroupColorMenuOpen(false)
+    setGroupIconMenuOpen(false)
+    window.requestAnimationFrame(() => updateNodeInternals(groupId))
+    setToastMessage(collapsed ? '编组已折叠，双击卡片可展开' : '编组已展开')
+  }, [setNodes, updateNodeInternals])
 
   const getSelectedNodesWithGroupChildren = () => {
     const includedIds = new Set(selectedNodeIds)
@@ -6189,10 +6427,11 @@ function App() {
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
               <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
+              <GroupCollapseContext.Provider value={setGroupCollapsed}>
               <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
           <ReactFlow
           nodes={nodes}
-          edges={edges}
+          edges={renderedEdges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
@@ -6383,6 +6622,7 @@ function App() {
           />
           </ReactFlow>
               </NodeExtensionMenuContext.Provider>
+              </GroupCollapseContext.Provider>
               </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
@@ -6409,7 +6649,7 @@ function App() {
         <AnimatePresence>
           {selectionToolbarAllowed && selectionToolbarRect && selectedNodeIds.length > 0 && (
             <motion.div
-              className="selection-action-toolbar"
+              className={`selection-action-toolbar ${selectedGroupNode ? 'is-group-toolbar' : ''}`}
               style={{ left: selectionToolbarRect.left, top: selectionToolbarRect.top }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -6418,12 +6658,50 @@ function App() {
             >
               {selectedGroupNode ? (
                 <>
+                  {selectedGroupNode.data.groupCollapsed && <div className="group-icon-control">
+                    <button
+                      type="button"
+                      aria-label="选择编组图标"
+                      title="类型图标"
+                      onClick={() => {
+                        setGroupIconMenuOpen((open) => !open)
+                        setGroupColorMenuOpen(false)
+                      }}
+                    >
+                      <GroupTypeIcon icon={selectedGroupNode.data.groupIcon} size={15} />
+                      <span>图标</span>
+                    </button>
+                    <AnimatePresence>
+                      {groupIconMenuOpen && (
+                        <motion.div
+                          className="group-icon-palette"
+                          initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 5, scale: 0.97 }}
+                        >
+                          {GROUP_ICON_OPTIONS.map((option) => (
+                            <button
+                              key={option.key}
+                              type="button"
+                              className={selectedGroupNode.data.groupIcon === option.key ? 'is-selected' : ''}
+                              aria-label={option.label}
+                              title={option.label}
+                              onClick={() => setSelectedGroupIcon(option.key)}
+                            ><GroupTypeIcon icon={option.key} size={16} /></button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>}
                   <div className="group-color-control">
                     <button
                       type="button"
                       aria-label="选择分组背景颜色"
                       title="背景颜色"
-                      onClick={() => setGroupColorMenuOpen((open) => !open)}
+                      onClick={() => {
+                        setGroupColorMenuOpen((open) => !open)
+                        setGroupIconMenuOpen(false)
+                      }}
                     >
                       <span
                         className="group-color-swatch"
@@ -6440,32 +6718,39 @@ function App() {
                           exit={{ opacity: 0, y: 4, scale: 0.95 }}
                         >
                           {[
-                            { label: '无背景', color: 'transparent' },
-                            { label: '红色', color: 'rgba(174, 75, 79, .32)' },
-                            { label: '橙色', color: 'rgba(170, 94, 29, .32)' },
-                            { label: '黄色', color: 'rgba(166, 143, 48, .30)' },
-                            { label: '绿色', color: 'rgba(58, 126, 72, .32)' },
+                            { label: '石墨', surface: 'rgba(72, 76, 73, .20)', accent: '#858b87' },
+                            { label: '天空蓝', surface: 'rgba(65, 126, 178, .24)', accent: '#78b7ef' },
+                            { label: '樱花粉', surface: 'rgba(177, 78, 126, .24)', accent: '#f08fbd' },
+                            { label: '薰衣草', surface: 'rgba(116, 87, 180, .24)', accent: '#ad94ef' },
+                            { label: '珊瑚橙', surface: 'rgba(176, 102, 57, .24)', accent: '#e9a06d' },
+                            { label: '青柠绿', surface: 'rgba(66, 137, 91, .24)', accent: '#81cb96' },
                           ].map((option) => (
                             <button
                               key={option.label}
                               type="button"
                               aria-label={option.label}
                               title={option.label}
-                              className={option.color === 'transparent' ? 'is-transparent' : ''}
-                              style={{ background: option.color }}
-                              onClick={() => setSelectedGroupColor(option.color)}
+                              className={selectedGroupNode.data.groupAccentColor === option.accent ? 'is-selected' : ''}
+                              style={{ background: option.accent }}
+                              onClick={() => setSelectedGroupAppearance(option.surface, option.accent)}
                             />
                           ))}
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
-                  <button type="button" onClick={arrangeSelectedGroupAsGrid}>
-                    <Grid3X3 size={15} /><span>宫格布局</span>
+                  <button type="button" onClick={() => setGroupCollapsed(selectedGroupNode.id, !selectedGroupNode.data.groupCollapsed)}>
+                    {selectedGroupNode.data.groupCollapsed ? <Maximize2 size={15} /> : <Minus size={15} />}
+                    <span>{selectedGroupNode.data.groupCollapsed ? '展开' : '折叠'}</span>
                   </button>
-                  <button type="button" disabled title="下一阶段开放">
-                    <PanelsTopLeft size={15} /><span>创建模板</span>
-                  </button>
+                  {!selectedGroupNode.data.groupCollapsed && <>
+                    <button type="button" onClick={arrangeSelectedGroupAsGrid}>
+                      <Grid3X3 size={15} /><span>宫格布局</span>
+                    </button>
+                    <button type="button" disabled title="下一阶段开放">
+                      <PanelsTopLeft size={15} /><span>创建模板</span>
+                    </button>
+                  </>}
                   <button type="button" onClick={saveSelectedNodesToAssets}>
                     <Library size={15} /><span>加入资产库</span>
                   </button>
