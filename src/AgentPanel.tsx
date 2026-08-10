@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { ArrowUp, Check, ChevronDown, ChevronsUp, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
-import type { AgentImagePlan, AgentImageReference, AgentMessage } from './agent'
+import { compactReferenceName, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
 export type AgentConversationOption = { id: string; title: string; updatedAt: string }
@@ -257,7 +257,7 @@ export function AgentPanel(props: Props) {
     const clone = editor.cloneNode(true) as HTMLElement
     clone.querySelectorAll<HTMLElement>('.agent-inline-reference').forEach((chip) => {
       const id = chip.dataset.referenceId
-      const reference = props.references.find((item) => item.nodeId === id)
+      const reference = id ? referenceRegistryRef.current.get(id) : undefined
       chip.replaceWith(document.createTextNode(reference ? ` @${reference.name} ` : ' '))
     })
     return clone.innerText
@@ -350,6 +350,14 @@ export function AgentPanel(props: Props) {
     while (candidate?.nodeType === Node.TEXT_NODE && !(candidate.textContent ?? '').trim()) candidate = candidate.nextSibling
     return candidate instanceof HTMLElement && candidate.matches('.agent-inline-reference')
   }
+  const selectionTouchesReference = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    if (range.collapsed || !editor.contains(range.commonAncestorContainer)) return false
+    return Array.from(editor.querySelectorAll('.agent-inline-reference')).some((chip) => range.intersectsNode(chip))
+  }
   const restoreSelection = () => {
     const editor = editorRef.current
     editor?.focus()
@@ -403,7 +411,8 @@ export function AgentPanel(props: Props) {
     image.alt = ''
     const label = document.createElement('b')
     const existingIndex = props.references.findIndex((item) => item.nodeId === reference.nodeId)
-    label.textContent = `图${existingIndex >= 0 ? existingIndex + 1 : props.references.length + 1} · ${reference.name}`
+    label.textContent = `图${existingIndex >= 0 ? existingIndex + 1 : props.references.length + 1} · ${compactReferenceName(reference.name)}`
+    label.title = reference.name
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.setAttribute('aria-label', '移除引用')
@@ -479,7 +488,10 @@ export function AgentPanel(props: Props) {
       const reference = props.references.find((item) => item.nodeId === chip.dataset.referenceId)
       const number = reference ? referenceNumberById.get(reference.nodeId) : undefined
       const label = chip.querySelector('b')
-      if (label && reference && number) label.textContent = `图${number} · ${reference.name}`
+      if (label && reference && number) {
+        label.textContent = `图${number} · ${compactReferenceName(reference.name)}`
+        label.title = reference.name
+      }
     })
   }, [props.references])
   useEffect(() => {
@@ -577,7 +589,7 @@ export function AgentPanel(props: Props) {
         <textarea value={plan.prompt} disabled={disabled} onChange={(event) => props.onPlanChange(plan.id, { prompt: event.target.value })} aria-label="编辑图像方案提示词" />
         {!!plan.referenceNodeIds.length && <div className="agent-plan-references">{plan.referenceNodeIds.map((nodeId, index) => {
           const reference = plan.references?.find((item) => item.nodeId === nodeId) || props.candidates.find((item) => item.nodeId === nodeId) || props.references.find((item) => item.nodeId === nodeId)
-          return reference ? <button type="button" className="agent-plan-reference" key={nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button> : null
+          return reference ? <button type="button" className="agent-plan-reference" key={nodeId} title={reference.name} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>图{index + 1} · {compactReferenceName(reference.name)}</span><Focus size={12} /></button> : null
         })}</div>}
         {!!(plan.invokedStylePresets?.length || plan.invokedStyleReferences?.length) && <div className="agent-plan-invoked-styles">
           {(plan.invokedStylePresets?.length ? plan.invokedStylePresets : [{
@@ -667,7 +679,7 @@ export function AgentPanel(props: Props) {
           {props.messages.map((message) => <Fragment key={message.id}>
             <article className={`agent-message is-${message.role}`}>
               <p>{message.content}</p>
-              {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference, index) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title="定位到画布节点"><img src={reference.url} alt="" /><span>图{index + 1} · {reference.name}</span><Focus size={12} /></button>)}</div>}
+              {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference, index) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title={`${reference.name} · 定位到画布节点`}><img src={reference.url} alt="" /><span>图{index + 1} · {compactReferenceName(reference.name)}</span><Focus size={12} /></button>)}</div>}
               {message.textNode?.nodeId && <button type="button" className="agent-message-to-canvas" onClick={() => props.onLocateCanvasNode(message.textNode!.nodeId!)}><Focus size={13} />查看整合文本节点</button>}
             </article>
             {renderAttachedPlans(plansByMessage.get(message.id) ?? [])}
@@ -716,7 +728,7 @@ export function AgentPanel(props: Props) {
                 event.preventDefault()
                 return
               }
-              if (event.key === 'Delete' && hasReferenceAfterCaret()) {
+              if (event.key === 'Delete' && (hasReferenceAfterCaret() || selectionTouchesReference())) {
                 event.preventDefault()
                 return
               }

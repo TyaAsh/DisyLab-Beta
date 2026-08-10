@@ -83,7 +83,7 @@ import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, p
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 gsap.registerPlugin(useGSAP)
 
@@ -718,7 +718,8 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         visual = glyph
       }
       const label = document.createElement('span')
-      label.textContent = reference.name
+      label.textContent = compactReferenceName(reference.name)
+      label.title = reference.name
       const remove = document.createElement('button')
       remove.type = 'button'
       remove.className = 'atomic-reference-remove'
@@ -5022,9 +5023,9 @@ function App() {
     }
     setAgentOpen(true)
     setAgentCanvasPicking(false)
-    const uniqueAgentReferenceCount = new Set(messageReferences.map((reference) => reference.url)).size
-    if (uniqueAgentReferenceCount > 16) {
-      setToastMessage(`Agent 参考图最多 16 张，当前共 ${uniqueAgentReferenceCount} 张`)
+    const agentReferenceCount = messageReferences.length
+    if (agentReferenceCount > 16) {
+      setToastMessage(`Agent 参考图最多 16 张，当前共 ${agentReferenceCount} 张`)
       return
     }
     const sentReferences = messageReferences.map((reference) => ({ ...reference }))
@@ -5177,10 +5178,12 @@ function App() {
       setToastMessage('部分参考图已被删除或失效，请重新发起方案')
       return
     }
-    const orderedPlanReferences = uniqueNamedImageReferences([
-      ...references.map((reference) => ({ name: reference.name, url: reference.url })),
-      ...(plan.invokedStyleReferences ?? []).map((reference) => ({ name: reference.name, url: reference.url })),
-    ])
+    const userPlanReferences = references.map((reference) => ({ name: reference.name, url: reference.url }))
+    const userReferenceUrls = new Set(userPlanReferences.map((reference) => reference.url))
+    const appendedStyleReferences = uniqueNamedImageReferences((plan.invokedStyleReferences ?? [])
+      .map((reference) => ({ name: reference.name, url: reference.url })))
+      .filter((reference) => !userReferenceUrls.has(reference.url))
+    const orderedPlanReferences = [...userPlanReferences, ...appendedStyleReferences]
     const referenceUrls = orderedPlanReferences.map((reference) => reference.url)
     const numberedReferenceGuide = buildNumberedReferenceGuide(orderedPlanReferences)
     const requestPrompt = [plan.prompt.trim(), numberedReferenceGuide].filter(Boolean).join('\n\n')
@@ -7100,7 +7103,7 @@ function App() {
                 onCreateUploadedReference={createAgentUploadedReference}
                 onPendingReferenceConsumed={() => setAgentPendingReference(null)}
                 onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
-                onSend={(message, invocationText) => void sendAgentMessage(message, invocationText)}
+                onSend={(message, invocationText, references) => void sendAgentMessage(message, invocationText, references)}
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
                 onSelectPlanOptions={selectAgentPlanOptions}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
@@ -7593,7 +7596,7 @@ function App() {
                         {reference.url
                           ? <img src={reference.url} alt={reference.name} />
                           : <span className="reference-text-thumbnail"><Type size={13} /></span>}
-                        <span className="image-reference-name">{selectedImageReferenceNumberById.has(reference.id) ? `图${selectedImageReferenceNumberById.get(reference.id)} · ` : ''}{reference.name}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
+                        <span className="image-reference-name" title={reference.name}>{selectedImageReferenceNumberById.has(reference.id) ? `图${selectedImageReferenceNumberById.get(reference.id)} · ` : ''}{compactReferenceName(reference.name)}{reference.source === 'current' ? (reference.selected ? ' · 默认参考' : ' · 已关闭') : reference.source === 'connection' && !reference.selected && !activeGenerationNode.data.body.includes(reference.mention) ? ' · 候选' : ''}</span>
                         {(reference.source === 'manual' || reference.source === 'connection' || reference.source === 'current') && (
                           <span
                             className="reference-remove"
@@ -7905,7 +7908,7 @@ function App() {
                           {reference.url
                             ? <img src={reference.url} alt={reference.name} />
                             : <span className="reference-text-thumbnail"><Type size={13} /></span>}
-                          <span className="image-reference-name">{reference.name}</span>
+                          <span className="image-reference-name" title={reference.name}>{compactReferenceName(reference.name)}</span>
                           <span
                             className="reference-remove"
                             role="button"

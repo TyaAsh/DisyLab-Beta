@@ -1313,7 +1313,7 @@ button { border: 0; cursor: pointer; }
 .image-mention-menu > button > img { width: 36px; height: 36px; flex: none; border-radius: 8px; object-fit: cover; }
 .image-mention-menu > button > span { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .image-mention-menu strong,
-.image-mention-menu small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-mention-menu small { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 .image-mention-menu strong { color: inherit; font-size: 10px; }
 .image-mention-menu small { color: var(--muted); font-size: 8px; }
 .image-mention-menu em { flex: none; color: color-mix(in srgb, var(--muted) 72%, transparent); font-size: 8px; font-style: normal; }
@@ -2349,7 +2349,7 @@ button { border: 0; cursor: pointer; }
 .agent-mention-menu button:focus { outline: none; }
 .agent-mention-menu button:focus-visible { color: var(--ink); border-color: var(--accent-border); background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
 .agent-mention-menu img { width: 32px; height: 32px; border-radius: 7px; object-fit: cover; }
-.agent-composer-models { position: relative; z-index: 3; padding-top: 7px; border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.agent-composer-models { position: relative; z-index: 3; padding-top: 11px; border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .agent-composer-models .agent-select-menu { top: auto; bottom: calc(100% + 7px); }
 .agent-composer-footer { min-height: 38px; padding-top: 5px; display: flex; align-items: center; justify-content: space-between; gap: 9px; }
 .agent-composer-tools { display: flex; align-items: center; gap: 4px; }

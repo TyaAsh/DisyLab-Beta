@@ -77,6 +77,11 @@ export type AgentReply = {
 
 export type AgentImagePlanDraft = Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count' | 'label'>
 
+export function compactReferenceName(value: string, maxLength = 8) {
+  const characters = Array.from(value.trim())
+  return characters.length > maxLength ? `${characters.slice(0, maxLength).join('')}...` : value.trim()
+}
+
 const CHINESE_DIGITS: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
 
 function parsePlanCountText(value: string) {
