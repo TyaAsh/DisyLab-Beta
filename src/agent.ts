@@ -115,10 +115,88 @@ export function messageExpectsImagePlans(content: string) {
   return explicitImageIntent
 }
 
+function extractFirstJsonContainer(value: string) {
+  const objectStart = value.indexOf('{')
+  const arrayStart = value.indexOf('[')
+  const start = objectStart < 0 ? arrayStart : arrayStart < 0 ? objectStart : Math.min(objectStart, arrayStart)
+  if (start < 0) return null
+  const stack: string[] = []
+  let quoted = false
+  let escaped = false
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === '"') quoted = false
+      continue
+    }
+    if (character === '"') quoted = true
+    else if (character === '{') stack.push('}')
+    else if (character === '[') stack.push(']')
+    else if (character === '}' || character === ']') {
+      if (stack.at(-1) !== character) return null
+      stack.pop()
+      if (!stack.length) return value.slice(start, index + 1)
+    }
+  }
+  return null
+}
+
+function normalizeAgentReplyRecord(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    const protocolRecords = records.filter((record) => ['reply', 'imagePlan', 'imagePlans', 'textNode'].some((field) => field in record))
+    return protocolRecords.length ? Object.assign({}, ...protocolRecords) : null
+  }
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function parseAgentReplyRecord(value: string) {
+  const attempts = [value, extractFirstJsonContainer(value)].filter((item, index, items): item is string => Boolean(item) && items.indexOf(item) === index)
+  for (const attempt of attempts) {
+    try {
+      let parsed: unknown = JSON.parse(attempt)
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed)
+      const record = normalizeAgentReplyRecord(parsed)
+      if (record) return record
+    } catch {
+      // Try the next cleaned JSON candidate.
+    }
+  }
+  return null
+}
+
+function extractMalformedReply(value: string) {
+  const match = value.match(/["']?reply["']?\s*:\s*["']((?:\\.|[^"'\\])*)["']/s)
+  if (!match) return ''
+  try {
+    return (JSON.parse(`"${match[1]}"`) as string).trim()
+  } catch {
+    return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim()
+  }
+}
+
+function looksLikeAgentProtocolPayload(value: string) {
+  const cleaned = value.trim()
+  const hasProtocolField = /(?:["']|\\["'])?(?:reply|imagePlans?|textNode)(?:["']|\\["'])?\s*:/i.test(cleaned)
+  if (!hasProtocolField) return false
+  return /^```(?:json|js)?/i.test(cleaned)
+    || /^[\[{"']/.test(cleaned)
+    || /\{[\s\S]*(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
+    || /^(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
+    || /(?:^|\n)\s*(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
+}
+
+export function normalizeAgentMessageContent(content: string) {
+  return looksLikeAgentProtocolPayload(content) ? parseAgentReply(content).reply : content
+}
+
 export function parseAgentReply(raw: string): AgentReply {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   try {
-    const value = JSON.parse(cleaned) as Record<string, unknown>
+    const value = parseAgentReplyRecord(cleaned)
+    if (!value) throw new Error('Invalid Agent response payload')
     const reply = typeof value.reply === 'string' ? value.reply.trim() : ''
     const candidates = Array.isArray(value.imagePlans)
       ? value.imagePlans.filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === 'object')
@@ -150,13 +228,17 @@ export function parseAgentReply(raw: string): AgentReply {
         }
       : undefined
     return {
-      reply: reply || (imagePlans.length ? `我已整理好${imagePlans.length > 1 ? `${imagePlans.length}份` : '一份'}图像方案，请选择并确认后生成。` : raw.trim()),
+      reply: reply
+        || (imagePlans.length ? `我已整理好${imagePlans.length > 1 ? `${imagePlans.length}份` : '一份'}图像方案，请选择并确认后生成。` : '')
+        || (textNode ? '我已整理好最终文本，并放入画布文本节点。' : '这次回复格式异常，请重新发送一次。'),
       imagePlan: imagePlans[0],
       imagePlans: imagePlans.length ? imagePlans : undefined,
       textNode,
     }
   } catch {
-    return { reply: raw.trim() }
+    const recoveredReply = extractMalformedReply(cleaned)
+    const looksLikeProtocolPayload = looksLikeAgentProtocolPayload(cleaned)
+    return { reply: recoveredReply || (looksLikeProtocolPayload ? '这次回复格式异常，请重新发送一次。' : cleaned) }
   }
 }
 

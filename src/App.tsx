@@ -83,7 +83,7 @@ import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, p
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 gsap.registerPlugin(useGSAP)
 
@@ -969,6 +969,42 @@ function buildNumberedReferenceGuide(references: Array<{ name: string; url: stri
     }),
     '提示词中出现“图1、图2、图3”等称呼时，必须按以上编号理解，不得交换图片顺序。',
   ].join('\n')
+}
+
+function numberAgentReferenceMentions(content: string, references: Array<{ name: string }>) {
+  let cursor = 0
+  let numbered = content
+  references.forEach((reference, index) => {
+    const mention = `@${reference.name}`
+    const position = numbered.indexOf(mention, cursor)
+    if (position < 0) return
+    const replacement = `图${index + 1}（${mention}）`
+    numbered = `${numbered.slice(0, position)}${replacement}${numbered.slice(position + mention.length)}`
+    cursor = position + replacement.length
+  })
+  return numbered.trim()
+}
+
+function ensureAgentPlanReferenceContext(
+  prompt: string,
+  userRequest: string,
+  references: Array<{ name: string; url: string }>,
+) {
+  if (!references.length) return prompt.trim()
+  const marker = '【参考图执行关系】'
+  return [
+    marker,
+    `用户原始要求：${userRequest}`,
+    ...references.map((reference, index) => `图${index + 1}：@${reference.name}（第 ${index + 1} 张输入图片；用途严格按用户原始要求执行）`),
+    '【生成要求】',
+    prompt.trim(),
+  ].join('\n')
+}
+
+function normalizeHistoricalAgentMessages(messages: AgentMessage[]) {
+  return messages.map((message) => message.role === 'assistant'
+    ? { ...message, content: normalizeAgentMessageContent(message.content) }
+    : message)
 }
 
 function resolveStylePresets(presets: StylePresetRecord[], invocationText: string) {
@@ -2145,7 +2181,7 @@ function App() {
       setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
       const activeSession = sessions[0]
       setAgentConversationId(activeSession?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
-      setAgentMessages((activeSession?.messages as AgentMessage[] | undefined) ?? [])
+      setAgentMessages(normalizeHistoricalAgentMessages((activeSession?.messages as AgentMessage[] | undefined) ?? []))
       const interruptedPlans = (activeSession?.plans as AgentImagePlan[] | undefined) ?? []
       const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
       if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
@@ -3416,7 +3452,7 @@ function App() {
     const session = sessions[0]
     setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
     setAgentConversationId(session?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
-    setAgentMessages((session?.messages as AgentMessage[] | undefined) ?? [])
+    setAgentMessages(normalizeHistoricalAgentMessages((session?.messages as AgentMessage[] | undefined) ?? []))
     const interruptedPlans = (session?.plans as AgentImagePlan[] | undefined) ?? []
     const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
     if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
@@ -3478,7 +3514,7 @@ function App() {
     const session = sessions.find((item) => item.id === id)
     if (!session) return
     setAgentConversationId(session.id)
-    setAgentMessages((session.messages as AgentMessage[] | undefined) ?? [])
+    setAgentMessages(normalizeHistoricalAgentMessages((session.messages as AgentMessage[] | undefined) ?? []))
     const plans = (session.plans as AgentImagePlan[] | undefined) ?? []
     setAgentPlans(plans.map((plan) => plan.status === 'running'
       ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' }
@@ -3504,7 +3540,7 @@ function App() {
     const next = sessions[0]
     if (next) {
       setAgentConversationId(next.id)
-      setAgentMessages((next.messages as AgentMessage[] | undefined) ?? [])
+      setAgentMessages(normalizeHistoricalAgentMessages((next.messages as AgentMessage[] | undefined) ?? []))
       setAgentPlans(((next.plans as AgentImagePlan[] | undefined) ?? []).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
       setAgentTextModelKey(next.selectedChatModelId ?? agentTextModelKey)
       setAgentImageModelKey(next.selectedImageModelId ?? agentImageModelKey)
@@ -5063,14 +5099,18 @@ function App() {
     setAgentBusy(true)
     try {
       const images = await Promise.all(sentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
-      const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.content}`).join('\n')
+      const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.role === 'assistant' ? normalizeAgentMessageContent(message.content) : message.content}`).join('\n')
       const agentReferenceGuide = buildNumberedReferenceGuide(sentReferences)
+      const numberedUserRequest = numberAgentReferenceMentions(content, sentReferences)
+      const referenceUsageGuide = sentReferences.length
+        ? `本次多图任务的用户原始要求如下，必须逐字理解图像角色，并把关系明确写入每个 imagePlans.prompt；不得把待修复主体、风格参考、构图参考或其他用途互换：\n${numberedUserRequest}`
+        : ''
       const orchestrationGuide = `你不是只负责生图的助手，而是创作流程的总控。先识别用户的目标属于脚本/文案、设计提案、图像、视频或混合任务。只要缺少会影响结果的关键信息，先用 1 到 3 个简洁问题逐步澄清：目标受众、交付物、风格、素材、时长/规格与优先级；不要一次抛出冗长问卷。用户说“写脚本”时，先确认题材、平台、时长、人物和结构，再给大纲，确认后再给分场/镜头/台词；用户说“设计提案”时，先确认品牌目标、受众、场景与约束，再给可选方向；用户说“视频”时，先确认时长、平台、画幅、节奏与素材，再规划脚本、分镜、画面与声音。信息已足够时，按内容类型给出明确下一步：文本内容应结构化、可直接放入文本节点；图像才提出 imagePlans；视频先拆为脚本、分镜、素材和生成任务，暂不假装视频已生成。不要为了凑方案而在信息不足时直接生成。`
       const textNodeGuide = `文本节点有严格门槛：需求澄清、创作方向、大纲提案、用户尚未确认的草稿都只能放在 reply 中，绝对不要返回 textNode。只有用户已经明确选择或确认方向，并且你已产出一份完整、整合、可直接交付的最终脚本/文案/提案正文时，才返回 textNode。textNode 只能有一个，content 必须是完整交付物，不能是追问、方案列表或解释。`
       const directPlanGuide = directImagePlanRequested
         ? '用户本次明确不要再选择多个方案。若上下文中的画面目标已经足够清楚，直接把用户要求整合成唯一一项 imagePlans，供界面创建待确认卡；不要再追问创作方向，也不要返回多个备选。仍然不得直接声称已经生图。'
         : '用户未明确跳过方案选择时，按正常流程提出可选方向。'
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。${referenceUsageGuide ? `\n\n${referenceUsageGuide}` : ''}\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images, signal: controller.signal })
       if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       let parsed = parseAgentReply(raw)
@@ -5099,7 +5139,10 @@ function App() {
         textNode: parsed.textNode ? { ...parsed.textNode, nodeId: textNodeId ?? undefined } : undefined,
       }
       setAgentMessages((current) => [...current, assistantMessage])
-      parsedPlans = parsedPlans.slice(0, requestedPlanCount)
+      parsedPlans = parsedPlans.slice(0, requestedPlanCount).map((draft) => ({
+        ...draft,
+        prompt: ensureAgentPlanReferenceContext(draft.prompt, numberedUserRequest, sentReferences),
+      }))
       if (parsedPlans.length) {
         const [imageConnectionId, imageModelId] = agentImageModelKey.split('::')
         const createdAt = new Date().toISOString()
@@ -5166,22 +5209,27 @@ function App() {
     if (agentPlanLocksRef.current.has(planId)) return
     const plan = agentPlans.find((item) => item.id === planId)
     if (!plan || plan.status !== 'ready' || !plan.prompt.trim()) return
+    if (new Set(plan.referenceNodeIds).size !== plan.referenceNodeIds.length) {
+      setToastMessage('方案中存在重复参考图，请重新发起方案')
+      return
+    }
     const model = enabledImageModels.find((item) => item.connection.id === plan.imageConnectionId && item.model.id === plan.imageModelId)
     if (!model) {
       setToastMessage('这份方案的生图模型不可用，请重新选择')
       return
     }
-    const references = plan.references?.length
-      ? plan.references
-      : plan.referenceNodeIds.map((nodeId) => agentImageCandidates.find((item) => item.nodeId === nodeId)).filter((item): item is AgentImageReference => Boolean(item))
+    const savedReferences = new Map((plan.references ?? []).map((reference) => [reference.nodeId, reference]))
+    const references = plan.referenceNodeIds
+      .map((nodeId) => savedReferences.get(nodeId) ?? agentImageCandidates.find((item) => item.nodeId === nodeId))
+      .filter((item): item is AgentImageReference => Boolean(item))
     if (references.length !== plan.referenceNodeIds.length) {
       setToastMessage('部分参考图已被删除或失效，请重新发起方案')
       return
     }
-    const userPlanReferences = references.map((reference) => ({ name: reference.name, url: reference.url }))
+    const userPlanReferences = references.map((reference) => ({ id: reference.nodeId, name: reference.name, url: reference.url }))
     const userReferenceUrls = new Set(userPlanReferences.map((reference) => reference.url))
     const appendedStyleReferences = uniqueNamedImageReferences((plan.invokedStyleReferences ?? [])
-      .map((reference) => ({ name: reference.name, url: reference.url })))
+      .map((reference) => ({ id: reference.id, name: reference.name, url: reference.url })))
       .filter((reference) => !userReferenceUrls.has(reference.url))
     const orderedPlanReferences = [...userPlanReferences, ...appendedStyleReferences]
     const referenceUrls = orderedPlanReferences.map((reference) => reference.url)
@@ -5219,6 +5267,8 @@ function App() {
         imageModelConnectionId: model.connection.id,
         imageModelId: model.model.id,
         imageModelName: model.model.name,
+        referenceImages: orderedPlanReferences.map((reference) => ({ id: reference.id, name: reference.name, url: reference.url })),
+        referenceOrder: orderedPlanReferences.map((reference, index) => index < userPlanReferences.length ? `connection-${reference.id}` : reference.id),
       },
     }
     const canvasReferenceIds = new Set(nodes.map((node) => node.id))

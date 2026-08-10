@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { ArrowUp, Check, ChevronDown, ChevronsUp, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
-import { compactReferenceName, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { compactReferenceName, normalizeAgentMessageContent, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
 export type AgentConversationOption = { id: string; title: string; updatedAt: string }
@@ -438,7 +438,15 @@ export function AgentPanel(props: Props) {
   }
   const getEditorReferences = () => {
     const ids = Array.from(editorRef.current?.querySelectorAll<HTMLElement>('[data-reference-id]') ?? []).map((node) => node.dataset.referenceId).filter(Boolean) as string[]
-    return ids.map((id) => referenceRegistryRef.current.get(id)).filter((reference): reference is AgentImageReference => Boolean(reference))
+    const seen = new Set<string>()
+    return ids
+      .filter((id) => {
+        if (seen.has(id)) return false
+        seen.add(id)
+        return true
+      })
+      .map((id) => referenceRegistryRef.current.get(id))
+      .filter((reference): reference is AgentImageReference => Boolean(reference))
   }
   const syncReferencesFromEditor = () => {
     props.onReferencesChange(getEditorReferences())
@@ -448,9 +456,11 @@ export function AgentPanel(props: Props) {
     restoreSelection()
     clearMentionTrigger()
     const editorReferences = getEditorReferences()
-    if (!editorReferences.some((item) => item.nodeId === reference.nodeId)) {
-      props.onReferencesChange([...editorReferences, reference])
+    if (editorReferences.some((item) => item.nodeId === reference.nodeId)) {
+      setMentionOpen(false)
+      return
     }
+    props.onReferencesChange([...editorReferences, reference])
     const selection = window.getSelection()
     if (selection?.rangeCount) {
       const range = selection.getRangeAt(0)
@@ -678,7 +688,7 @@ export function AgentPanel(props: Props) {
           {!props.messages.length && <div className="agent-empty"><span><Sparkles size={19} /></span><strong>今天想创造什么？</strong><p>聊灵感、梳理画面，或让我准备一份可确认的图像方案。</p></div>}
           {props.messages.map((message) => <Fragment key={message.id}>
             <article className={`agent-message is-${message.role}`}>
-              <p>{message.content}</p>
+              <p>{message.role === 'assistant' ? normalizeAgentMessageContent(message.content) : message.content}</p>
               {!!message.references?.length && <div className="agent-message-references">{message.references.map((reference, index) => <button type="button" key={reference.nodeId} onClick={() => props.onLocateCanvasNode(reference.nodeId)} title={`${reference.name} · 定位到画布节点`}><img src={reference.url} alt="" /><span>图{index + 1} · {compactReferenceName(reference.name)}</span><Focus size={12} /></button>)}</div>}
               {message.textNode?.nodeId && <button type="button" className="agent-message-to-canvas" onClick={() => props.onLocateCanvasNode(message.textNode!.nodeId!)}><Focus size={13} />查看整合文本节点</button>}
             </article>
