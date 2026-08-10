@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="public/disy-logo-wordmark.png" width="520" alt="DisyLab Logo" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-black.png" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-white.png" />
+    <img src="docs/assets/logo-white.png" width="520" alt="DisyLab Logo" />
+  </picture>
 </p>
 
 <h1 align="center">DisyLab</h1>
