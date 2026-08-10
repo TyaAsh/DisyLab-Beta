@@ -129,6 +129,7 @@ type CanvasNode = Node<{
   imageModelConnectionId?: string
   imageModelId?: string
   imageModelName?: string
+  generationError?: string
   groupColor?: string
 }>
 
@@ -388,6 +389,21 @@ function getNodeDisplayTitle(data: CanvasNode['data']) {
   return data.title || data.fileName || '图像'
 }
 
+function normalizeImageGenerationOptions(options: {
+  aspectRatio?: string
+  resolution?: string
+  detail?: string
+  count?: number
+}) {
+  const aspectRatio = (IMAGE_ASPECT_OPTIONS.some((option) => option.value === options.aspectRatio)
+    ? options.aspectRatio
+    : '1:1') as ImageAspectRatio
+  const resolution = (options.resolution === '2K' || options.resolution === '4K' ? options.resolution : '1K') as ImageResolution
+  const detail = (options.detail === 'low' || options.detail === 'high' ? options.detail : 'medium') as ImageDetail
+  const count = Math.min(4, Math.max(1, Math.round(options.count ?? 1)))
+  return { aspectRatio, resolution, detail, count }
+}
+
 function getWelcomeModelGlyph(name: string, image = false) {
   const normalized = name.toLowerCase().replace(/[\s_-]+/g, '')
   if (/gpt|openai|dall|sora/.test(normalized)) return '◎'
@@ -396,6 +412,10 @@ function getWelcomeModelGlyph(name: string, image = false) {
   if (/即梦|jimeng|dreamina|seedream|seedance/.test(normalized)) return '即'
   if (/豆包|doubao/.test(normalized)) return '豆'
   return image ? '✦' : 'AI'
+}
+
+function ModelBrandBadge({ name, image = false }: { name?: string; image?: boolean }) {
+  return <span className={`welcome-model-badge ${image ? 'is-image' : ''}`} aria-hidden="true">{getWelcomeModelGlyph(name ?? '', image)}</span>
 }
 
 function WelcomeModelSelect({ value, placeholder, options, image, onChange }: {
@@ -1183,6 +1203,7 @@ const NodeCard = memo(function NodeCard({
   const openExtensionMenu = useContext(NodeExtensionMenuContext)
   const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
   const isActivelyGenerating = activeGenerationNodeIds.has(id)
+  const hasGenerationFailed = data.kind === 'image' && data.status === '生成失败'
   const [inlineEditing, setInlineEditing] = useState(false)
   const [inlineDraft, setInlineDraft] = useState(data.body)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1420,10 +1441,10 @@ const NodeCard = memo(function NodeCard({
         )
       )}
 
-      {isActivelyGenerating && (
-        <div className="node-status">
+      {(isActivelyGenerating || hasGenerationFailed) && (
+        <div className={`node-status ${hasGenerationFailed ? 'is-failed' : ''}`} title={data.generationError || data.status}>
           <span className="status-dot" />
-          {data.status}
+          {hasGenerationFailed ? `生成失败：${data.generationError || '图像服务未返回结果'}` : data.status}
         </div>
       )}
 
@@ -5137,20 +5158,24 @@ function App() {
     agentPlanLocksRef.current.add(planId)
     const origin = { projectId: activeProjectId, canvasId: activeCanvasId, sessionId: agentConversationId }
     const flowPosition = screenToFlowPosition({ x: Math.max(360, window.innerWidth - (agentOpen ? 720 : 420)), y: 230 })
-    const aspectRatio = (IMAGE_ASPECT_OPTIONS.some((option) => option.value === plan.aspectRatio) ? plan.aspectRatio : '1:1') as ImageAspectRatio
+    // Freeze the confirmed card values once. The node geometry, persisted metadata,
+    // request payload and history must all describe this exact generation attempt.
+    const confirmedOptions = normalizeImageGenerationOptions(plan)
+    const { aspectRatio, resolution, detail, count: requestedCount } = confirmedOptions
+    const confirmedNodeSize = getImageGenerationNodeSize(aspectRatio)
     const generatedNode: CanvasNode = {
       id: nodeId,
       type: 'disy',
       position: flowPosition,
-      style: getImageGenerationNodeSize(aspectRatio),
+      style: confirmedNodeSize,
       data: {
         kind: 'image',
         title: '图像',
         body: plan.prompt,
         status: '生成中',
         imageAspectRatio: aspectRatio,
-        imageResolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
-        imageDetail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
+        imageResolution: resolution,
+        imageDetail: detail,
         imageModelConnectionId: model.connection.id,
         imageModelId: model.model.id,
         imageModelName: model.model.name,
@@ -5164,6 +5189,7 @@ function App() {
     setAgentPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'running' as const, nodeId } : item))
     setNodes((current) => current.some((node) => node.id === nodeId) ? current : [...current, generatedNode])
     setEdges((current) => [...current, ...createdEdges.filter((edge) => !current.some((item) => item.id === edge.id))])
+    window.requestAnimationFrame(() => updateNodeInternals(nodeId))
     try {
       await saveAgentSession({
           id: origin.sessionId,
@@ -5178,7 +5204,6 @@ function App() {
           updatedAt: new Date().toISOString(),
         })
       const prepared = await Promise.all(referenceUrls.map((url) => prepareReferenceImageForRequest(url, controller.signal)))
-      const requestedCount = Math.min(4, Math.max(1, plan.count))
       const images: Awaited<ReturnType<typeof generateRemoteImages>> = []
       let stoppedError: unknown = null
       while (images.length < requestedCount) {
@@ -5191,8 +5216,8 @@ function App() {
               count: 1,
               referenceImages: prepared,
               aspectRatio,
-              resolution: (plan.resolution === '2K' || plan.resolution === '4K' ? plan.resolution : '1K'),
-              detail: (plan.detail === 'low' || plan.detail === 'high' ? plan.detail : 'medium'),
+              resolution,
+              detail,
               signal: controller.signal,
               captureAdminLog: (log) => captureGenerationAdminLog(log, {
                 prompt: plan.prompt,
@@ -5213,11 +5238,33 @@ function App() {
       const createdAt = new Date().toISOString()
       const variants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
       const wasInterrupted = stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
+      const partialFailure = stoppedError && !wasInterrupted ? toOutputHistoryError(stoppedError) : null
       const completedStatus = wasInterrupted
         ? (generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止')
-        : '已完成'
-      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, imageUrl: variants[0].url, fileName: variants[0].fileName, imageVariants: variants, activeImageVariantId: variants[0].id, status: completedStatus } } : node))
-      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: wasInterrupted ? 'cancelled' : 'completed', nodeId, collapsed: true } : item))
+        : partialFailure ? '生成失败' : '已完成'
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? {
+        ...node,
+        style: { ...node.style, ...confirmedNodeSize },
+        data: {
+          ...node.data,
+          imageUrl: variants[0].url,
+          fileName: variants[0].fileName,
+          imageVariants: variants,
+          activeImageVariantId: variants[0].id,
+          imageAspectRatio: aspectRatio,
+          imageResolution: resolution,
+          imageDetail: detail,
+          generationError: partialFailure?.summary,
+          status: completedStatus,
+        },
+      } : node))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? {
+        ...item,
+        status: wasInterrupted ? 'cancelled' : partialFailure ? 'failed' : 'completed',
+        nodeId,
+        collapsed: true,
+        error: partialFailure?.summary,
+      } : item))
       const historyRecords = await archiveGenerationRecords(variants.map((variant): GenerationRecord => ({
         id: `history-${variant.id}`,
         createdAt,
@@ -5228,7 +5275,21 @@ function App() {
         projectId: origin.projectId,
       })))
       setGenerationHistory((current) => [...current, ...historyRecords])
-      appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount: plan.count, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · 参考图 ${prepared.length} 张` }, origin.projectId)
+      appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · ${resolution} · ${IMAGE_DETAIL_LABELS[detail]} · 参考图 ${prepared.length} 张` }, origin.projectId)
+      if (partialFailure) {
+        appendOutputHistory({
+          kind: 'image',
+          status: 'failed',
+          prompt: plan.prompt,
+          modelId: model.model.id,
+          modelName: model.model.name,
+          connectionName: model.connection.name,
+          requestedCount: requestedCount - images.length,
+          outputCount: 0,
+          preview: `Agent 后续生成失败 · ${aspectRatio} · ${resolution} · 已保留 ${images.length} 张成功图片`,
+          error: partialFailure,
+        }, origin.projectId)
+      }
       setToastMessage(stoppedError
         ? `${wasInterrupted ? completedStatus : '后续生成已停止'}；已保留 ${images.length} 张成功图片`
         : `Agent 已生成 ${images.length} 张图片`)
@@ -5239,10 +5300,34 @@ function App() {
         await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'cancelled', nodeId } : item))
         return
       }
-      const message = error instanceof Error ? error.message : '生成失败'
-      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
-      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: message } : item))
-      setToastMessage(message)
+      const historyError = toOutputHistoryError(error)
+      const failureReason = historyError.summary || '图像生成服务暂时不可用'
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? {
+        ...node,
+        style: { ...node.style, ...confirmedNodeSize },
+        data: {
+          ...node.data,
+          imageAspectRatio: aspectRatio,
+          imageResolution: resolution,
+          imageDetail: detail,
+          status: '生成失败',
+          generationError: failureReason,
+        },
+      } : node))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? { ...item, status: 'failed', nodeId, error: failureReason } : item))
+      appendOutputHistory({
+        kind: 'image',
+        status: 'failed',
+        prompt: plan.prompt,
+        modelId: model.model.id,
+        modelName: model.model.name,
+        connectionName: model.connection.name,
+        requestedCount,
+        outputCount: 0,
+        preview: `Agent 确认生成 · ${aspectRatio} · ${resolution} · ${IMAGE_DETAIL_LABELS[detail]} · 参考图 ${referenceUrls.length} 张`,
+        error: historyError,
+      }, origin.projectId)
+      setToastMessage(failureReason)
     } finally {
       agentPlanLocksRef.current.delete(planId)
       finishGenerationTask(taskKey)
@@ -6957,13 +7042,22 @@ function App() {
                 onSelectConversation={(id) => void selectAgentConversation(id)}
                 onTextModelChange={setAgentTextModelKey}
                 onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
-                onImageDefaultsChange={(patch) => setAgentImageDefaults((current) => ({
-                  ...current,
-                  ...(patch.aspectRatio ? { aspectRatio: patch.aspectRatio as ImageAspectRatio } : {}),
-                  ...(patch.resolution ? { resolution: patch.resolution as ImageResolution } : {}),
-                  ...(patch.detail ? { detail: patch.detail as ImageDetail } : {}),
-                  ...(typeof patch.count === 'number' ? { count: patch.count } : {}),
-                }))}
+                onImageDefaultsChange={(patch) => {
+                  const normalizedPatch = {
+                    ...(patch.aspectRatio ? { aspectRatio: patch.aspectRatio as ImageAspectRatio } : {}),
+                    ...(patch.resolution ? { resolution: patch.resolution as ImageResolution } : {}),
+                    ...(patch.detail ? { detail: patch.detail as ImageDetail } : {}),
+                    ...(typeof patch.count === 'number' ? { count: patch.count } : {}),
+                  }
+                  setAgentImageDefaults((current) => ({ ...current, ...normalizedPatch }))
+                  // The settings control is shared by the pending confirmation cards.
+                  // Keep those cards live so a 9:16 selection cannot generate from a stale 1:1 draft.
+                  setAgentPlans((current) => current.map((plan) => (
+                    plan.status === 'proposed' || plan.status === 'ready'
+                      ? { ...plan, ...normalizedPatch }
+                      : plan
+                  )))
+                }}
                 onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
                 onReferencesChange={setAgentReferences}
                 onCreateUploadedReference={createAgentUploadedReference}
@@ -7587,7 +7681,7 @@ function App() {
                                 setImageModelMenuOpen(false)
                               }}
                             >
-                              <ImagePlus size={14} />
+                              <ModelBrandBadge name={model.name} image />
                               <span><strong>{model.name}</strong><small>{connection.name} · ID: {model.id}</small></span>
                               {displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id && <Check size={14} />}
                             </button>
@@ -7607,7 +7701,7 @@ function App() {
                         else setApiOpen(true)
                       }}
                     >
-                      <Sparkles size={13} />
+                      <ModelBrandBadge name={activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name} image />
                       <span>{activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || (hasCatalogImageModels ? '图像模型尚未启用' : '配置并启用图像模型')}</span>
                     </button>
                   </div>
@@ -7860,7 +7954,7 @@ function App() {
                                 setModelMenuOpen(false)
                               }}
                             >
-                              <Type size={14} />
+                              <ModelBrandBadge name={model.name} />
                               <span><strong>{model.name}</strong><small>{connection.name} · ID: {model.id}</small></span>
                               {selectedTextModel?.connection.id === connection.id && selectedTextModel.model.id === model.id && <Check size={14} />}
                             </button>
@@ -7877,7 +7971,7 @@ function App() {
                       title={selectedTextModel?.model.name || '选择文本模型'}
                       onClick={() => enabledTextModels.length ? setModelMenuOpen((open) => !open) : setApiOpen(true)}
                     >
-                      <Sparkles size={13} />
+                      <ModelBrandBadge name={selectedTextModel?.model.name} />
                       <span>{selectedTextModel?.model.name || (hasCatalogTextModels ? '文本模型尚未启用' : hasCatalogImageModels ? '当前只有图像模型，请切换' : '配置并启用文本模型')}</span>
                     </button>
                   </div>

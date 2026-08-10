@@ -222,6 +222,13 @@ export function AgentPanel(props: Props) {
   const readyPlanIdsRef = useRef<string[]>([])
   const readyPlans = props.plans.filter((plan) => plan.status === 'ready')
   const activeReadyPlan = readyPlans.find((plan) => plan.id === activeReadyPlanId) ?? readyPlans[readyPlans.length - 1]
+  const imageSettingLabel = (options: SelectOption[], value: string) => options.find((option) => option.value === value)?.label ?? value
+  const imageSettingsSummary = [
+    imageSettingLabel(props.aspectOptions, props.imageDefaults.aspectRatio),
+    imageSettingLabel(props.resolutionOptions, props.imageDefaults.resolution),
+    imageSettingLabel(props.detailOptions, props.imageDefaults.detail),
+    `${props.imageDefaults.count}张`,
+  ].join(' · ')
 
   useEffect(() => {
     if (!props.imageModelKey) setImageSettingsOpen(false)
@@ -690,7 +697,7 @@ export function AgentPanel(props: Props) {
             <div className="agent-composer-reference-bar">
               <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>
               <button type="button" onMouseDown={rememberSelection} onClick={() => uploadInputRef.current?.click()} title="从本地上传参考图" aria-label="从本地上传参考图"><ImageUp size={15} /><span>上传参考图</span></button>
-              {mediaKind === 'image' && imageModelChosen && props.imageModelKey && <button type="button" className={`agent-image-settings-button ${imageSettingsOpen ? 'is-open' : ''}`} onClick={() => setImageSettingsOpen((open) => !open)} title="图像设置" aria-label="图像设置" aria-expanded={imageSettingsOpen}><SlidersHorizontal size={15} /><span>图像设置</span></button>}
+              {mediaKind === 'image' && imageModelChosen && props.imageModelKey && <button type="button" className={`agent-image-settings-button ${imageSettingsOpen ? 'is-open' : ''}`} onClick={() => setImageSettingsOpen((open) => !open)} title={`图像设置：${imageSettingsSummary}`} aria-label={`图像设置，当前参数：${imageSettingsSummary}`} aria-expanded={imageSettingsOpen}><SlidersHorizontal size={15} /><span>图像设置</span><em>{imageSettingsSummary}</em></button>}
               <input ref={uploadInputRef} className="agent-reference-upload-input" type="file" accept="image/*" aria-label="上传 Agent 参考图" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadReference(file); event.target.value = '' }} />
             </div>
             <div className="agent-composer-actions">
@@ -702,7 +709,7 @@ export function AgentPanel(props: Props) {
             <header><strong>图像参数</strong><button type="button" onClick={() => setImageSettingsOpen(false)} title="关闭图像参数"><X size={14} /></button></header>
             <div className="agent-image-parameter-section"><span>画质</span><div>{props.detailOptions.map((option) => <button type="button" className={props.imageDefaults.detail === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ detail: option.value })}>{option.label}</button>)}</div></div>
             <div className="agent-image-parameter-section"><span>清晰度</span><div>{props.resolutionOptions.map((option) => <button type="button" className={props.imageDefaults.resolution === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ resolution: option.value })}>{option.label}</button>)}</div></div>
-            <div className="agent-image-parameter-section is-aspect"><span>比例</span><div>{props.aspectOptions.map((option) => <button type="button" className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" />{option.label}</button>)}</div></div>
+            <div className="agent-image-parameter-section is-aspect"><span>比例</span><div>{props.aspectOptions.map((option) => <button type="button" data-aspect={option.value} className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" />{option.label}</button>)}</div></div>
             <div className="agent-image-parameter-section"><span>数量</span><div>{[1, 2, 3, 4].map((count) => <button type="button" className={props.imageDefaults.count === count ? 'is-selected' : ''} key={count} onClick={() => props.onImageDefaultsChange({ count })}>{count} 张</button>)}</div></div>
           </div>}
         </div>
