@@ -1,127 +1,229 @@
 <!doctype html>
-<html lang="zh-CN">
+<!--
+  Copyright (c) 2026 DisyLab. All rights reserved.
+  Proprietary source-available software. Unauthorized commercial use,
+  redistribution, white-labeling, relicensing, or removal of this notice is prohibited.
+  Repository: https://github.com/TyaAsh/DisyLab-Beta
+  License: LicenseRef-DisyLab-Proprietary (see LICENSE)
+-->
+<html lang="zh-CN" class="motion-fallback" data-ash-origin="ashhaveaniceday::disylab::origin" data-tya-canvas="tya::infinite-canvas::2026">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="DisyLab：面向设计师、电商视觉工作者和内容创作者的本地优先 AI 无限画布。" />
-  <meta property="og:title" content="DisyLab" />
-  <meta property="og:description" content="把灵感、参考图、提示词、Agent 对话和生成结果留在同一张无限画布。" />
-  <meta property="og:image" content="https://ashhaveaniceday.github.io/Disy-Infinite/assets/y2k-canvas-overview.png" />
-  <title>DisyLab · AI 创作画布</title>
+  <meta name="description" content="DisyLab：把灵感、参考图、提示词、Agent 对话与生成结果留在同一张无限画布。" />
+  <meta name="theme-color" content="#080a0d" />
+  <meta name="copyright" content="Copyright (c) 2026 DisyLab. All rights reserved." />
+  <meta name="license" content="LicenseRef-DisyLab-Proprietary" />
+  <meta name="application-version" content="1.0.1" />
+  <meta name="disylab:ash-origin" content="ashhaveaniceday::disylab::origin" />
+  <meta name="disylab:tya-canvas" content="tya::infinite-canvas::2026" />
+  <meta property="og:title" content="DisyLab · AI 创作画布" />
+  <meta property="og:description" content="不是又一个输入框，是一间记得住上下文的 AI 创作工作台。" />
+  <meta property="og:image" content="https://tyaash.github.io/DisyLab-Beta/assets/y2k-canvas-overview.png" />
+  <meta property="og:type" content="website" />
+  <title>DisyLab · 让创作过程留在画布上</title>
   <link rel="icon" href="./assets/disy-logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800;900&family=Oxanium:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <div class="noise" aria-hidden="true"></div>
-  <nav class="pill-nav" aria-label="页面导航">
-    <a href="#top" class="nav-brand"><img src="./assets/disy-logo.png" alt="" />DisyLab</a>
-    <a href="#workflow">工作流</a>
-    <a href="#features">能力</a>
-    <a href="#roadmap">下一站</a>
-    <a class="nav-cta" href="https://disylab.netlify.app">开始创作</a>
+  <div class="page-noise" aria-hidden="true"></div>
+  <div class="cursor-glow" aria-hidden="true"></div>
+
+  <div class="language-switcher" role="group" aria-label="语言 / Language">
+    <button type="button" data-locale="zh-CN" aria-pressed="true">简</button>
+    <button type="button" data-locale="zh-TW" aria-pressed="false">繁</button>
+    <button type="button" data-locale="en" aria-pressed="false">EN</button>
+  </div>
+
+  <nav class="dock" aria-label="页面导航">
+    <a class="dock-brand" href="#top" aria-label="返回顶部">
+      <img src="./assets/disy-logo.png" alt="" />
+      <span>DisyLab</span>
+    </a>
+    <div class="dock-links">
+      <a href="#workflow" data-section-link>工作流</a>
+      <a href="#capabilities" data-section-link>能力</a>
+      <a href="#local-first" data-section-link>本地优先</a>
+      <a href="#roadmap" data-section-link>路线图</a>
+    </div>
+    <a class="dock-cta" href="https://disylab.pages.dev" target="_blank" rel="noreferrer"><span>打开画布</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M8 6h6v6" /></svg></a>
   </nav>
 
+  <aside class="page-rail" aria-label="章节切换">
+    <span class="rail-progress" aria-hidden="true"><i></i></span>
+    <a href="#top" data-section-link data-label="首页"><b>01</b><i></i></a>
+    <a href="#positioning" data-section-link data-label="定位"><b>02</b><i></i></a>
+    <a href="#workflow" data-section-link data-label="工作流"><b>03</b><i></i></a>
+    <a href="#capabilities" data-section-link data-label="能力"><b>04</b><i></i></a>
+    <a href="#local-first" data-section-link data-label="本地优先"><b>05</b><i></i></a>
+    <a href="#roadmap" data-section-link data-label="路线图"><b>06</b><i></i></a>
+    <a href="#closing" data-section-link data-label="开始创作"><b>07</b><i></i></a>
+  </aside>
+
   <main id="top">
-    <section class="hero">
-      <div class="orb orb-one"></div>
-      <div class="orb orb-two"></div>
+    <section class="hero section-grid slide" data-section="top">
+      <div class="hero-aurora aurora-a" aria-hidden="true"></div>
+      <div class="hero-aurora aurora-b" aria-hidden="true"></div>
+
       <div class="hero-copy">
-        <div class="eyebrow"><span></span>DisyLab · v0.3.0</div>
-        <h1>让创作过程<br /><em>留在画布上</em></h1>
-        <p class="hero-lead">把灵感、参考图、提示词、Agent 对话和生成结果放回同一张持续生长的无限画布。</p>
+        <div class="release-pill"><i></i><span>PUBLIC BETA</span><b>v1.0.1</b></div>
+        <h1>让创作过程<br /><em>留在画布上。</em></h1>
+        <p class="hero-lead">把灵感、参考图、提示词、Agent 对话和每一次生成结果，放回同一张持续生长的无限画布。</p>
         <div class="hero-actions">
-          <a class="primary-button" href="https://disylab.netlify.app">在线体验 <span>↗</span></a>
-          <a class="text-link" href="https://github.com/ashhaveaniceday/Disy-Infinite">查看 GitHub</a>
+          <a class="button button-primary" href="https://disylab.pages.dev" target="_blank" rel="noreferrer"><span>在线体验</span><svg class="button-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M8 6h6v6" /></svg></a>
+          <a class="button button-ghost" href="https://github.com/TyaAsh/DisyLab-Beta" target="_blank" rel="noreferrer"><span>GitHub</span><svg class="button-icon github-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.7a9.5 9.5 0 0 0-3 18.5c.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.2-3.4-1.2-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 0 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.7-1.3-2.2-.3-4.6-1.1-4.6-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.6 1a9 9 0 0 1 4.8 0c1.8-1.2 2.6-1 2.6-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.6 1 2.6 0 3.7-2.3 4.4-4.6 4.7.4.3.7 1 .7 1.9v2.8c0 .3.2.6.7.5A9.5 9.5 0 0 0 12 2.7Z" /></svg></a>
         </div>
-        <div class="hero-notes"><span>本地优先</span><span>确认后生成</span><span>自带 API</span></div>
-      </div>
-
-      <div class="demo-stage" aria-label="Disy 创作流程演示">
-        <div class="demo-index"><b>01</b><span>从灵感到画面</span></div>
-        <div class="demo-canvas">
-          <div class="canvas-grid"></div>
-          <div class="demo-node node-reference"><small>参考图</small><div class="mini-art"></div></div>
-          <div class="demo-node node-prompt"><small>提示词</small><strong>把森林伙伴改成<br />轻快的春日旅行</strong></div>
-          <svg viewBox="0 0 480 360" aria-hidden="true"><path d="M126 132 C190 100 208 164 274 148" /><path d="M274 148 C330 138 340 202 382 220" /></svg>
-          <div class="demo-node node-result"><span class="result-glow"></span><small>图像生成</small><strong>方案已确认</strong><em>Nano Banana 2</em></div>
-          <div class="demo-agent"><img src="./assets/disy-logo.png" alt="" /><span>我会先整理方案，<br />等你确认后再生成。</span></div>
+        <div class="hero-tags" aria-label="产品特点">
+          <span>LOCAL FIRST</span><span>INFINITE CANVAS</span><span>BRING YOUR API</span>
         </div>
       </div>
-    </section>
 
-    <section class="statement section-dissolve">
-      <p>不是又一个输入框。</p>
-      <h2>是一间记得住上下文的<br /><span>AI 创作工作台。</span></h2>
-      <div class="statement-meta">
-        <span>文本与图像节点</span>
-        <span>可视化关系</span>
-        <span>多项目与多画布</span>
-        <span>Agent 确认生图</span>
+      <div class="hero-product" data-tilt>
+        <div class="product-orbit orbit-one" aria-hidden="true"></div>
+        <div class="product-orbit orbit-two" aria-hidden="true"></div>
+        <figure class="app-window">
+          <div class="window-bar">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <span>DisyLab / Y2K Visual World</span>
+            <b>LOCAL</b>
+          </div>
+          <img src="./assets/y2k-canvas-overview.png" alt="DisyLab 无限画布项目界面" />
+        </figure>
+        <div class="floating-chip chip-agent"><img src="./assets/disy-logo.png" alt="" /><span><b>Agent 已整理 3 个方向</b><small>确认之后才让 GPU 开工</small></span></div>
+        <div class="floating-chip chip-save"><i></i><span><b>已保存到本机</b><small>项目数据不离开浏览器</small></span></div>
       </div>
+
+      <div class="hero-index" aria-hidden="true"><span>DISY / 01</span><b>∞</b></div>
     </section>
 
-    <section id="workflow" class="showcase">
+    <section id="positioning" class="manifesto slide" data-section="positioning">
+      <p>NOT ANOTHER PROMPT BOX</p>
+      <h2>不是又一个输入框。<br />是一间记得住上下文的<br /><em>AI 创作工作台。</em></h2>
+      <div class="manifesto-line" aria-hidden="true"><i></i><span></span><i></i><span></span><i></i></div>
+    </section>
+
+    <section id="workflow" class="workflow content-section slide" data-section="workflow">
       <header class="section-heading">
-        <span>01 / WORKFLOW</span>
-        <h2>三个脑洞，不必挤进一个节点</h2>
-        <p>Agent 提出多个方向时，先选择方案一、方案二、方案三或全部。每个方向独立确认，确认之后才生成。</p>
+        <div><span>01</span><small>WORKFLOW</small></div>
+        <h2>从一个念头，<br />长出多个清晰方向。</h2>
+        <p>Agent 先理解上下文、整理方案，再由你决定生成哪一个。每个方向独立，参考关系完整，不把关键词煮成一锅粥。</p>
       </header>
-      <div class="screenshot-shell screenshot-wide">
-        <img src="./assets/y2k-agent-plans.png" alt="Disy Agent 多方案选择界面" />
-        <span class="image-caption">One idea · Three directions · Zero keyword soup</span>
+
+      <div class="workflow-stage">
+        <figure class="screen-frame">
+          <img src="./assets/y2k-agent-plans.png" alt="DisyLab Agent 多方案选择界面" />
+          <figcaption><span>AGENT PLAN SELECTOR</span><b>每个方案独立确认</b></figcaption>
+        </figure>
+        <ol class="workflow-steps">
+          <li><span>01</span><div><b>放入上下文</b><p>拖入参考图、文本、角色和已有结果。</p></div></li>
+          <li><span>02</span><div><b>选择创作方向</b><p>Agent 给出多个彼此独立的视觉方案。</p></div></li>
+          <li><span>03</span><div><b>确认后生成</b><p>参数、参考顺序与来源关系一起被保留。</p></div></li>
+        </ol>
       </div>
     </section>
 
-    <section id="features" class="features clip-diagonal-br">
-      <header class="section-heading">
-        <span>02 / CAPABILITIES</span>
-        <h2>自由生长，也能保持秩序</h2>
+    <section id="capabilities" class="capabilities content-section slide" data-section="capabilities">
+      <header class="section-heading compact-heading">
+        <div><span>02</span><small>CAPABILITIES</small></div>
+        <h2>自由生长，<br />也能保持秩序。</h2>
       </header>
-      <div class="feature-grid">
-        <article><b>01</b><h3>无限画布</h3><p>节点、连线、组合、框选、小地图和系统图片粘贴，让素材关系一眼可见。</p></article>
-        <article><b>02</b><h3>风格调用词</h3><p>建立多个风格预设，用一句调用词同时带入角色、配色与画面语言。</p></article>
-        <article><b>03</b><h3>自动性能模式</h3><p>节点多起来时自动减少不可见内容与高开销光效，让拖拽继续跟手。</p></article>
-        <article><b>04</b><h3>本地优先</h3><p>项目、资产、历史和 Agent 会话保存在本机浏览器；导出为完整 .disy 项目包。</p></article>
-      </div>
-      <div class="preset-feature">
-        <div><span>ASSET LIBRARY</span><h3>好结果，留下来继续生长</h3><p>把满意的角色、海报与组合节点收进资产库。它们不是一次性的输出，而是下一张画面的起点。</p></div>
-        <div class="preset-image"><img src="./assets/y2k-assets.png" alt="DisyLab Y2K 项目资产库" /></div>
+
+      <div class="bento">
+        <article class="bento-card bento-wide canvas-card">
+          <div class="card-copy"><span>INFINITE CANVAS</span><h3>关系，不必藏在文件名里</h3><p>节点、连线、分组、资产与历史共同构成创作上下文。你看到的不只是结果，也是它为何出现。</p></div>
+          <div class="mini-map" aria-hidden="true">
+            <div class="canvas-hud"><span><i></i> LIVE CANVAS</span><b>68%</b></div>
+            <svg class="canvas-links" viewBox="0 0 460 230" preserveAspectRatio="none">
+              <defs><linearGradient id="ashFlow" x1="0" x2="1"><stop stop-color="#70e8f1"/><stop offset=".55" stop-color="#70b5ff"/><stop offset="1" stop-color="#f0a8d3"/></linearGradient></defs>
+              <path class="wire wire-soft" d="M94 75 C145 75 139 150 202 150 S278 87 334 87" />
+              <path class="wire wire-flow" d="M94 75 C145 75 139 150 202 150 S278 87 334 87" />
+              <path class="wire wire-soft" d="M202 150 C260 150 291 184 371 184" />
+              <path class="wire wire-flow wire-delay" d="M202 150 C260 150 291 184 371 184" />
+            </svg>
+            <article class="micro-node node-source"><span class="node-type">REF</span><div class="node-visual source-visual"></div><b>角色参考</b><small>3 images</small><i class="node-port"></i></article>
+            <article class="micro-node node-prompt"><span class="node-type">PROMPT</span><p>Y2K toy world<br />soft studio light</p><i class="node-port port-left"></i><i class="node-port"></i></article>
+            <article class="micro-node node-output"><span class="node-type">OUTPUT</span><div class="node-visual output-visual"></div><b>视觉方案 03</b><small>ready · 4K</small><i class="node-port port-left"></i><i class="node-port"></i></article>
+            <article class="micro-node node-asset"><span class="node-type">ASSET</span><b>加入资产库</b><small>saved locally</small><i class="node-port port-left"></i></article>
+            <div class="canvas-cursor"><svg viewBox="0 0 16 20"><path d="m2 2 11 8-5 .8-2.4 5.1Z" /></svg><span>YOU</span></div>
+          </div>
+        </article>
+
+        <article class="bento-card model-card">
+          <span>MODEL ROUTING</span><h3>自己的 API，自己的模型</h3><p>分别配置文本与图像模型，让工具适配你的工作流。</p>
+          <div class="model-stack" aria-hidden="true"><i>N</i><i>G</i><i>+</i></div>
+        </article>
+
+        <article class="bento-card asset-card">
+          <span>ASSET LIBRARY</span><h3>好结果继续生长</h3><p>角色、图片和节点组合都能沉淀为下一次创作的起点。</p>
+          <img src="./assets/y2k-assets.png" alt="DisyLab 资产库界面" />
+        </article>
+
+        <article class="bento-card bento-wide history-card">
+          <div class="history-counter"><span>01</span><span>02</span><span>03</span><span>04</span></div>
+          <div class="card-copy"><span>TRACEABLE PROCESS</span><h3>版本、参数、参考顺序，都有迹可循</h3><p>生成历史不只负责“找回图片”，也负责保留每次尝试的决策依据。</p></div>
+        </article>
       </div>
     </section>
 
-    <section id="roadmap" class="roadmap">
-      <header class="section-heading">
-        <span>03 / NEXT VERSION</span>
-        <h2>下一站，继续扩展视觉创作</h2>
-      </header>
-      <div class="roadmap-track">
-        <article><span>VIDEO</span><h3>视频生成</h3><p>视频模型、首尾帧、参考图、任务状态与视频资产管理。</p></article>
-        <article><span>PRESETS</span><h3>人物与场景预设</h3><p>人物、场景与分镜设定可以独立复用和组合调用。</p></article>
-        <article><span>TOOLS</span><h3>扩图与抠图</h3><p>补齐常用图像编辑动作，让结果继续在画布内生长。</p></article>
-        <article><span>SYSTEM</span><h3>浅色皮肤与 Skill</h3><p>加入浅色主题、Skill 上传、节点搜索与 Agent 历史搜索。</p></article>
+    <section id="local-first" class="local-first content-section slide" data-section="local-first">
+      <div class="local-copy">
+        <div class="section-kicker"><span>03</span><small>LOCAL FIRST</small></div>
+        <h2>你的创作，<br />先属于你的设备。</h2>
+        <p>项目、资产、历史和 Agent 会话默认保存在浏览器本机。API Key 不进入项目导出包，也不需要交给 DisyLab 的服务器。</p>
+        <div class="local-points">
+          <div><b>01</b><span>浏览器本地存储</span></div>
+          <div><b>02</b><span>.disy 完整项目包</span></div>
+          <div><b>03</b><span>API Key 独立保存</span></div>
+        </div>
       </div>
-      <div class="future-line">
-        <span>持续更新</span>
-        <p>桌面端应用 · Web/桌面项目导入导出与双向传递 · 服务端任务 · 账号与云同步 · 项目分享与多人协作</p>
+      <div class="data-vault" aria-label="本地数据结构示意">
+        <div class="vault-ring ring-a"></div><div class="vault-ring ring-b"></div>
+        <div class="vault-core"><img src="./assets/disy-logo.png" alt="" /><b>LOCAL</b><small>YOUR CREATIVE DATA</small></div>
+        <div class="vault-node node-project">PROJECTS</div>
+        <div class="vault-node node-assets">ASSETS</div>
+        <div class="vault-node node-history">HISTORY</div>
+        <div class="vault-node node-agent">AGENT</div>
       </div>
-      <p class="roadmap-note">Disy 聚焦视觉创作。音频生成不在现在或未来的产品规划中。</p>
     </section>
 
-    <section class="final-cta clip-arc-bottom">
-      <img src="./assets/disy-logo.png" alt="Disy Logo" />
-      <span>世界由你创造</span>
+    <section id="roadmap" class="roadmap content-section slide" data-section="roadmap">
+      <header class="section-heading roadmap-heading">
+        <div><span>04</span><small>NEXT</small></div>
+        <h2>画布还会继续生长。</h2>
+        <p>DisyLab 聚焦视觉创作：从图片到视频，从单人工作台到可分享的创作空间。</p>
+      </header>
+      <div class="roadmap-list">
+        <article><span>NOW</span><b>v1.0.1</b><h3>无限画布与 Agent 创作闭环</h3><p>节点、分组、引用、多方案、生图、资产与项目包。</p></article>
+        <article><span>NEXT</span><b>01</b><h3>视频生成与首尾帧工作流</h3><p>视频模型、参考图、任务状态与视频资产管理。</p></article>
+        <article><span>NEXT</span><b>02</b><h3>人物、场景与分镜预设</h3><p>将更复杂的视觉设定组合、调用并跨项目复用。</p></article>
+        <article><span>LATER</span><b>03</b><h3>桌面端、同步与协作</h3><p>在保持创作控制权的前提下连接更多工作场景。</p></article>
+      </div>
+    </section>
+
+    <section id="closing" class="closing slide" data-section="closing">
+      <div class="closing-logo">
+        <span class="logo-glow" aria-hidden="true"></span>
+        <span class="logo-orbit logo-orbit-a" aria-hidden="true"><i></i></span>
+        <span class="logo-orbit logo-orbit-b" aria-hidden="true"><i></i></span>
+        <span class="logo-shell"><img src="./assets/disy-logo.png" alt="DisyLab Logo" /><i class="logo-scan" aria-hidden="true"></i></span>
+      </div>
+      <span>IMAGINATION HAS NO FINAL FRAME</span>
       <h2>让下一张画面，<br />从一张会思考的画布开始。</h2>
-      <div>
-        <a class="primary-button" href="https://disylab.netlify.app">打开 DisyLab <span>↗</span></a>
-        <a class="text-link" href="https://github.com/ashhaveaniceday/Disy-Infinite">GitHub 仓库</a>
+      <div class="closing-actions">
+        <a class="button button-primary" href="https://disylab.pages.dev" target="_blank" rel="noreferrer"><span>开始创作</span><svg class="button-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M8 6h6v6" /></svg></a>
+        <a class="button button-ghost" href="https://github.com/TyaAsh/DisyLab-Beta" target="_blank" rel="noreferrer"><span>查看仓库</span><svg class="button-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10m-4-4 4 4-4 4" /></svg></a>
       </div>
+      <footer class="site-footer">
+        <div><b>DisyLab</b><span>© 2026 · All rights reserved.</span></div>
+        <p>源码公开可见，但未经书面许可禁止商用、白标与再分发。</p>
+        <a href="https://github.com/TyaAsh/DisyLab-Beta/blob/main/LICENSE.zh-CN.md" target="_blank" rel="noreferrer">授权说明 ↗</a>
+      </footer>
     </section>
   </main>
 
-  <footer class="site-footer"><span>DisyLab © 2026</span><span>无限自由想象，世界由你创造。</span></footer>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
   <script src="./main.js"></script>

@@ -1,3 +1,12 @@
+/*!
+ * Copyright (c) 2026 DisyLab. All rights reserved.
+ * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
+ * Unauthorized commercial use, redistribution, white-labeling, relicensing,
+ * or removal of this copyright notice is prohibited.
+ * Repository: https://github.com/TyaAsh/DisyLab
+ * SPDX-FileCopyrightText: 2026 DisyLab
+ * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
+ */
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { ArrowUp, Check, ChevronDown, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
 import { compactReferenceName, normalizeAgentMessageContent, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
@@ -186,7 +195,7 @@ type Props = {
   messages: AgentMessage[]
   plans: AgentImagePlan[]
   references: AgentImageReference[]
-  pendingReference: AgentImageReference | null
+  pendingReferences: AgentImageReference[]
   candidates: AgentImageReference[]
   conversations: AgentConversationOption[]
   activeConversationId: string
@@ -542,10 +551,10 @@ export function AgentPanel(props: Props) {
     reader.readAsDataURL(file)
   }
   useEffect(() => {
-    if (!props.pendingReference) return
-    addReference(props.pendingReference)
+    if (!props.pendingReferences.length) return
+    props.pendingReferences.forEach(addReference)
     props.onPendingReferenceConsumed()
-  }, [props.pendingReference])
+  }, [props.pendingReferences])
   useEffect(() => {
     const referenceNumberById = new Map(props.references.map((reference, index) => [reference.nodeId, index + 1]))
     editorRef.current?.querySelectorAll<HTMLElement>('.agent-inline-reference').forEach((chip) => {

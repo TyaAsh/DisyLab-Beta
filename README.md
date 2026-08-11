@@ -18,9 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://disylab.netlify.app">在线体验</a>
+  <a href="https://disylab.pages.dev">在线体验</a>
   ·
-  <a href="https://ashhaveaniceday.github.io/Disy-Infinite/">项目官网</a>
+  <a href="https://tyaash.github.io/DisyLab-Beta/">项目官网</a>
   ·
   <a href="#核心能力">核心能力</a>
   ·
@@ -29,22 +29,27 @@
   <a href="#项目文档">项目文档</a>
   ·
   <a href="#开发沟通">开发沟通</a>
+  ·
+  <a href="#授权与商业使用">授权说明</a>
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-77bdf2" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.1-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
 </p>
 
-> 这里是 DisyLab v1.0.0。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
+> [!IMPORTANT]
+> **DisyLab 是源码公开可见（source-available）的专有软件，不是开源软件。** 未经版权所有者事先书面许可，不得商用、售卖、出租、白标、再分发、再许可或将本项目及其修改版本用于收费服务。查看完整的[中文授权声明](LICENSE.zh-CN.md)与[英文许可证](LICENSE)。
+
+> 这里是 DisyLab v1.0.1。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
 
 ![DisyLab Y2K 角色视觉项目](docs/assets/y2k-canvas-overview.png)
 
 ## 在线体验
 
-访问：[https://disylab.netlify.app](https://disylab.netlify.app)
+访问：[https://disylab.pages.dev](https://disylab.pages.dev)
 
 体验版适合测试画布、节点、连线、资产库和生成工作流。首次使用 AI 生成功能前，需要在右上角 API 设置中填写自己的接口地址和 API Key。
 
@@ -120,11 +125,11 @@ Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择
 | 系统图片粘贴 | 支持将系统剪贴板中的图片直接粘贴到画布，并与内部节点复制粘贴正确区分。 |
 | 完整项目包 | 以 `.disy` 导出/导入全部工作区或当前项目；包含画布、资产、文件夹、生成历史、输出历史和 Agent 会话，不包含 API Key。 |
 
-更完整的功能边界和版本信息见 [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)。
+更完整的功能边界和版本信息见 [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)。
 
 ## 当前版本边界
 
-Disy v1.0.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
+Disy v1.0.1 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 
 - 账号注册、登录和用户权限。
 - 云端项目同步与多人实时协作。
@@ -146,9 +151,9 @@ Disy v1.0.0 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 | GSAP | 画布与界面序列动效 |
 | Lucide React | UI 图标 |
 | IndexedDB / localStorage / sessionStorage | 本地项目、资产、历史和会话密钥 |
-| Netlify | Web 体验版部署 |
+| Cloudflare Pages | Web 体验版部署 |
 
-当前版本改动可查看 [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)。
+当前版本改动可查看 [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)。
 
 ## 快速开始
 
@@ -214,12 +219,12 @@ src/
 
 docs/                  # 可公开的版本与功能文档
 public/                # 公共静态资源
-netlify.toml           # Netlify 构建与 SPA 回退配置
+netlify.toml           # 旧版 Netlify 部署兼容配置
 ```
 
 ## 项目文档
 
-- [v1.0.0 版本说明](docs/Disy-v1.0.0-版本说明.md)
+- [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)
 
 ## Roadmap
 
@@ -238,11 +243,11 @@ netlify.toml           # Netlify 构建与 SPA 回退配置
 
 ## 部署
 
-项目已经包含 `netlify.toml`。构建完成后可执行：
+线上体验版部署在 Cloudflare Pages。构建完成后可执行：
 
 ```bash
 npm run build
-npx netlify deploy --prod --dir=dist
+npx wrangler pages deploy dist --project-name disylab
 ```
 
 `site/` 中是独立的项目介绍站，`.github/workflows/pages.yml` 会在 `main` 分支的网站文件更新后自动发布到 GitHub Pages。
@@ -264,8 +269,14 @@ npx netlify deploy --prod --dir=dist
 - 问题截图或录屏。
 - 使用的模型名称；请勿附带 API Key。
 
-## License
+## 授权与商业使用
 
-当前仓库尚未附加开源许可证，默认不代表授权复制、再分发、白标销售或商业使用。后续如开放特定范围的使用或协作，会在仓库中提供明确的 LICENSE 文件。
+Copyright © 2026 DisyLab. All rights reserved.
 
-bug fixed
+本项目不是开源许可证授权项目。除 GitHub 为提供公开仓库功能所必需的查看与 fork 权限外，源代码及项目素材均保留所有权利；未经版权所有者书面许可，不得复制、再分发、修改后发布、白标、售卖、出租、提供商业服务或以其他方式商业使用。
+
+- 完整条款：[中文授权声明](LICENSE.zh-CN.md) / [English License](LICENSE)
+- 权利标记与第三方边界：[NOTICE](NOTICE.md)
+- 商业授权咨询：[COMMERCIAL-LICENSE](COMMERCIAL-LICENSE.md)
+
+公开可见或可 fork 不代表获得商用、分发或衍生作品授权。任何商业许可均须由版权所有者另行书面确认。

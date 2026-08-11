@@ -1,40 +1,37 @@
-/**
- * Production-only deterrents against casual source peeking / copying.
- * This cannot stop a determined user with DevTools — it only raises friction.
+/*!
+ * Copyright (c) 2026 DisyLab. All rights reserved.
+ * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
+ * Unauthorized commercial use, redistribution, white-labeling, relicensing,
+ * or removal of this copyright notice is prohibited.
+ * Repository: https://github.com/TyaAsh/DisyLab
+ * SPDX-FileCopyrightText: 2026 DisyLab
+ * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
+const DISYLAB_RIGHTS_NOTICE = Object.freeze({
+  product: 'DisyLab',
+  version: '1.0.1',
+  copyright: 'Copyright (c) 2026 DisyLab. All rights reserved.',
+  license: 'LicenseRef-DisyLab-Proprietary',
+  repository: 'https://github.com/TyaAsh/DisyLab',
+  ashOrigin: 'ashhaveaniceday::disylab::origin',
+  tyaCanvas: 'tya::infinite-canvas::2026',
+})
 
 export function installProductionSourceShield() {
   if (!import.meta.env.PROD) return
 
-  const block = (event: Event) => {
-    event.preventDefault()
-  }
-
-  document.addEventListener('contextmenu', block, { capture: true })
-  document.addEventListener('dragstart', block, { capture: true })
-
-  document.addEventListener(
-    'keydown',
-    (event) => {
-      const key = event.key.toLowerCase()
-      const withMod = event.ctrlKey || event.metaKey
-      const isViewSource = withMod && key === 'u'
-      const isSave = withMod && key === 's'
-      const isDevtools = (event.ctrlKey && event.shiftKey && (key === 'i' || key === 'j' || key === 'c'))
-        || key === 'f12'
-      const isSelectAllOnRoot = withMod && key === 'a' && event.target === document.body
-      if (isViewSource || isSave || isDevtools || isSelectAllOnRoot) {
-        event.preventDefault()
-        event.stopPropagation()
-      }
-    },
-    { capture: true },
+  Object.defineProperty(window, '__DISYLAB_RIGHTS_NOTICE__', {
+    value: DISYLAB_RIGHTS_NOTICE,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  })
+  document.documentElement.dataset.disylabVersion = DISYLAB_RIGHTS_NOTICE.version
+  document.documentElement.dataset.ashOrigin = DISYLAB_RIGHTS_NOTICE.ashOrigin
+  document.documentElement.dataset.tyaCanvas = DISYLAB_RIGHTS_NOTICE.tyaCanvas
+  console.info(
+    '%cDisyLab v1.0.1%c  Proprietary source-available software · Commercial use requires prior written permission. · ash/tya origin build',
+    'font-weight:700;color:#7ec8ff',
+    'color:inherit',
   )
-
-  // Discourage selecting minified asset text from accidental drag on chrome chrome.
-  document.documentElement.style.setProperty('-webkit-user-select', 'none')
-  document.documentElement.style.setProperty('user-select', 'none')
-  const style = document.createElement('style')
-  style.textContent = 'input, textarea, [contenteditable="true"], .allow-text-select { -webkit-user-select: text !important; user-select: text !important; }'
-  document.head.appendChild(style)
 }

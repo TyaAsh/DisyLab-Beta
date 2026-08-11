@@ -1,3 +1,12 @@
+/*!
+ * Copyright (c) 2026 DisyLab. All rights reserved.
+ * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
+ * Unauthorized commercial use, redistribution, white-labeling, relicensing,
+ * or removal of this copyright notice is prohibited.
+ * Repository: https://github.com/TyaAsh/DisyLab
+ * SPDX-FileCopyrightText: 2026 DisyLab
+ * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
+ */
 import { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import gsap from 'gsap'
@@ -145,6 +154,7 @@ type CanvasNode = Node<{
   imageModelName?: string
   generationError?: string
   groupColor?: string
+  groupFolderColor?: string
   groupAccentColor?: string
   groupIcon?: GroupIconKey
   groupCollapsed?: boolean
@@ -1408,13 +1418,12 @@ const NodeCard = memo(function NodeCard({
     if (data.groupCollapsed) {
       const previews = data.groupPreviewUrls ?? []
       const accent = data.groupAccentColor || '#78b7ef'
+      const groupSurface = data.groupFolderColor || 'linear-gradient(135deg, #70e8f1 0%, #70b5ff 36%, #a793ff 68%, #f0a8d3 100%)'
       return (
         <div
           ref={groupCardRef}
           className={`canvas-group-node is-collapsed ${selected ? 'is-selected' : ''}`}
-          style={{
-            background: `linear-gradient(155deg, color-mix(in srgb, ${accent} 86%, #f7fbff), color-mix(in srgb, ${accent} 78%, #101514))`,
-          }}
+          style={{ background: groupSurface, '--group-handle': accent } as React.CSSProperties}
           onDoubleClick={(event) => {
             event.stopPropagation()
             setGroupCollapsed(id, false)
@@ -1448,8 +1457,16 @@ const NodeCard = memo(function NodeCard({
       <div
         ref={groupCardRef}
         className={`canvas-group-node ${selected ? 'is-selected' : ''}`}
-        style={{ background: data.groupColor || 'rgba(72, 76, 73, .2)' }}
+        style={{ background: data.groupColor || 'rgba(72, 76, 73, .20)' }}
       >
+        {selected && <NodeResizeControl
+          position="bottom-right"
+          minWidth={300}
+          minHeight={220}
+          maxWidth={1600}
+          maxHeight={1200}
+          className="group-node-resize-control"
+        ><span className="resize-corner-glyph" /></NodeResizeControl>}
         <span><GroupTypeIcon icon={data.groupIcon} size={13} />{nodeTitle}</span>
       </div>
     )
@@ -1739,6 +1756,7 @@ function App() {
   const transferBusy = Boolean(transferProgress)
   const [showGrid, setShowGrid] = useState(true)
   const [canvasZoom, setCanvasZoom] = useState(1)
+  const [canvasViewport, setCanvasViewport] = useState({ x: 0, y: 0 })
   const [activeEditorNodeId, setActiveEditorNodeId] = useState<string | null>(null)
   const [activeImageNodeId, setActiveImageNodeId] = useState<string | null>(null)
   const [activeGenerationNodeId, setActiveGenerationNodeId] = useState<string | null>(null)
@@ -1757,6 +1775,7 @@ function App() {
   const [nodeOverlayRect, setNodeOverlayRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [selectionToolbarRect, setSelectionToolbarRect] = useState<SelectionToolbarRect | null>(null)
+  const selectionToolbarRef = useRef<HTMLDivElement>(null)
   const [marqueeSelectionCommitted, setMarqueeSelectionCommitted] = useState(false)
   const [groupColorMenuOpen, setGroupColorMenuOpen] = useState(false)
   const [groupIconMenuOpen, setGroupIconMenuOpen] = useState(false)
@@ -1823,7 +1842,7 @@ function App() {
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([])
   const [agentPlans, setAgentPlans] = useState<AgentImagePlan[]>([])
   const [agentReferences, setAgentReferences] = useState<AgentImageReference[]>([])
-  const [agentPendingReference, setAgentPendingReference] = useState<AgentImageReference | null>(null)
+  const [agentPendingReferences, setAgentPendingReferences] = useState<AgentImageReference[]>([])
   const [agentConversationId, setAgentConversationId] = useState(() => `agent-session-${crypto.randomUUID()}`)
   const [agentConversationOptions, setAgentConversationOptions] = useState<{ id: string; title: string; updatedAt: string }[]>([])
   const [agentCanvasPicking, setAgentCanvasPicking] = useState(false)
@@ -1903,7 +1922,7 @@ function App() {
   const currentHistorySnapshotRef = useRef<CanvasHistorySnapshot | null>(null)
   const historyCaptureTimerRef = useRef<number | null>(null)
   const historyReadyRef = useRef(false)
-  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo } = useReactFlow()
+  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo, getInternalNode, getNodes } = useReactFlow<CanvasNode>()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
   const resetCanvasHistory = useCallback((nextNodes: CanvasNode[], nextEdges: Edge[]) => {
@@ -2826,15 +2845,32 @@ function App() {
       upload: '上传一张参考图。',
     }
     const id = `${kind}-${Date.now()}`
+    const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
+    // A node created from the right-hand handle is a downstream generation.
+    // Keep its generation settings in lockstep with the upstream image node.
+    const upstreamImageNode = connectionSourceId && nodeMenu?.connectionDirection !== 'incoming'
+      ? nodes.find((node) => node.id === connectionSourceId && node.data.kind === 'image')
+      : undefined
+    const inheritedImageOptions = upstreamImageNode ? {
+      imageAspectRatio: upstreamImageNode.data.imageAspectRatio ?? '1:1' as ImageAspectRatio,
+      imageResolution: upstreamImageNode.data.imageResolution ?? '1K' as ImageResolution,
+      imageDetail: upstreamImageNode.data.imageDetail ?? 'medium' as ImageDetail,
+      ...(upstreamImageNode.data.imageModelConnectionId ? { imageModelConnectionId: upstreamImageNode.data.imageModelConnectionId } : {}),
+      ...(upstreamImageNode.data.imageModelId ? { imageModelId: upstreamImageNode.data.imageModelId } : {}),
+      ...(upstreamImageNode.data.imageModelName ? { imageModelName: upstreamImageNode.data.imageModelName } : {}),
+    } : {
+      imageAspectRatio: '1:1' as ImageAspectRatio,
+      imageResolution: '1K' as ImageResolution,
+      imageDetail: 'medium' as ImageDetail,
+    }
     const menuAnchor = { x: nodeMenu?.flowX ?? 360, y: nodeMenu?.flowY ?? 260 }
-    const imageSize = getImageGenerationNodeSize('1:1')
+    const imageSize = getImageGenerationNodeSize(inheritedImageOptions.imageAspectRatio)
     const menuPosition = kind === 'text'
       ? { x: menuAnchor.x - 137.5, y: menuAnchor.y - 63 }
       : kind === 'image'
         ? { x: menuAnchor.x - imageSize.width / 2, y: menuAnchor.y - imageSize.height / 2 }
         : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
 
-    const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
     const focusConnectedImage = Boolean(connectionSourceId && kind === 'image')
     setNodes((current) => [
       ...(focusConnectedImage ? current.map((node) => ({ ...node, selected: false })) : current),
@@ -2846,7 +2882,7 @@ function App() {
         ...(kind === 'text'
           ? { style: { width: 275, height: 126 } }
           : kind === 'image'
-            ? { style: getImageGenerationNodeSize('1:1') }
+            ? { style: imageSize }
             : {}),
         data: {
           kind,
@@ -2855,9 +2891,7 @@ function App() {
           ...(kind === 'text' ? { promptText: '' } : {}),
           ...(kind === 'image' ? {
             status: '待生成',
-            imageAspectRatio: '1:1' as ImageAspectRatio,
-            imageResolution: '1K' as ImageResolution,
-            imageDetail: 'medium' as ImageDetail,
+            ...inheritedImageOptions,
           } : {}),
         },
       },
@@ -3641,7 +3675,7 @@ function App() {
     setAgentMessages([])
     setAgentPlans([])
     setAgentReferences([])
-    setAgentPendingReference(null)
+    setAgentPendingReferences([])
     setAgentCanvasPicking(false)
     setAgentConversationOptions((current) => [{ id, title: '新的对话', updatedAt: now }, ...current])
   }
@@ -3665,7 +3699,7 @@ function App() {
       ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' }
       : plan))
     setAgentReferences([])
-    setAgentPendingReference(null)
+    setAgentPendingReferences([])
     setAgentCanvasPicking(false)
     setAgentTextModelKey(session.selectedChatModelId ?? agentTextModelKey)
     setAgentImageModelKey(session.selectedImageModelId ?? agentImageModelKey)
@@ -3697,7 +3731,7 @@ function App() {
       setAgentConversationOptions([{ id, title: '新的对话', updatedAt: new Date().toISOString() }])
     }
     setAgentReferences([])
-    setAgentPendingReference(null)
+    setAgentPendingReferences([])
     setAgentCanvasPicking(false)
     setToastMessage('对话已删除')
   }
@@ -5594,17 +5628,10 @@ function App() {
     16 + nodeEditorWidth / 2,
     Math.min(nodeCenterX, shellWidth - 16 - nodeEditorWidth / 2),
   )
-  const shellHeight = shellRef.current?.clientHeight ?? window.innerHeight
-  const resolveNodeEditorTop = (estimatedHeight: number) => {
-    if (!nodeOverlayRect) return 16
-    const below = nodeOverlayRect.top + nodeOverlayRect.height + 14
-    if (below + estimatedHeight <= shellHeight - 16) return below
-    return Math.max(16, nodeOverlayRect.top - estimatedHeight - 14)
-  }
-  const imageNodeEditorTop = resolveNodeEditorTop(236)
-  const textNodeEditorTop = resolveNodeEditorTop(224)
-  const imageEditorPlacedAbove = Boolean(nodeOverlayRect && imageNodeEditorTop < nodeOverlayRect.top)
-  const imageQuickToolbarPlacedBelow = Boolean(nodeOverlayRect && nodeOverlayRect.top < 58)
+  // Keep every contextual layer physically attached to its node while the
+  // canvas pans. They may leave the viewport with the node, but never flip or
+  // clamp to a browser edge and become visually detached.
+  const nodeEditorTop = nodeOverlayRect ? nodeOverlayRect.top + nodeOverlayRect.height + 14 : 16
   const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
     || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
   const normalizedNodeSearch = nodeSearchQuery.trim().toLocaleLowerCase()
@@ -5706,7 +5733,8 @@ function App() {
     latestSelectedEdgeIdsRef.current = selectedEdges.map((edge) => edge.id)
     setSelectedNodeIds(ids)
     if (!ids.length) setMarqueeSelectionCommitted(false)
-    if (ids.length > 1) {
+    const groupAndChildSelectedTogether = selectedNodes.some((node) => Boolean(node.parentId && ids.includes(node.parentId)))
+    if (ids.length > 1 && !groupAndChildSelectedTogether) {
       setActiveEditorNodeId(null)
       setActiveImageNodeId(null)
       setActiveGenerationNodeId(null)
@@ -5728,7 +5756,8 @@ function App() {
     })
   }, [])
 
-  const selectionToolbarAllowed = marqueeSelectionCommitted || Boolean(selectedGroupNode)
+  const multipleNodeToolbarAllowed = marqueeSelectionCommitted && selectedNodeIds.length > 1
+  const selectionToolbarAllowed = multipleNodeToolbarAllowed || Boolean(selectedGroupNode)
   const automaticPerformanceMode = nodes.length >= 28
 
   useEffect(() => {
@@ -5750,15 +5779,14 @@ function App() {
       const left = Math.min(...rects.map((rect) => rect.left))
       const right = Math.max(...rects.map((rect) => rect.right))
       const top = Math.min(...rects.map((rect) => rect.top))
-      const toolbarHalfWidth = Math.min(190, Math.max(120, (window.innerWidth - 16) / 2))
       setSelectionToolbarRect({
-        left: Math.min(window.innerWidth - toolbarHalfWidth, Math.max(toolbarHalfWidth, (left + right) / 2)),
-        top: Math.max(68, top - 12),
+        left: (left + right) / 2,
+        top: top - 12,
       })
     })
 
     return () => window.cancelAnimationFrame(frame)
-  }, [canvasZoom, isNodeDragging, nodes, selectedNodeIds, selectionToolbarAllowed])
+  }, [canvasViewport, canvasZoom, isNodeDragging, nodes, selectedNodeIds, selectionToolbarAllowed])
 
   const getNodeSize = (node: CanvasNode) => {
     const styleWidth = typeof node.style?.width === 'number' ? node.style.width : Number.parseFloat(String(node.style?.width ?? ''))
@@ -5767,6 +5795,68 @@ function App() {
       width: node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : node.data.kind === 'upload' ? 260 : 275),
       height: node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : node.data.kind === 'upload' ? 230 : 126),
     }
+  }
+
+  const reconcileNodeGroupMembership = (nodeId: string, droppedPosition: { x: number; y: number }) => {
+    const liveNodes = getNodes()
+    const draggedNode = liveNodes.find((node) => node.id === nodeId)
+    if (!draggedNode || draggedNode.data.kind === 'group') return false
+    const previousParent = draggedNode.parentId
+      ? liveNodes.find((node) => node.id === draggedNode.parentId && node.data.kind === 'group')
+      : undefined
+    const absolutePosition = getInternalNode(nodeId)?.internals.positionAbsolute ?? (previousParent
+      ? { x: previousParent.position.x + droppedPosition.x, y: previousParent.position.y + droppedPosition.y }
+      : droppedPosition)
+    const draggedSize = getNodeSize(draggedNode)
+    const dropCenter = {
+      x: absolutePosition.x + draggedSize.width / 2,
+      y: absolutePosition.y + draggedSize.height / 2,
+    }
+    const targetGroup = liveNodes
+      .filter((node) => node.data.kind === 'group' && !node.parentId && !node.data.groupCollapsed)
+      .map((group) => ({ group, size: getNodeSize(group) }))
+      .filter(({ group, size }) => (
+        dropCenter.x >= group.position.x
+        && dropCenter.x <= group.position.x + size.width
+        && dropCenter.y >= group.position.y
+        && dropCenter.y <= group.position.y + size.height
+      ))
+      .sort((left, right) => left.size.width * left.size.height - right.size.width * right.size.height)[0]?.group
+    if (!targetGroup && !previousParent) return false
+    if (targetGroup?.id === previousParent?.id) return false
+
+    setNodes((current) => {
+      const nextParentId = targetGroup?.id
+      const next = current.map((item) => item.id === nodeId ? {
+        ...item,
+        parentId: nextParentId,
+        extent: undefined,
+        position: targetGroup
+          ? { x: absolutePosition.x - targetGroup.position.x, y: absolutePosition.y - targetGroup.position.y }
+          : absolutePosition,
+      } : item)
+      let ordered = next
+      if (nextParentId) {
+        const child = next.find((item) => item.id === nodeId)
+        const withoutChild = next.filter((item) => item.id !== nodeId)
+        const parentIndex = withoutChild.findIndex((item) => item.id === nextParentId)
+        if (child && parentIndex >= 0) {
+          withoutChild.splice(parentIndex + 1, 0, child)
+          ordered = withoutChild
+        }
+      }
+      return ordered.map((item) => item.data.kind === 'group' ? {
+        ...item,
+        data: { ...item.data, groupNodeCount: ordered.filter((candidate) => candidate.parentId === item.id).length },
+      } : item)
+    })
+    setToastMessage(targetGroup ? '节点已加入分组' : '节点已移出分组')
+    window.requestAnimationFrame(() => {
+      updateNodeInternals(nodeId)
+      if (previousParent) updateNodeInternals(previousParent.id)
+      if (targetGroup) updateNodeInternals(targetGroup.id)
+    })
+    return true
   }
 
   const groupSelectedNodes = () => {
@@ -5796,6 +5886,7 @@ function App() {
         title: '新分组',
         body: '',
         groupColor: 'rgba(72, 76, 73, .20)',
+        groupFolderColor: 'linear-gradient(135deg, #70e8f1 0%, #70b5ff 36%, #a793ff 68%, #f0a8d3 100%)',
         groupAccentColor: '#78b7ef',
         groupIcon: 'folder',
         groupCollapsed: false,
@@ -5809,7 +5900,7 @@ function App() {
         ? {
             ...node,
             parentId: groupId,
-            extent: 'parent' as const,
+            extent: undefined,
             position: { x: node.position.x - groupX, y: node.position.y - groupY },
             selected: false,
           }
@@ -5820,6 +5911,18 @@ function App() {
     setActiveEditorNodeId(null)
     setToastMessage(`已将 ${selected.length} 个节点打组`)
   }
+
+  useEffect(() => {
+    const onGroupShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'g') return
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
+      event.preventDefault()
+      groupSelectedNodes()
+    }
+    window.addEventListener('keydown', onGroupShortcut)
+    return () => window.removeEventListener('keydown', onGroupShortcut)
+  }, [groupSelectedNodes])
 
   const ungroupSelectedNode = () => {
     if (!selectedGroupNode) return
@@ -5909,6 +6012,9 @@ function App() {
         if (node.id === groupId) {
           return {
             ...node,
+            width: collapsed ? 210 : node.data.groupExpandedWidth || 560,
+            height: collapsed ? 132 : node.data.groupExpandedHeight || 420,
+            measured: collapsed ? { width: 210, height: 132 } : undefined,
             style: collapsed
               ? { ...node.style, width: 210, height: 132 }
               : {
@@ -5953,6 +6059,41 @@ function App() {
       })
     }
     return nodes.filter((node) => includedIds.has(node.id))
+  }
+
+  const addSelectedNodesToAgentConversation = () => {
+    const selectedReferences = getSelectedNodesWithGroupChildren().flatMap((node): AgentImageReference[] => {
+      if ((node.data.kind !== 'image' && node.data.kind !== 'upload') || !node.data.imageUrl) return []
+      return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
+    })
+    const uniqueReferences = Array.from(new Map(selectedReferences.map((reference) => [reference.nodeId, reference])).values())
+    if (!uniqueReferences.length) {
+      setToastMessage('选区中没有已生成或已上传的图片')
+      return
+    }
+
+    // The composer is unmounted while the panel is closed, so its inline chips
+    // do not survive a close. Treat a toolbar action that reopens it as a fresh
+    // draft instead of filtering against stale reference state.
+    const currentReferences = agentOpen ? agentReferences : []
+    const existingIds = new Set(currentReferences.map((reference) => reference.nodeId))
+    const newReferences = uniqueReferences.filter((reference) => !existingIds.has(reference.nodeId))
+    const availableSlots = Math.max(0, 16 - currentReferences.length)
+    const acceptedReferences = newReferences.slice(0, availableSlots)
+
+    if (!agentOpen) setAgentReferences([])
+    setAgentOpen(true)
+    setAgentCanvasPicking(false)
+    if (!acceptedReferences.length) {
+      setToastMessage(newReferences.length ? '对话参考图最多 16 张' : '选中的图片已在当前对话中')
+      return
+    }
+
+    setAgentPendingReferences(acceptedReferences)
+    const skippedCount = uniqueReferences.length - acceptedReferences.length
+    setToastMessage(skippedCount > 0
+      ? `已加入 ${acceptedReferences.length} 张图片，另有 ${skippedCount} 张重复或超出上限`
+      : `已将 ${acceptedReferences.length} 张图片加入对话`)
   }
 
   const saveSelectedNodesToAssets = () => {
@@ -6450,7 +6591,7 @@ function App() {
                 return
               }
               const reference = { nodeId: node.id, name: getNodeDisplayTitle(node.data), url: imageUrl }
-              setAgentPendingReference(reference)
+              setAgentPendingReferences([reference])
               setAgentCanvasPicking(false)
               return
             }
@@ -6492,6 +6633,8 @@ function App() {
             setQuantityMenuOpen(false)
             setExpandedEditorNodeId(null)
             setIsNodeDragging(false)
+            setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })))
+            setSelectedNodeIds([node.id])
             setActiveEditorNodeId(node.data.kind === 'text' ? node.id : null)
             setActiveImageNodeId(node.data.kind === 'upload' && node.data.imageUrl ? node.id : null)
             setActiveGenerationNodeId(node.data.kind === 'image' ? node.id : null)
@@ -6499,6 +6642,9 @@ function App() {
           }}
           onNodeDragStart={(event, node) => {
             setIsNodeDragging(true)
+            if (node.parentId && node.extent === 'parent') {
+              setNodes((current) => current.map((item) => item.id === node.id ? { ...item, extent: undefined } : item))
+            }
             if (!event.altKey || node.data.kind === 'group' || altDragDuplicateRef.current) return
             const duplicateId = `${node.data.kind}-alt-duplicate-${crypto.randomUUID()}`
             altDragDuplicateRef.current = {
@@ -6533,6 +6679,7 @@ function App() {
               return
             }
             altDragDuplicateRef.current = null
+            if (reconcileNodeGroupMembership(node.id, node.position)) return
             if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId) measureNodeOverlay(node.id)
           }}
           onNodeContextMenu={openNodeContextMenu}
@@ -6585,6 +6732,11 @@ function App() {
           onMove={(_, viewport) => {
             setCanvasZoom((current) =>
               Math.abs(current - viewport.zoom) > 0.002 ? viewport.zoom : current,
+            )
+            setCanvasViewport((current) =>
+              Math.abs(current.x - viewport.x) > 0.25 || Math.abs(current.y - viewport.y) > 0.25
+                ? { x: viewport.x, y: viewport.y }
+                : current,
             )
             const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeEditorNodeId
             if (activeOverlayNodeId && !isNodeDragging) measureNodeOverlay(activeOverlayNodeId)
@@ -6649,12 +6801,17 @@ function App() {
         <AnimatePresence>
           {selectionToolbarAllowed && selectionToolbarRect && selectedNodeIds.length > 0 && (
             <motion.div
-              className={`selection-action-toolbar ${selectedGroupNode ? 'is-group-toolbar' : ''}`}
+              ref={selectionToolbarRef}
+              className={`selection-action-toolbar nowheel ${selectedGroupNode ? 'is-group-toolbar' : ''}`}
               style={{ left: selectionToolbarRect.left, top: selectionToolbarRect.top }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onPointerDown={(event) => event.stopPropagation()}
+              onWheelCapture={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
             >
               {selectedGroupNode ? (
                 <>
@@ -6718,6 +6875,7 @@ function App() {
                           exit={{ opacity: 0, y: 4, scale: 0.95 }}
                         >
                           {[
+                            { label: '品牌渐变', surface: 'linear-gradient(135deg, #70e8f1 0%, #70b5ff 36%, #a793ff 68%, #f0a8d3 100%)', accent: '#8ab9ff' },
                             { label: '石墨', surface: 'rgba(72, 76, 73, .20)', accent: '#858b87' },
                             { label: '天空蓝', surface: 'rgba(65, 126, 178, .24)', accent: '#78b7ef' },
                             { label: '樱花粉', surface: 'rgba(177, 78, 126, .24)', accent: '#f08fbd' },
@@ -6764,7 +6922,7 @@ function App() {
                 </>
               ) : (
                 <>
-                  <button type="button" disabled title="下一阶段开放">
+                  <button type="button" onClick={addSelectedNodesToAgentConversation}>
                     <MessageCircle size={15} /><span>加入对话</span>
                   </button>
                   <button type="button" onClick={groupSelectedNodes}>
@@ -7397,6 +7555,7 @@ function App() {
                         ['Ctrl + Z', '撤销画布操作'],
                         ['Ctrl + Shift + Z / Ctrl + Y', '重做画布操作'],
                         ['Ctrl + C / Ctrl + V', '复制、粘贴节点或系统图片'],
+                        ['Ctrl + G', '将选中的节点打组'],
                         ['Alt + 拖拽', '创建独立节点副本'],
                         ['Delete / Backspace', '删除选中的节点或连线'],
                         ['Ctrl + S', '立即保存当前画布'],
@@ -7424,7 +7583,7 @@ function App() {
                 messages={agentMessages}
                 plans={agentPlans}
                 references={agentReferences}
-                pendingReference={agentPendingReference}
+                pendingReferences={agentPendingReferences}
                 candidates={agentImageCandidates}
                 conversations={agentConversationOptions.length ? agentConversationOptions : [{ id: agentConversationId, title: '新的对话', updatedAt: new Date().toISOString() }]}
                 activeConversationId={agentConversationId}
@@ -7463,7 +7622,7 @@ function App() {
                 onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
                 onReferencesChange={setAgentReferences}
                 onCreateUploadedReference={createAgentUploadedReference}
-                onPendingReferenceConsumed={() => setAgentPendingReference(null)}
+                onPendingReferenceConsumed={() => setAgentPendingReferences([])}
                 onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
                 onSend={(message, invocationText, references) => void sendAgentMessage(message, invocationText, references)}
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
@@ -7551,10 +7710,10 @@ function App() {
         <AnimatePresence>
           {activeImageNode && nodeOverlayRect && !isNodeDragging && !previewImageNode && (
             <motion.div
-              className={`node-quick-toolbar ${imageQuickToolbarPlacedBelow ? 'is-below' : ''} image-node-quick-toolbar nodrag nowheel`}
+              className="node-quick-toolbar image-node-quick-toolbar nodrag nowheel"
               style={{
                 left: Math.min(window.innerWidth - 150, Math.max(150, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
-                top: imageQuickToolbarPlacedBelow ? nodeOverlayRect.top + nodeOverlayRect.height + 10 : nodeOverlayRect.top - 10,
+                top: nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -7582,10 +7741,10 @@ function App() {
         <AnimatePresence>
           {activeGenerationNode && nodeOverlayRect && !isNodeDragging && (
             <motion.div
-              className={`node-quick-toolbar ${imageEditorPlacedAbove ? 'is-below' : ''} ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
+              className={`node-quick-toolbar ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
               style={{
                 left: nodeEditorCenterX,
-                top: imageEditorPlacedAbove ? nodeOverlayRect.top + nodeOverlayRect.height + 10 : nodeOverlayRect.top - 10,
+                top: nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -7876,7 +8035,7 @@ function App() {
               className="image-node-editor-positioner"
               style={{
                 left: nodeEditorCenterX,
-                top: imageNodeEditorTop,
+                top: nodeEditorTop,
                 width: nodeEditorWidth,
               }}
             >
@@ -8233,7 +8392,7 @@ function App() {
               className="text-node-editor-positioner"
               style={{
                 left: nodeEditorCenterX,
-                top: textNodeEditorTop,
+                top: nodeEditorTop,
                 width: nodeEditorWidth,
               }}
             >

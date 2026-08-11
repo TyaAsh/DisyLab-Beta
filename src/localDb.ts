@@ -1,3 +1,12 @@
+/*!
+ * Copyright (c) 2026 DisyLab. All rights reserved.
+ * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
+ * Unauthorized commercial use, redistribution, white-labeling, relicensing,
+ * or removal of this copyright notice is prohibited.
+ * Repository: https://github.com/TyaAsh/DisyLab
+ * SPDX-FileCopyrightText: 2026 DisyLab
+ * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
+ */
 const DATABASE_NAME = 'disy-infinite-local'
 const DATABASE_VERSION = 5
 const LEGACY_PROJECT_STORE = 'projects'
@@ -99,6 +108,13 @@ export type WorkspaceAuxiliaryData = {
 export type WorkspaceSnapshot = {
   format: 'disy-infinite-workspace'
   version: 1
+  producer?: {
+    name: 'DisyLab'
+    release: string
+    ashOrigin: string
+    tyaCanvas: string
+    rights: string
+  }
   exportedAt: string
   projects: WorkspaceProject[]
   canvases: WorkspaceCanvas[]
@@ -727,6 +743,13 @@ export async function exportWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
     return removeSecrets({
       format: 'disy-infinite-workspace',
       version: 1,
+      producer: {
+        name: 'DisyLab',
+        release: '1.0.1',
+        ashOrigin: 'ashhaveaniceday::disylab::origin',
+        tyaCanvas: 'tya::infinite-canvas::2026',
+        rights: 'LicenseRef-DisyLab-Proprietary',
+      },
       exportedAt: now(),
       projects,
       canvases,
