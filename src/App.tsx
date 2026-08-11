@@ -121,6 +121,15 @@ type ImageReference = {
   name: string
   url: string
 }
+type ProjectClipboardState = {
+  projectId: string
+  name: string
+}
+type ProjectContextMenuState = {
+  x: number
+  y: number
+  projectId?: string
+}
 type ImageVariant = {
   id: string
   url: string
@@ -1792,6 +1801,8 @@ function App() {
   const projectHomeOpenRef = useRef(true)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [projectClipboard, setProjectClipboard] = useState<ProjectClipboardState | null>(null)
+  const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [createProjectName, setCreateProjectName] = useState('')
   const [createProjectCanvasCount, setCreateProjectCanvasCount] = useState(1)
@@ -2104,6 +2115,24 @@ function App() {
   }, [projectMenuOpen])
 
   useEffect(() => {
+    if (!projectContextMenu) return
+    const closeProjectContextMenu = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.project-context-menu')) return
+      setProjectContextMenu(null)
+    }
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProjectContextMenu(null)
+    }
+    document.addEventListener('pointerdown', closeProjectContextMenu, true)
+    window.addEventListener('keydown', closeWithEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeProjectContextMenu, true)
+      window.removeEventListener('keydown', closeWithEscape)
+    }
+  }, [projectContextMenu])
+
+  useEffect(() => {
     if (!createProjectOpen || createProjectBusy) return
     const closeCreateProject = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setCreateProjectOpen(false)
@@ -2111,6 +2140,27 @@ function App() {
     window.addEventListener('keydown', closeCreateProject)
     return () => window.removeEventListener('keydown', closeCreateProject)
   }, [createProjectBusy, createProjectOpen])
+
+  useEffect(() => {
+    if (!projectHomeOpen) return
+    const isEditableTarget = (target: EventTarget | null) => target instanceof HTMLElement
+      && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    const onProjectClipboardKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || isEditableTarget(event.target)) return
+      const key = event.key.toLowerCase()
+      if (key === 'c') {
+        const selectedId = selectedProjectIds[0] ?? activeProjectId
+        if (!selectedId) return
+        event.preventDefault()
+        void copyProjectToClipboard(selectedId)
+      } else if (key === 'v' && projectClipboard) {
+        event.preventDefault()
+        void pasteProjectFromClipboard()
+      }
+    }
+    window.addEventListener('keydown', onProjectClipboardKeyDown)
+    return () => window.removeEventListener('keydown', onProjectClipboardKeyDown)
+  }, [activeProjectId, projectClipboard, projectHomeOpen, selectedProjectIds])
 
   useEffect(() => {
     if (!assetLibraryOpen) return
@@ -3792,6 +3842,97 @@ function App() {
     setCreateProjectOpen(true)
   }
 
+  const persistCurrentAgentSession = async () => {
+    await saveAgentSession({
+      id: agentConversationId,
+      projectId: activeProjectId,
+      canvasId: activeCanvasId,
+      title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
+      messages: agentMessages,
+      plans: [...agentPlans, ...agentTextPlans],
+      selectedChatModelId: agentTextModelKey,
+      selectedImageModelId: agentImageModelKey,
+      createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
+  const copyProjectToClipboard = async (projectId: string) => {
+    const project = workspaceProjects.find((item) => item.id === projectId)
+    if (!project) {
+      setToastMessage('项目不存在，无法复制')
+      return false
+    }
+    if (projectId === activeProjectId) {
+      await saveCanvasState(canvasName, true)
+      await persistCurrentAgentSession()
+    }
+    setProjectClipboard({ projectId, name: project.name })
+    setToastMessage(`已复制项目“${project.name}”`)
+    return true
+  }
+
+  const pasteProjectFromClipboard = async () => {
+    if (!projectClipboard) {
+      setToastMessage('没有可粘贴的项目')
+      return
+    }
+    if (workspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能粘贴项目')
+      return
+    }
+    const sourceProject = workspaceProjects.find((item) => item.id === projectClipboard.projectId)
+    if (!sourceProject) {
+      setProjectClipboard(null)
+      setToastMessage('源项目已不存在，请重新复制')
+      return
+    }
+    try {
+      if (sourceProject.id === activeProjectId) {
+        await saveCanvasState(canvasName, true)
+        await persistCurrentAgentSession()
+      }
+      const sourceCanvases = await listWorkspaceCanvases(sourceProject.id)
+      if (!sourceCanvases.length) throw new Error('源项目没有可复制的画布')
+      const sourceSessions = (await listAgentSessions()).filter((session) => session.projectId === sourceProject.id)
+      const created = await createWorkspaceProject(`${sourceProject.name} 副本`)
+      const timestamp = new Date().toISOString()
+      const firstCanvas = sourceCanvases[0]
+      const canvasIdMap = new Map<string, string>([[firstCanvas.id, created.canvas.id]])
+      await saveWorkspaceCanvas({
+        ...firstCanvas,
+        id: created.canvas.id,
+        projectId: created.project.id,
+        name: firstCanvas.name,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      for (const canvas of sourceCanvases.slice(1)) {
+        const duplicatedCanvas = await createWorkspaceCanvas(created.project.id, canvas.name, canvas)
+        canvasIdMap.set(canvas.id, duplicatedCanvas.id)
+      }
+      for (const session of sourceSessions) {
+        const nextCanvasId = canvasIdMap.get(session.canvasId)
+        if (!nextCanvasId) continue
+        await saveAgentSession({
+          ...session,
+          id: crypto.randomUUID(),
+          projectId: created.project.id,
+          canvasId: nextCanvasId,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+      }
+      const projects = await listWorkspaceProjects()
+      setWorkspaceProjects(projects)
+      setSelectedProjectIds([created.project.id])
+      setProjectHomeSelectionMode(false)
+      setToastMessage(`已粘贴项目“${sourceProject.name}”`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : '项目粘贴失败')
+    }
+  }
+
   const confirmCreateProject = async () => {
     const requestedName = createProjectName.trim()
     if (!requestedName || createProjectBusy) return
@@ -3806,9 +3947,8 @@ function App() {
       setWorkspaceProjects(projects)
       setCreateProjectOpen(false)
       setProjectOpen(false)
-      setProjectHomeOpen(false)
-      await openWorkspaceCanvas(created.canvas.id, created.project.id, true)
-      setProjectName(projects.find((project) => project.id === created.project.id)?.name ?? requestedName)
+      setSelectedProjectIds([created.project.id])
+      setProjectHomeSelectionMode(false)
       setToastMessage(`项目已创建，包含 ${createProjectCanvasCount} 张画布`)
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : '项目创建失败')
@@ -6699,11 +6839,33 @@ function App() {
                 <button className={`project-home-icon ${projectHomeView === 'list' ? 'is-active' : ''}`} onClick={() => setProjectHomeView((view) => view === 'grid' ? 'list' : 'grid')} aria-label={projectHomeView === 'grid' ? '切换到列表视图' : '切换到宫格视图'} title={projectHomeView === 'grid' ? '列表视图' : '宫格视图'}>{projectHomeView === 'grid' ? <List size={18} /> : <Grid3X3 size={17} />}</button>
                 <button className="project-home-icon" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
                 <button className="project-home-create" onClick={() => void createNewProject()}><Plus size={16} /> 新建项目</button>
+                <button
+                  className={`project-home-api ${apiConfigured ? 'is-configured' : ''}`}
+                  onClick={() => setApiOpen(true)}
+                  aria-label={apiConfigured ? '管理 API 配置' : '配置 API'}
+                  title={apiConfigured ? '管理 API 配置' : '配置 API'}
+                >
+                  <KeyRound size={15} />
+                  <span>{apiConfigured ? 'API 已配置' : '配置 API'}</span>
+                </button>
               </div>
             </header>
             <div ref={projectHomeContentRef} className="project-home-content">
-              {projectHomeView === 'grid' ? <div className="project-home-grid">
-                <button className="project-home-card project-home-new" onClick={() => void createNewProject()}><span><Plus size={25} /></span><strong>新建项目</strong></button>
+              {projectHomeView === 'grid' ? <div className="project-home-grid" onContextMenu={(event) => {
+                event.preventDefault()
+                setProjectContextMenu({
+                  x: Math.max(12, Math.min(event.clientX, window.innerWidth - 230)),
+                  y: Math.max(12, Math.min(event.clientY, window.innerHeight - 140)),
+                })
+              }}>
+                <button className="project-home-card project-home-new" onClick={() => void createNewProject()} onContextMenu={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setProjectContextMenu({
+                    x: Math.max(12, Math.min(event.clientX, window.innerWidth - 230)),
+                    y: Math.max(12, Math.min(event.clientY, window.innerHeight - 140)),
+                  })
+                }}><span><Plus size={25} /></span><strong>新建项目</strong></button>
                 {sortedHomeProjects.map((project, index) => {
                   const cover = latestProjectCoverById.get(project.id)
                   const isSelected = selectedProjectIds.includes(project.id)
@@ -6712,6 +6874,16 @@ function App() {
                     if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
                     if (isRenaming) return
                     setCreateProjectOpen(false); void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectHomeOpen(false))
+                  }} onContextMenu={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setSelectedProjectIds([project.id])
+                    setProjectHomeSelectionMode(false)
+                    setProjectContextMenu({
+                      x: Math.max(12, Math.min(event.clientX, window.innerWidth - 230)),
+                      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 176)),
+                      projectId: project.id,
+                    })
                   }}>
                     {projectHomeSelectionMode && <button className="project-home-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={14} />}</button>}
                     <button className="project-home-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
@@ -6730,6 +6902,15 @@ function App() {
                     if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
                     if (isRenaming) return
                     setCreateProjectOpen(false); void openWorkspaceCanvas(project.activeCanvasId, project.id).then(() => setProjectHomeOpen(false))
+                  }} onContextMenu={(event) => {
+                    event.preventDefault()
+                    setSelectedProjectIds([project.id])
+                    setProjectHomeSelectionMode(false)
+                    setProjectContextMenu({
+                      x: Math.max(12, Math.min(event.clientX, window.innerWidth - 230)),
+                      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 176)),
+                      projectId: project.id,
+                    })
                   }}>
                     {projectHomeSelectionMode && <button className="project-home-list-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={13} />}</button>}
                     <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span>{project.canvasIds.length} 张画布</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
@@ -7904,6 +8085,44 @@ function App() {
             <button className="context-danger" onClick={deleteContextNode}>
               <span>删除</span><kbd>Delete</kbd>
             </button>
+          </motion.div>
+        )}
+
+        {projectContextMenu && (
+          <motion.div
+            role="menu"
+            aria-label="项目操作"
+            className="node-context-menu project-context-menu"
+            style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
+            initial={{ opacity: 0, scale: 0.96, y: -4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {projectContextMenu.projectId && <button onClick={() => {
+              setProjectContextMenu(null)
+              void copyProjectToClipboard(projectContextMenu.projectId!)
+            }}>
+              <span>复制项目</span><kbd>Ctrl C</kbd>
+            </button>}
+            <button disabled={!projectClipboard} onClick={() => {
+              setProjectContextMenu(null)
+              void pasteProjectFromClipboard()
+            }}>
+              <span>{projectClipboard ? `粘贴“${projectClipboard.name}”` : '粘贴项目'}</span><kbd>Ctrl V</kbd>
+            </button>
+            {projectContextMenu.projectId && <>
+              <div className="context-divider" />
+              <button onClick={() => {
+                setProjectContextMenu(null)
+                void openWorkspaceCanvas(
+                  workspaceProjects.find((item) => item.id === projectContextMenu.projectId)?.activeCanvasId ?? activeCanvasId,
+                  projectContextMenu.projectId,
+                ).then(() => setProjectHomeOpen(false))
+              }}>
+                <span>打开项目</span>
+              </button>
+            </>}
           </motion.div>
         )}
 
@@ -9528,11 +9747,11 @@ function App() {
         {createProjectOpen && (
           <motion.div className="create-project-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !createProjectBusy && setCreateProjectOpen(false)}>
             <motion.form className="create-project-dialog" initial={{ opacity: 0, y: 14, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: .98 }} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void confirmCreateProject() }}>
-              <header><div><small>NEW PROJECT</small><h2>创建新项目</h2><p>设置项目名称和初始画布数量，创建完成后进入第一张画布。</p></div><button type="button" aria-label="关闭" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}><X size={18} /></button></header>
+              <header><div><small>NEW PROJECT</small><h2>创建新项目</h2><p>设置项目名称和初始画布数量，创建完成后保留在当前页面。</p></div><button type="button" aria-label="关闭" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}><X size={18} /></button></header>
               <label className="create-project-name-field"><span>项目名称</span><input autoFocus maxLength={48} value={createProjectName} placeholder="输入项目名称" onChange={(event) => setCreateProjectName(event.target.value)} /></label>
               <div className="create-project-count-field"><div><span>初始画布</span><small>后续仍可在项目中继续添加</small></div><div className="create-project-stepper"><button type="button" disabled={createProjectCanvasCount <= 1 || createProjectBusy} onClick={() => setCreateProjectCanvasCount((count) => Math.max(1, count - 1))}><Minus size={15} /></button><strong>{createProjectCanvasCount}</strong><button type="button" disabled={createProjectCanvasCount >= 20 || createProjectBusy} onClick={() => setCreateProjectCanvasCount((count) => Math.min(20, count + 1))}><Plus size={15} /></button></div></div>
               <div className="create-project-presets"><span>快速选择</span><div>{[1, 2, 3, 5, 10].map((count) => <button type="button" key={count} className={createProjectCanvasCount === count ? 'is-active' : ''} onClick={() => setCreateProjectCanvasCount(count)}>{count} 张</button>)}</div></div>
-              <footer><button type="button" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}>取消</button><button type="submit" className="create-project-confirm" disabled={!createProjectName.trim() || createProjectBusy}>{createProjectBusy ? <><LoaderCircle size={15} className="is-spinning" />正在创建</> : <><Plus size={15} />创建并进入</>}</button></footer>
+              <footer><button type="button" disabled={createProjectBusy} onClick={() => setCreateProjectOpen(false)}>取消</button><button type="submit" className="create-project-confirm" disabled={!createProjectName.trim() || createProjectBusy}>{createProjectBusy ? <><LoaderCircle size={15} className="is-spinning" />正在创建</> : <><Plus size={15} />创建项目</>}</button></footer>
             </motion.form>
           </motion.div>
         )}
@@ -9792,7 +10011,7 @@ function App() {
       <AnimatePresence>
         {apiOpen && (
           <motion.div
-            className="modal-backdrop"
+            className={`modal-backdrop ${projectHomeOpen ? 'project-home-api-backdrop' : ''}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
