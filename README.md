@@ -241,17 +241,6 @@ netlify.toml           # 旧版 Netlify 部署兼容配置
 
 路线图会根据真实创作体验和测试反馈持续调整。
 
-## 部署
-
-线上体验版部署在 Cloudflare Pages。构建完成后可执行：
-
-```bash
-npm run build
-npx wrangler pages deploy dist --project-name disylab
-```
-
-`site/` 中是独立的项目介绍站，`.github/workflows/pages.yml` 会在 `main` 分支的网站文件更新后自动发布到 GitHub Pages。
-
 ## 开发沟通
 
 欢迎反馈使用体验、交互问题、模型兼容情况和创作需求。

@@ -1429,8 +1429,14 @@ const NodeCard = memo(function NodeCard({
             setGroupCollapsed(id, false)
           }}
         >
-          <Handle type="target" position={Position.Left} className="collapsed-group-handle is-target" isConnectable={false} />
-          <Handle type="source" position={Position.Right} className="collapsed-group-handle is-source" isConnectable={false} />
+          <Handle id="group-target-left" type="target" position={Position.Left} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-target-top" type="target" position={Position.Top} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-target-right" type="target" position={Position.Right} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-target-bottom" type="target" position={Position.Bottom} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-source-left" type="source" position={Position.Left} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-source-top" type="source" position={Position.Top} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-source-right" type="source" position={Position.Right} className="collapsed-group-handle" isConnectable={false} />
+          <Handle id="group-source-bottom" type="source" position={Position.Bottom} className="collapsed-group-handle" isConnectable={false} />
           <div className={`collapsed-group-preview ${previews.length ? '' : 'is-empty'}`}>
             {previews.slice(0, 3).map((url, index) => <img key={`${url}-${index}`} src={url} alt="" draggable={false} />)}
             {!previews.length && <Folder size={34} strokeWidth={1.3} />}
@@ -5697,6 +5703,48 @@ function App() {
       }
     })
 
+    const absolutePositionById = new Map<string, { x: number; y: number }>()
+    const getAbsolutePosition = (nodeId: string, visiting = new Set<string>()): { x: number; y: number } => {
+      const cached = absolutePositionById.get(nodeId)
+      if (cached) return cached
+      const node = nodeById.get(nodeId)
+      if (!node || visiting.has(nodeId)) return { x: 0, y: 0 }
+      visiting.add(nodeId)
+      const parentPosition = node.parentId ? getAbsolutePosition(node.parentId, visiting) : { x: 0, y: 0 }
+      const position = { x: parentPosition.x + node.position.x, y: parentPosition.y + node.position.y }
+      absolutePositionById.set(nodeId, position)
+      visiting.delete(nodeId)
+      return position
+    }
+    const getRenderedNodeSize = (nodeId: string) => {
+      const node = nodeById.get(nodeId)
+      if (!node) return { width: 1, height: 1 }
+      const styleWidth = typeof node.style?.width === 'number' ? node.style.width : Number.parseFloat(String(node.style?.width ?? ''))
+      const styleHeight = typeof node.style?.height === 'number' ? node.style.height : Number.parseFloat(String(node.style?.height ?? ''))
+      return {
+        width: node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : node.data.kind === 'group' && node.data.groupCollapsed ? 210 : 275),
+        height: node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : node.data.kind === 'group' && node.data.groupCollapsed ? 132 : 126),
+      }
+    }
+    const getNodeCenter = (nodeId: string) => {
+      const position = getAbsolutePosition(nodeId)
+      const size = getRenderedNodeSize(nodeId)
+      return { x: position.x + size.width / 2, y: position.y + size.height / 2 }
+    }
+    const getGroupProxyHandle = (groupId: string, facingNodeId: string, type: 'source' | 'target') => {
+      const groupCenter = getNodeCenter(groupId)
+      const facingCenter = getNodeCenter(facingNodeId)
+      const groupSize = getRenderedNodeSize(groupId)
+      const dx = facingCenter.x - groupCenter.x
+      const dy = facingCenter.y - groupCenter.y
+      const horizontalWeight = Math.abs(dx) / Math.max(groupSize.width, 1)
+      const verticalWeight = Math.abs(dy) / Math.max(groupSize.height, 1)
+      const side = horizontalWeight >= verticalWeight
+        ? (dx >= 0 ? 'right' : 'left')
+        : (dy >= 0 ? 'bottom' : 'top')
+      return `group-${type}-${side}`
+    }
+
     const visiblePairs = new Set<string>()
     return edges.flatMap((edge) => {
       const sourceGroupId = collapsedParentByNodeId.get(edge.source)
@@ -5710,9 +5758,16 @@ function App() {
       const target = targetGroupId ?? edge.target
       if (source === target) return []
 
+      const sourceHandle = sourceGroupId
+        ? getGroupProxyHandle(sourceGroupId, target, 'source')
+        : edge.sourceHandle
+      const targetHandle = targetGroupId
+        ? getGroupProxyHandle(targetGroupId, source, 'target')
+        : edge.targetHandle
+
       const remapped = Boolean(sourceGroupId || targetGroupId)
       if (remapped) {
-        const pairKey = `${source}->${target}`
+        const pairKey = `${source}:${sourceHandle ?? ''}->${target}:${targetHandle ?? ''}`
         if (visiblePairs.has(pairKey)) return []
         visiblePairs.add(pairKey)
       }
@@ -5721,8 +5776,8 @@ function App() {
         ...edge,
         source,
         target,
-        ...(sourceGroupId ? { sourceHandle: undefined } : {}),
-        ...(targetGroupId ? { targetHandle: undefined } : {}),
+        sourceHandle,
+        targetHandle,
       }]
     })
   }, [edges, nodes])
@@ -6042,7 +6097,9 @@ function App() {
     })
     setGroupColorMenuOpen(false)
     setGroupIconMenuOpen(false)
-    window.requestAnimationFrame(() => updateNodeInternals(groupId))
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => updateNodeInternals(groupId))
+    })
     setToastMessage(collapsed ? '编组已折叠，双击卡片可展开' : '编组已展开')
   }, [setNodes, updateNodeInternals])
 
