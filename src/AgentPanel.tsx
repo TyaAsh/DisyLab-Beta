@@ -8,8 +8,8 @@
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ArrowUp, Check, ChevronDown, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
-import { compactReferenceName, normalizeAgentMessageContent, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { ArrowUp, Check, ChevronDown, FileText, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
+import { compactReferenceName, normalizeAgentMessageContent, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
 export type AgentConversationOption = { id: string; title: string; updatedAt: string }
@@ -194,6 +194,7 @@ function AgentSelect({ ariaLabel, value, placeholder, options, icon, onChange, c
 type Props = {
   messages: AgentMessage[]
   plans: AgentImagePlan[]
+  textPlans: AgentTextPlan[]
   references: AgentImageReference[]
   pendingReferences: AgentImageReference[]
   candidates: AgentImageReference[]
@@ -226,6 +227,11 @@ type Props = {
   onSelectPlanOptions: (groupPlanIds: string[], selectedPlanIds: string[]) => void
   onConfirmPlan: (id: string) => void
   onCancelPlan: (id: string) => void
+  onRemovePlanContextReference: (planId: string, nodeId: string) => void
+  onTextPlanChange: (id: string, patch: Partial<Pick<AgentTextPlan, 'title' | 'content'>>) => void
+  onConfirmTextPlan: (id: string) => void
+  onCancelTextPlan: (id: string) => void
+  onRemoveTextPlanContextReference: (planId: string, nodeId: string) => void
   onLocateCanvasNode: (nodeId: string) => void
 }
 
@@ -593,7 +599,7 @@ export function AgentPanel(props: Props) {
     if (!container || !pinnedToBottomRef.current) return
     const frame = window.requestAnimationFrame(() => container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }))
     return () => window.cancelAnimationFrame(frame)
-  }, [props.messages.length, props.plans.length, props.busy])
+  }, [props.messages.length, props.plans.length, props.textPlans.length, props.busy])
   const submit = () => {
     const value = getEditorText()
     if (!value) return
@@ -605,6 +611,9 @@ export function AgentPanel(props: Props) {
     const statusLabel = plan.status === 'ready' ? '待确认' : plan.status === 'running' ? '生成中' : plan.status === 'completed' ? '已完成' : plan.status === 'cancelled' ? '已取消' : '失败'
     const isCompact = plan.status === 'completed' || plan.status === 'cancelled'
     const disabled = plan.status !== 'ready'
+    const displayedContextReferences: AgentContextReference[] = plan.contextReferences?.length
+      ? plan.contextReferences
+      : (plan.references ?? []).map((reference) => ({ ...reference, kind: 'image' as const }))
     if (isCompact) {
       return (
         <button
@@ -633,10 +642,7 @@ export function AgentPanel(props: Props) {
       >
         <header><span><ImagePlus size={15} />图像生成确认</span><em>{statusLabel}</em></header>
         <textarea value={plan.prompt} disabled={disabled} onChange={(event) => props.onPlanChange(plan.id, { prompt: event.target.value })} aria-label="编辑图像方案提示词" />
-        {!!plan.referenceNodeIds.length && <div className="agent-plan-references">{plan.referenceNodeIds.map((nodeId, index) => {
-          const reference = plan.references?.find((item) => item.nodeId === nodeId) || props.candidates.find((item) => item.nodeId === nodeId) || props.references.find((item) => item.nodeId === nodeId)
-          return reference ? <button type="button" className="agent-plan-reference" key={nodeId} title={reference.name} onClick={() => props.onLocateCanvasNode(reference.nodeId)}><img src={reference.url} alt="" /><span>图{index + 1} · {compactReferenceName(reference.name)}</span><Focus size={12} /></button> : null
-        })}</div>}
+        {!!displayedContextReferences.length && renderContextReferences(displayedContextReferences, (nodeId) => props.onRemovePlanContextReference(plan.id, nodeId))}
         {!!(plan.invokedStylePresets?.length || plan.invokedStyleReferences?.length) && <div className="agent-plan-invoked-styles">
           {(plan.invokedStylePresets?.length ? plan.invokedStylePresets : [{
             id: 'legacy-invoked-style',
@@ -652,6 +658,29 @@ export function AgentPanel(props: Props) {
         {plan.status === 'ready' && <footer className="agent-plan-actions"><button type="button" className="agent-plan-cancel" onClick={() => props.onCancelPlan(plan.id)}>取消</button><button type="button" className="agent-plan-confirm" onClick={() => props.onConfirmPlan(plan.id)}><Check size={15} />确认生图</button></footer>}
       </section>
     )
+  }
+  const renderContextReferences = (references: AgentContextReference[], onRemove?: (nodeId: string) => void) => (
+    <div className="agent-plan-context-references">
+      <div className="agent-plan-context-heading"><span>关联素材</span>{references.some((reference) => reference.autoResolved) && <em><Sparkles size={11} />Agent 自动关联</em>}</div>
+      <div>{references.map((reference, index) => <div className={`agent-plan-context-reference is-${reference.kind}`} key={`${reference.kind}-${reference.nodeId}`}>
+        <button type="button" className="agent-context-locate" title={`${reference.name}${reference.resolutionReason ? ` · ${reference.resolutionReason}` : ''}`} onClick={() => props.onLocateCanvasNode(reference.nodeId)}>
+          {reference.url ? <img src={reference.url} alt="" /> : <span className="agent-context-text-icon"><FileText size={14} /></span>}
+          <span><strong>{reference.kind === 'image' ? `图${index + 1} · ` : ''}{compactReferenceName(reference.name, 14)}</strong>{reference.excerpt && <small>{reference.excerpt}</small>}{reference.autoResolved && <small>{reference.resolutionReason || '根据上下文自动关联'}</small>}</span>
+          <Focus size={12} />
+        </button>
+        {onRemove && <button type="button" className="agent-context-remove" aria-label={`移除关联 ${reference.name}`} title="从本次确认卡移除" onClick={() => onRemove(reference.nodeId)}><X size={12} /></button>}
+      </div>)}</div>
+    </div>
+  )
+  const renderTextPlan = (plan: AgentTextPlan) => {
+    if (plan.status !== 'ready') return <button type="button" key={plan.id} className={`agent-plan-card agent-text-plan-card is-${plan.status} is-collapsed`} disabled={!plan.nodeId} onClick={() => plan.nodeId && props.onLocateCanvasNode(plan.nodeId)}><span><FileText size={15} /><strong>{plan.status === 'completed' ? '文本已加入画布' : '文本方案已取消'}</strong></span>{plan.nodeId && <span className="agent-plan-locate"><Focus size={14} />定位画布</span>}</button>
+    return <section className="agent-plan-card agent-text-plan-card is-ready" key={plan.id}>
+      <header><span><FileText size={15} />文本生成确认</span><em>待确认</em></header>
+      <input className="agent-text-plan-title" value={plan.title} onChange={(event) => props.onTextPlanChange(plan.id, { title: event.target.value })} aria-label="编辑文本标题" />
+      <textarea value={plan.content} onChange={(event) => props.onTextPlanChange(plan.id, { content: event.target.value })} aria-label="编辑最终文本" />
+      {!!plan.contextReferences?.length && renderContextReferences(plan.contextReferences, (nodeId) => props.onRemoveTextPlanContextReference(plan.id, nodeId))}
+      <footer className="agent-plan-actions"><button type="button" className="agent-plan-cancel" onClick={() => props.onCancelTextPlan(plan.id)}>取消</button><button type="button" className="agent-plan-confirm" onClick={() => props.onConfirmTextPlan(plan.id)}><Check size={15} />确认并加入画布</button></footer>
+    </section>
   }
   const renderDirectionChoices = (plans: AgentImagePlan[]) => {
     const selectablePlans = plans.filter((plan) => plan.status === 'proposed' || plan.status === 'ready')
@@ -688,11 +717,17 @@ export function AgentPanel(props: Props) {
   }
   const messageIds = new Set(props.messages.map((message) => message.id))
   const plansByMessage = new Map<string, AgentImagePlan[]>()
+  const textPlansByMessage = new Map<string, AgentTextPlan[]>()
   props.plans.forEach((plan) => {
     if (!plan.assistantMessageId || !messageIds.has(plan.assistantMessageId)) return
     plansByMessage.set(plan.assistantMessageId, [...(plansByMessage.get(plan.assistantMessageId) ?? []), plan])
   })
+  props.textPlans.forEach((plan) => {
+    if (!plan.assistantMessageId || !messageIds.has(plan.assistantMessageId)) return
+    textPlansByMessage.set(plan.assistantMessageId, [...(textPlansByMessage.get(plan.assistantMessageId) ?? []), plan])
+  })
   const orphanPlans = props.plans.filter((plan) => !plan.assistantMessageId || !messageIds.has(plan.assistantMessageId))
+  const orphanTextPlans = props.textPlans.filter((plan) => !plan.assistantMessageId || !messageIds.has(plan.assistantMessageId))
   const renderAttachedPlans = (plans: AgentImagePlan[]) => (
     <>
       {renderDirectionChoices(plans)}
@@ -730,9 +765,11 @@ export function AgentPanel(props: Props) {
               {message.textNode?.nodeId && <button type="button" className="agent-message-to-canvas" onClick={() => props.onLocateCanvasNode(message.textNode!.nodeId!)}><Focus size={13} />查看整合文本节点</button>}
             </article>
             {renderAttachedPlans(plansByMessage.get(message.id) ?? [])}
+            {(textPlansByMessage.get(message.id) ?? []).map(renderTextPlan)}
           </Fragment>)}
           {props.busy && <div className="agent-thinking"><LoaderCircle size={14} className="is-spinning" /><span>正在理解你的创作目标...</span></div>}
           {renderAttachedPlans(orphanPlans)}
+          {orphanTextPlans.map(renderTextPlan)}
         </div>
       </div>
       <div className="agent-panel-composer">

@@ -105,7 +105,7 @@ import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, p
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentImagePlan, type AgentImageReference, type AgentMessage } from './agent'
+import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
 gsap.registerPlugin(useGSAP)
 
@@ -1827,6 +1827,16 @@ function App() {
   const [projectHomeSelectionMode, setProjectHomeSelectionMode] = useState(false)
   const [nodeSearchOpen, setNodeSearchOpen] = useState(false)
   const [nodeSearchQuery, setNodeSearchQuery] = useState('')
+  useEffect(() => {
+    if (!nodeSearchOpen) return
+    const closeNodeSearchOutside = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.node-search-panel, [data-node-search-trigger]')) return
+      setNodeSearchOpen(false)
+    }
+    document.addEventListener('pointerdown', closeNodeSearchOutside, true)
+    return () => document.removeEventListener('pointerdown', closeNodeSearchOutside, true)
+  }, [nodeSearchOpen])
   const [projectSearch, setProjectSearch] = useState('')
   const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' | 'home' } | null>(null)
   const [workspaceProjects, setWorkspaceProjects] = useState<WorkspaceProject[]>([])
@@ -1847,6 +1857,7 @@ function App() {
   const [agentBusy, setAgentBusy] = useState(false)
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([])
   const [agentPlans, setAgentPlans] = useState<AgentImagePlan[]>([])
+  const [agentTextPlans, setAgentTextPlans] = useState<AgentTextPlan[]>([])
   const [agentReferences, setAgentReferences] = useState<AgentImageReference[]>([])
   const [agentPendingReferences, setAgentPendingReferences] = useState<AgentImageReference[]>([])
   const [agentConversationId, setAgentConversationId] = useState(() => `agent-session-${crypto.randomUUID()}`)
@@ -2352,7 +2363,9 @@ function App() {
       const activeSession = sessions[0]
       setAgentConversationId(activeSession?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
       setAgentMessages(normalizeHistoricalAgentMessages((activeSession?.messages as AgentMessage[] | undefined) ?? []))
-      const interruptedPlans = (activeSession?.plans as AgentImagePlan[] | undefined) ?? []
+      const storedPlans = (activeSession?.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
+      const interruptedPlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
+      setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
       const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
       if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
       setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成在应用关闭时中断，请在对应图像节点中手动重试。' } : plan))
@@ -2494,7 +2507,7 @@ function App() {
 
   useEffect(() => {
     if (!toastMessage || transferBusy) return
-    const timer = window.setTimeout(() => setToastMessage(null), 1800)
+    const timer = window.setTimeout(() => setToastMessage(null), 3200)
     return () => window.clearTimeout(timer)
   }, [toastMessage, transferBusy])
 
@@ -2541,14 +2554,14 @@ function App() {
       canvasId: activeCanvasId,
       title,
       messages: agentMessages,
-      plans: agentPlans,
+      plans: [...agentPlans, ...agentTextPlans],
       selectedChatModelId: agentTextModelKey,
       selectedImageModelId: agentImageModelKey,
       createdAt: agentMessages[0]?.createdAt ?? now,
       updatedAt: now,
     })
     setAgentConversationOptions((current) => [{ id: agentConversationId, title, updatedAt: now }, ...current.filter((item) => item.id !== agentConversationId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
-  }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey])
+  }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey, agentTextPlans])
 
   useEffect(() => {
     if (!activeProjectId || !activeCanvasId) return
@@ -3572,10 +3585,13 @@ function App() {
     const sessions = await listAgentSessions(origin.canvasId)
     const session = sessions.find((item) => item.id === origin.sessionId)
     if (!session || session.projectId !== origin.projectId) return
+    const storedPlans = (session.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
+    const imagePlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
+    const textPlans = storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan)
     await saveAgentSession({
       ...session,
       messages: (session.messages as AgentMessage[] | undefined) ?? [],
-      plans: patch((session.plans as AgentImagePlan[] | undefined) ?? []),
+      plans: [...patch(imagePlans), ...textPlans],
       updatedAt: new Date().toISOString(),
     })
   }
@@ -3638,7 +3654,9 @@ function App() {
     setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
     setAgentConversationId(session?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
     setAgentMessages(normalizeHistoricalAgentMessages((session?.messages as AgentMessage[] | undefined) ?? []))
-    const interruptedPlans = (session?.plans as AgentImagePlan[] | undefined) ?? []
+    const storedPlans = (session?.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
+    const interruptedPlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
+    setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
     const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
     if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
     setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
@@ -3680,6 +3698,7 @@ function App() {
     setAgentConversationId(id)
     setAgentMessages([])
     setAgentPlans([])
+    setAgentTextPlans([])
     setAgentReferences([])
     setAgentPendingReferences([])
     setAgentCanvasPicking(false)
@@ -3700,10 +3719,12 @@ function App() {
     if (!session) return
     setAgentConversationId(session.id)
     setAgentMessages(normalizeHistoricalAgentMessages((session.messages as AgentMessage[] | undefined) ?? []))
-    const plans = (session.plans as AgentImagePlan[] | undefined) ?? []
+    const storedPlans = (session.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
+    const plans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
     setAgentPlans(plans.map((plan) => plan.status === 'running'
       ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' }
       : plan))
+    setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
     setAgentReferences([])
     setAgentPendingReferences([])
     setAgentCanvasPicking(false)
@@ -3726,7 +3747,9 @@ function App() {
     if (next) {
       setAgentConversationId(next.id)
       setAgentMessages(normalizeHistoricalAgentMessages((next.messages as AgentMessage[] | undefined) ?? []))
-      setAgentPlans(((next.plans as AgentImagePlan[] | undefined) ?? []).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+      const storedPlans = (next.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
+      setAgentPlans(storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+      setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
       setAgentTextModelKey(next.selectedChatModelId ?? agentTextModelKey)
       setAgentImageModelKey(next.selectedImageModelId ?? agentImageModelKey)
     } else {
@@ -3734,6 +3757,7 @@ function App() {
       setAgentConversationId(id)
       setAgentMessages([])
       setAgentPlans([])
+      setAgentTextPlans([])
       setAgentConversationOptions([{ id, title: '新的对话', updatedAt: new Date().toISOString() }])
     }
     setAgentReferences([])
@@ -3899,7 +3923,7 @@ function App() {
         canvasId: activeCanvasId,
         title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
         messages: agentMessages,
-        plans: agentPlans,
+        plans: [...agentPlans, ...agentTextPlans],
         selectedChatModelId: agentTextModelKey,
         selectedImageModelId: agentImageModelKey,
         createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
@@ -5222,6 +5246,82 @@ function App() {
     return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
   })
 
+  const resolveAgentContextReferences = (content: string, explicitReferences: AgentImageReference[]) => {
+    const explicitContexts: AgentContextReference[] = explicitReferences.map((reference) => ({
+      ...reference,
+      kind: 'image',
+    }))
+    const hasContextualPointer = /(?:上面|前面|刚才|之前|上一(?:张|段|个|版)|那个|这个|它|其|图\s*\d+|图片\s*\d+|参考图\s*\d+|logo|标志|图标|海报|文案|文字|标题|脚本|提案)/i.test(content)
+    if (!hasContextualPointer) return { imageReferences: explicitReferences, contextReferences: explicitContexts }
+
+    const nodeContexts = [...nodes].reverse().flatMap((node): AgentContextReference[] => {
+      if ((node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl) {
+        return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), kind: 'image', url: node.data.imageUrl }]
+      }
+      if (node.data.kind === 'text') {
+        const text = (node.data.body || node.data.promptText || '').trim()
+        if (text) return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), kind: 'text', excerpt: text.slice(0, 180) }]
+      }
+      return []
+    })
+    const recentMessageImages = [...agentMessages].reverse().flatMap((message) => [...(message.references ?? [])].reverse())
+    const recentPlanImages = [...agentPlans].reverse().flatMap((plan) => [...(plan.references ?? [])].reverse())
+    const selectedContexts = selectedNodeIds.flatMap((id) => nodeContexts.filter((reference) => reference.nodeId === id))
+    const orderedImages = Array.from(new Map([...recentMessageImages, ...recentPlanImages, ...agentImageCandidates.slice().reverse()].map((reference) => [reference.nodeId, reference])).values())
+    const orderedContexts = Array.from(new Map([...selectedContexts, ...nodeContexts].map((reference) => [reference.nodeId, reference])).values())
+    const ordinal = content.match(/(?:参考图|图片|图)\s*([1-9]\d*)/i)
+    let resolved: AgentContextReference | undefined
+    let reason = ''
+    if (ordinal) {
+      const index = Number(ordinal[1]) - 1
+      const numberedSource = [...agentMessages].reverse().find((message) => message.references?.length)?.references
+        ?? [...agentPlans].reverse().find((plan) => plan.references?.length)?.references
+      const match = numberedSource?.[index]
+      if (match) {
+        resolved = { ...match, kind: 'image' }
+        reason = `匹配“${ordinal[0]}”`
+      }
+    }
+    if (!resolved && /(?:logo|标志|图标)/i.test(content)) {
+      const match = orderedContexts.find((reference) => /(?:logo|标志|图标)/i.test(`${reference.name} ${reference.excerpt ?? ''}`))
+      if (match) {
+        resolved = match
+        reason = '按名称/内容匹配 logo'
+      }
+    }
+    if (!resolved && /(?:文案|文字|标题|脚本|提案|上一段)/i.test(content)) {
+      resolved = orderedContexts.find((reference) => reference.kind === 'text')
+      reason = resolved ? '匹配最近的文本节点' : ''
+    }
+    if (!resolved && /(?:图|图片|海报|上一张)/i.test(content)) {
+      const match = orderedImages[0]
+      if (match) {
+        resolved = { ...match, kind: 'image' }
+        reason = '匹配最近提及的图片'
+      }
+    }
+    if (!resolved && /(?:上面|前面|刚才|之前|那个|这个|它|其)/i.test(content)) {
+      const recentReferencedImage = orderedImages.find((reference) => recentMessageImages.some((item) => item.nodeId === reference.nodeId) || recentPlanImages.some((item) => item.nodeId === reference.nodeId))
+      resolved = selectedContexts.length === 1
+        ? selectedContexts[0]
+        : recentReferencedImage
+          ? { ...recentReferencedImage, kind: 'image' }
+          : nodeContexts.length === 1
+            ? nodeContexts[0]
+            : undefined
+      reason = resolved ? (selectedContexts.length === 1 ? '匹配当前选中节点' : recentReferencedImage ? '匹配最近提及的对象' : '画布中唯一可关联对象') : ''
+    }
+    if (!resolved || explicitContexts.some((reference) => reference.nodeId === resolved?.nodeId)) {
+      return { imageReferences: explicitReferences, contextReferences: explicitContexts }
+    }
+    const autoContext = { ...resolved, autoResolved: true, resolutionReason: reason }
+    const contextReferences = [...explicitContexts, autoContext]
+    const imageReferences = autoContext.kind === 'image' && autoContext.url
+      ? [...explicitReferences, { nodeId: autoContext.nodeId, name: autoContext.name, url: autoContext.url, autoResolved: true, resolutionReason: reason }]
+      : explicitReferences
+    return { imageReferences, contextReferences }
+  }
+
   const locateAgentCanvasNode = (nodeId: string) => {
     const node = nodes.find((item) => item.id === nodeId)
     if (!node) {
@@ -5262,6 +5362,9 @@ function App() {
     }
     setAgentOpen(true)
     setAgentCanvasPicking(false)
+    const resolvedContext = resolveAgentContextReferences(content, messageReferences)
+    messageReferences = resolvedContext.imageReferences
+    const resolvedContextReferences = resolvedContext.contextReferences
     const agentReferenceCount = messageReferences.length
     if (agentReferenceCount > 16) {
       setToastMessage(`Agent 参考图最多 16 张，当前共 ${agentReferenceCount} 张`)
@@ -5303,6 +5406,9 @@ function App() {
     try {
       const images = await Promise.all(sentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.role === 'assistant' ? normalizeAgentMessageContent(message.content) : message.content}`).join('\n')
+      const resolvedContextGuide = resolvedContextReferences.length
+        ? `系统已为本轮解析出这些上下文对象：${resolvedContextReferences.map((reference) => `${reference.kind === 'image' ? '图片' : '文本'}“${reference.name}”${reference.excerpt ? `（内容摘要：${reference.excerpt}）` : ''}${reference.autoResolved ? `，自动关联依据：${reference.resolutionReason}` : ''}`).join('；')}。必须按这些对象理解用户指代；如语义仍不唯一，在 reply 中追问，不要自行替换成其他对象。`
+        : '本轮没有解析出明确的上下文对象；遇到“那个/它/上面”等无法唯一落到对象的指代时，必须先追问。'
       const agentReferenceGuide = buildNumberedReferenceGuide(sentReferences)
       const numberedUserRequest = numberAgentReferenceMentions(content, sentReferences)
       const referenceUsageGuide = sentReferences.length
@@ -5313,7 +5419,7 @@ function App() {
       const directPlanGuide = directImagePlanRequested
         ? '用户本次明确不要再选择多个方案。若上下文中的画面目标已经足够清楚，直接把用户要求整合成唯一一项 imagePlans，供界面创建待确认卡；不要再追问创作方向，也不要返回多个备选。仍然不得直接声称已经生图。'
         : '用户未明确跳过方案选择时，按正常流程提出可选方向。'
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。${referenceUsageGuide ? `\n\n${referenceUsageGuide}` : ''}\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。${resolvedContextGuide}${referenceUsageGuide ? `\n\n${referenceUsageGuide}` : ''}\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images, signal: controller.signal })
       if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       let parsed = parseAgentReply(raw)
@@ -5333,13 +5439,11 @@ function App() {
       if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
         throw new Error(`Agent 未能返回要求的 ${requestedPlanCount} 个方案，请重试一次`)
       }
-      const textNodeId = parsed.textNode ? createAgentTextNode(parsed.textNode.content, parsed.textNode.title) : null
       const assistantMessage: AgentMessage = {
         id: `agent-message-${crypto.randomUUID()}`,
         role: 'assistant',
         content: parsed.reply || '我已经整理好了。',
         createdAt: new Date().toISOString(),
-        textNode: parsed.textNode ? { ...parsed.textNode, nodeId: textNodeId ?? undefined } : undefined,
       }
       setAgentMessages((current) => [...current, assistantMessage])
       parsedPlans = parsedPlans.slice(0, requestedPlanCount).map((draft) => ({
@@ -5357,6 +5461,7 @@ function App() {
           prompt: draft.prompt,
           referenceNodeIds: sentReferences.map((item) => item.nodeId),
           references: sentReferences,
+          contextReferences: resolvedContextReferences,
           invokedStyleReferences,
           styleInvocationWord: styleInvocationWords.length ? styleInvocationWords.join('、') : undefined,
           invokedStylePresets,
@@ -5369,6 +5474,17 @@ function App() {
           assistantMessageId: assistantMessage.id,
           createdAt,
         }))])
+      }
+      if (parsed.textNode) {
+        setAgentTextPlans((current) => [...current, {
+          id: `agent-text-plan-${crypto.randomUUID()}`,
+          status: 'ready',
+          title: parsed.textNode!.title,
+          content: parsed.textNode!.content,
+          contextReferences: resolvedContextReferences,
+          assistantMessageId: assistantMessage.id,
+          createdAt: new Date().toISOString(),
+        }])
       }
       setAgentReferences([])
     } catch (error) {
@@ -5850,6 +5966,21 @@ function App() {
       width: node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : node.data.kind === 'upload' ? 260 : 275),
       height: node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : node.data.kind === 'upload' ? 230 : 126),
     }
+  }
+
+  const confirmAgentTextPlan = (planId: string) => {
+    const plan = agentTextPlans.find((item) => item.id === planId)
+    if (!plan || plan.status !== 'ready' || !plan.content.trim()) return
+    const nodeId = createAgentTextNode(plan.content, plan.title)
+    if (!nodeId) {
+      setToastMessage('文本节点创建失败，请重试')
+      return
+    }
+    setAgentTextPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'completed', nodeId } : item))
+    setAgentMessages((current) => current.map((message) => message.id === plan.assistantMessageId
+      ? { ...message, textNode: { title: plan.title, content: plan.content, nodeId } }
+      : message))
+    setToastMessage('文本已确认并加入画布')
   }
 
   const reconcileNodeGroupMembership = (nodeId: string, droppedPosition: { x: number; y: number }) => {
@@ -7515,6 +7646,7 @@ function App() {
             <PanelsTopLeft size={18} />
           </button>
           <button
+            data-node-search-trigger
             className={nodeSearchOpen ? 'is-active' : ''}
             aria-label="搜索节点"
             data-tooltip="搜索节点"
@@ -7639,6 +7771,7 @@ function App() {
               <AgentPanel
                 messages={agentMessages}
                 plans={agentPlans}
+                textPlans={agentTextPlans}
                 references={agentReferences}
                 pendingReferences={agentPendingReferences}
                 candidates={agentImageCandidates}
@@ -7686,6 +7819,16 @@ function App() {
                 onSelectPlanOptions={selectAgentPlanOptions}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
                 onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'proposed' } : plan))}
+                onRemovePlanContextReference={(id, nodeId) => setAgentPlans((current) => current.map((plan) => plan.id === id ? {
+                  ...plan,
+                  contextReferences: (plan.contextReferences ?? []).filter((reference) => reference.nodeId !== nodeId),
+                  referenceNodeIds: plan.referenceNodeIds.filter((referenceId) => referenceId !== nodeId),
+                  references: (plan.references ?? []).filter((reference) => reference.nodeId !== nodeId),
+                } : plan))}
+                onTextPlanChange={(id, patch) => setAgentTextPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
+                onConfirmTextPlan={confirmAgentTextPlan}
+                onCancelTextPlan={(id) => setAgentTextPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'cancelled' } : plan))}
+                onRemoveTextPlanContextReference={(id, nodeId) => setAgentTextPlans((current) => current.map((plan) => plan.id === id ? { ...plan, contextReferences: (plan.contextReferences ?? []).filter((reference) => reference.nodeId !== nodeId) } : plan))}
                 onLocateCanvasNode={locateAgentCanvasNode}
               />
             </motion.div>

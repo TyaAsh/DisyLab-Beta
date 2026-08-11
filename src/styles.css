@@ -1797,7 +1797,7 @@ button { border: 0; cursor: pointer; }
 
 .canvas-toast {
   position: fixed;
-  z-index: 90;
+  z-index: 270;
   left: 50%;
   bottom: 24px;
   min-height: 38px;
@@ -2372,6 +2372,23 @@ button { border: 0; cursor: pointer; }
 .agent-plan-reference img { width: 28px; height: 28px; border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent); border-radius: 8px; object-fit: cover; background: #0b0e0f; }
 .agent-plan-reference span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-plan-reference svg { flex: none; color: color-mix(in srgb, var(--accent) 72%, var(--muted)); }
+.agent-plan-context-references { margin-top: 10px; padding: 8px; border: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); border-radius: 11px; background: rgba(0,0,0,.12); }
+.agent-plan-context-heading { min-height: 22px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 8px; font-weight: 720; }
+.agent-plan-context-heading em { display: inline-flex; align-items: center; gap: 4px; color: color-mix(in srgb, var(--accent) 78%, var(--ink)); font-style: normal; }
+.agent-plan-context-references > div:last-child { display: grid; gap: 6px; }
+.agent-plan-context-reference { width: 100%; min-width: 0; min-height: 43px; position: relative; border: 1px solid color-mix(in srgb, var(--ink) 9%, transparent); border-radius: 9px; color: var(--ink); background: color-mix(in srgb, #080b0c 76%, transparent); }
+.agent-plan-context-reference:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, #0c1011); }
+.agent-context-locate { width: 100%; min-width: 0; min-height: 41px; padding: 5px 30px 5px 5px; display: grid; grid-template-columns: 32px minmax(0,1fr) 14px; align-items: center; gap: 8px; color: inherit; background: transparent; text-align: left; }
+.agent-context-remove { position: absolute; z-index: 2; right: 5px; top: 50%; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); background: rgba(255,255,255,.055); transform: translateY(-50%); }
+.agent-context-remove:hover { color: #ffaaa5; background: rgba(239,102,94,.14); }
+.agent-plan-context-reference img, .agent-context-text-icon { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; object-fit: cover; color: #d5bb80; background: rgba(183,138,70,.14); }
+.agent-context-locate > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.agent-plan-context-reference strong, .agent-plan-context-reference small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-plan-context-reference strong { font-size: 9px; }.agent-plan-context-reference small { color: var(--muted); font-size: 7px; }
+.agent-context-locate > svg { color: var(--accent); }
+.agent-text-plan-card { border-color: color-mix(in srgb, #d5bb80 32%, var(--line)); background: linear-gradient(145deg, rgba(183,138,70,.08), rgba(112,181,255,.035)); }
+.agent-text-plan-title { width: 100%; height: 34px; margin-top: 10px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; outline: 0; color: var(--ink); background: rgba(0,0,0,.18); font-weight: 740; }
+.agent-text-plan-title:focus, .agent-text-plan-card textarea:focus { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
 .agent-plan-invoked-styles { margin-top: 8px; display: grid; gap: 5px; }
 .agent-plan-invoked-style { padding: 7px 8px; border: 1px solid var(--accent-border); border-radius: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--accent-soft); }
 .agent-plan-invoked-style > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; color: var(--accent); font-size: 9px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }

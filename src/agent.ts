@@ -24,6 +24,18 @@ export type AgentImageReference = {
   nodeId: string
   name: string
   url: string
+  autoResolved?: boolean
+  resolutionReason?: string
+}
+
+export type AgentContextReference = {
+  nodeId: string
+  name: string
+  kind: 'image' | 'text'
+  url?: string
+  excerpt?: string
+  autoResolved?: boolean
+  resolutionReason?: string
 }
 
 export type AgentStyleReference = {
@@ -46,6 +58,7 @@ export type AgentImagePlan = {
   prompt: string
   referenceNodeIds: string[]
   references?: AgentImageReference[]
+  contextReferences?: AgentContextReference[]
   invokedStyleReferences?: AgentStyleReference[]
   styleInvocationWord?: string
   invokedStylePresets?: AgentInvokedStylePreset[]
@@ -60,6 +73,17 @@ export type AgentImagePlan = {
   collapsed?: boolean
   nodeId?: string
   error?: string
+}
+
+export type AgentTextPlan = {
+  id: string
+  status: 'ready' | 'completed' | 'cancelled'
+  title: string
+  content: string
+  contextReferences?: AgentContextReference[]
+  assistantMessageId?: string
+  createdAt?: string
+  nodeId?: string
 }
 
 export type AgentConversation = {
