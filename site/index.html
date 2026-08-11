@@ -31,6 +31,10 @@
 <body>
   <div class="page-noise" aria-hidden="true"></div>
   <div class="cursor-glow" aria-hidden="true"></div>
+  <div class="ai-cursor" aria-hidden="true">
+    <i class="ai-cursor-ring"></i>
+    <i class="ai-cursor-core"></i>
+  </div>
 
   <div class="language-switcher" role="group" aria-label="语言 / Language">
     <button type="button" data-locale="zh-CN" aria-pressed="true">简</button>
@@ -39,7 +43,7 @@
   </div>
 
   <nav class="dock" aria-label="页面导航">
-    <a class="dock-brand" href="#top" aria-label="返回顶部">
+    <a class="dock-brand" href="#top" data-section-link aria-label="返回顶部">
       <img src="./assets/disy-logo.png" alt="" />
       <span>DisyLab</span>
     </a>

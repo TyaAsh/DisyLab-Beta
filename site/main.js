@@ -75,14 +75,45 @@ const finePointer = window.matchMedia("(pointer: fine)").matches;
 function initCursorGlow() {
   if (!finePointer || reducedMotion) return;
   const glow = document.querySelector(".cursor-glow");
+  const cursor = document.querySelector(".ai-cursor");
+  const ring = cursor?.querySelector(".ai-cursor-ring");
+  const core = cursor?.querySelector(".ai-cursor-core");
   if (!glow) return;
   if (window.gsap) {
     const moveX = gsap.quickTo(glow, "x", { duration: .55, ease: "power3.out" });
     const moveY = gsap.quickTo(glow, "y", { duration: .55, ease: "power3.out" });
+    const ringX = ring && gsap.quickTo(ring, "x", { duration: .18, ease: "power3.out" });
+    const ringY = ring && gsap.quickTo(ring, "y", { duration: .18, ease: "power3.out" });
+    const coreX = core && gsap.quickTo(core, "x", { duration: .045, ease: "power1.out" });
+    const coreY = core && gsap.quickTo(core, "y", { duration: .045, ease: "power1.out" });
+    if (ring && core) {
+      gsap.set([ring, core], { xPercent: -50, yPercent: -50 });
+      gsap.set(ring, { rotation: 45 });
+      document.documentElement.classList.add("ai-cursor-ready");
+    }
     window.addEventListener("pointermove", (event) => {
       moveX(event.clientX);
       moveY(event.clientY);
+      ringX?.(event.clientX);
+      ringY?.(event.clientY);
+      coreX?.(event.clientX);
+      coreY?.(event.clientY);
+      cursor?.classList.add("is-visible");
     }, { passive: true });
+    document.addEventListener("pointerover", (event) => {
+      const interactive = event.target.closest?.("a, button, [role='button']");
+      cursor?.classList.toggle("is-interactive", Boolean(interactive));
+      if (!ring || !core) return;
+      gsap.to(ring, { scale: interactive ? 1.52 : 1, rotation: interactive ? 90 : 45, duration: .28, ease: "power3.out", overwrite: "auto" });
+      gsap.to(core, { scale: interactive ? .72 : 1, duration: .2, ease: "power3.out", overwrite: "auto" });
+    }, { passive: true });
+    window.addEventListener("pointerdown", () => {
+      if (!ring) return;
+      gsap.fromTo(ring, { scale: .72 }, { scale: cursor?.classList.contains("is-interactive") ? 1.52 : 1, duration: .38, ease: "back.out(2.4)", overwrite: "auto" });
+      cursor?.classList.add("is-clicking");
+    }, { passive: true });
+    window.addEventListener("pointerup", () => cursor?.classList.remove("is-clicking"), { passive: true });
+    document.documentElement.addEventListener("mouseleave", () => cursor?.classList.remove("is-visible"));
     return;
   }
   window.addEventListener("pointermove", (event) => {
@@ -132,19 +163,16 @@ function initActiveNavigation() {
   const links = [...document.querySelectorAll("[data-section-link]")];
   const sections = [...document.querySelectorAll("[data-section]")];
   if (!sections.length) return;
-  links.forEach((link) => {
-    link.addEventListener("click", (event) => {
-      const target = document.querySelector(link.getAttribute("href"));
-      if (!target) return;
-      event.preventDefault();
-      target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
-    });
-  });
   const observer = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
       const sectionId = entry.target.dataset.section;
-      links.forEach((link) => link.classList.toggle("is-active", link.getAttribute("href") === `#${sectionId}`));
+      links.forEach((link) => {
+        const active = link.getAttribute("href") === `#${sectionId}`;
+        link.classList.toggle("is-active", active);
+        if (active) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      });
       const index = sections.indexOf(entry.target);
       document.documentElement.style.setProperty("--rail-progress", sections.length > 1 ? index / (sections.length - 1) : 0);
     });
@@ -199,24 +227,6 @@ function initMotion() {
       .to(".canvas-cursor", { x: 0, y: 0, autoAlpha: .35, duration: .55, ease: "power2.inOut" }, "source+=2.85")
       .set(".canvas-cursor", { autoAlpha: 1 });
 
-    const closingLoops = [
-      gsap.to(".logo-orbit-a", { rotation: "+=360", duration: 14, repeat: -1, ease: "none", paused: true }),
-      gsap.to(".logo-orbit-b", { rotation: "-=360", duration: 19, repeat: -1, ease: "none", paused: true }),
-      gsap.to(".logo-shell", { y: -7, rotation: 2.5, scale: 1.035, duration: 2.4, repeat: -1, yoyo: true, ease: "sine.inOut", paused: true }),
-      gsap.fromTo(".logo-scan", { y: -32, autoAlpha: 0 }, { y: 32, autoAlpha: 1, duration: 1.8, repeat: -1, repeatDelay: 1.15, ease: "power2.inOut", paused: true }),
-      gsap.to(".logo-glow", { scale: 1.15, autoAlpha: .52, duration: 2.8, repeat: -1, yoyo: true, ease: "sine.inOut", paused: true })
-    ];
-    const setClosingMotion = (method) => closingLoops.forEach((animation) => animation[method]());
-    ScrollTrigger.create({
-      trigger: ".closing",
-      start: "top 82%",
-      end: "bottom 18%",
-      onEnter: () => setClosingMotion("play"),
-      onEnterBack: () => setClosingMotion("play"),
-      onLeave: () => setClosingMotion("pause"),
-      onLeaveBack: () => setClosingMotion("pause")
-    });
-
     if (desktop) {
       const heroParallax = gsap.timeline({
         scrollTrigger: { trigger: ".hero", start: "top top", end: "bottom top", scrub: .9 }
@@ -224,7 +234,6 @@ function initMotion() {
       heroParallax
         .to(".hero-copy", { yPercent: -13, autoAlpha: .35, ease: "none" }, 0)
         .to(".app-window", { yPercent: 13, scale: .965, ease: "none" }, 0)
-        .to(".app-window > img", { yPercent: 5, scale: 1.08, ease: "none" }, 0)
         .to(".aurora-a", { yPercent: 38, xPercent: -12, ease: "none" }, 0)
         .to(".aurora-b", { yPercent: -28, xPercent: 16, ease: "none" }, 0)
         .to(".orbit-one", { rotation: 55, scale: 1.08, ease: "none" }, 0)
