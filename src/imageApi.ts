@@ -300,20 +300,16 @@ function waitForDelay(delay: number, signal?: AbortSignal) {
   })
 }
 
-function grsaiFallbackModels(baseUrl: string): RemoteModel[] | null {
-  if (!/^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(baseUrl)) return null
-  return [
-    { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', capability: 'text' },
-    { id: 'gpt-5.4', name: 'GPT 5.4', capability: 'text' },
-    { id: 'gpt-5.5', name: 'GPT 5.5', capability: 'text' },
-    { id: 'nano-banana-pro', name: 'Nano Banana Pro', capability: 'image' },
-    { id: 'nano-banana-2-lite', name: 'Nano Banana 2 Lite', capability: 'image' },
-    { id: 'nano-banana-2', name: 'Nano Banana 2', capability: 'image' },
-    { id: 'nano-banana-fast', name: 'Nano Banana Fast', capability: 'image' },
-    { id: 'gpt-image-2-vip', name: 'GPT Image 2 VIP', capability: 'image' },
-    { id: 'gpt-image-2', name: 'GPT Image 2', capability: 'image' },
-    { id: 'veo3', name: 'Veo 3', capability: 'video' },
-  ]
+function payloadMarksUnsupported(payload: unknown) {
+  const text = JSON.stringify(payload).toLowerCase()
+  return /not[_ -]?support|unsupported|disable|disabled|closed|offline|unavailable|deprecated|retired|inactive|not[_ -]?found|不存在|不支持|已下线|关闭|不可用|停用|废弃/.test(text)
+}
+
+function readModelAvailability(item: Record<string, unknown>) {
+  if (item.available === false || item.enabled === false || item.is_available === false || item.isAvailable === false) return false
+  if (item.disabled === true || item.deprecated === true || item.retired === true) return false
+  const statusValues = [item.status, item.state, item.availability].filter((value) => value !== undefined)
+  return !payloadMarksUnsupported(statusValues)
 }
 
 async function readError(response: Response) {
@@ -363,7 +359,6 @@ export function normalizeGenerationError(error: unknown) {
 export function inferModelCapability(modelId: string): ModelCapability {
   if (/image|seedream|imagen|flux|banana|dall-e|gpt-image/i.test(modelId)) return 'image'
   if (/video|seedance|sora|veo|kling|runway|hailuo/i.test(modelId)) return 'video'
-  if (/tts|speech|audio|voice|whisper/i.test(modelId)) return 'audio'
   return 'text'
 }
 
@@ -375,41 +370,165 @@ function readDeclaredCapability(item: Record<string, unknown>, modelId: string):
     .toLowerCase()
   if (/image|vision-generation|text-to-image/.test(declared)) return 'image'
   if (/video|text-to-video|image-to-video/.test(declared)) return 'video'
-  if (/audio|speech|voice|tts|whisper/.test(declared)) return 'audio'
   if (/text|chat|completion|language/.test(declared)) return 'text'
   return inferModelCapability(modelId)
 }
 
-export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'>): Promise<RemoteModel[]> {
-  const fallbackModels = grsaiFallbackModels(normalizedApiBaseUrl(settings.baseUrl))
-  let response: Response
-  try {
-    response = await fetch(endpoint(settings.baseUrl, 'models'), {
-      headers: { Authorization: `Bearer ${settings.apiKey}` },
-    })
-  } catch (error) {
-    if (fallbackModels) return fallbackModels
-    throw error
-  }
-  if (!response.ok) {
-    if (fallbackModels) return fallbackModels
-    throw new Error(await readError(response))
-  }
-  const payload = await response.json() as unknown
-  const container = payload && typeof payload === 'object' ? payload as { data?: unknown[]; models?: unknown[] } : {}
+// GRS AI does not expose an OpenAI-compatible GET /v1/models endpoint. Keep its
+// catalog local so the connection remains usable in the browser; the list mirrors
+// the provider's public model page and can be replaced by a server-side catalog
+// proxy when one is deployed.
+const GRSAI_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
+  { id: 'gpt-image-2', name: 'GPT Image 2', capability: 'image' },
+  { id: 'gpt-image-2-vip', name: 'GPT Image 2 VIP', capability: 'image' },
+  { id: 'nano-banana-pro', name: 'Nano Banana Pro', capability: 'image' },
+  { id: 'nano-banana-2', name: 'Nano Banana 2', capability: 'image' },
+  { id: 'nano-banana-2-lite', name: 'Nano Banana 2 Lite', capability: 'image' },
+  { id: 'nano-banana-pro-vt', name: 'Nano Banana Pro VT', capability: 'image' },
+  { id: 'nano-banana-fast', name: 'Nano Banana Fast', capability: 'image' },
+  { id: 'nano-banana-2-cl', name: 'Nano Banana 2 CL', capability: 'image' },
+  { id: 'nano-banana-pro-cl', name: 'Nano Banana Pro CL', capability: 'image' },
+  { id: 'nano-banana-2-2k-cl', name: 'Nano Banana 2 2K CL', capability: 'image' },
+  { id: 'nano-banana-pro-4k-vip', name: 'Nano Banana Pro 4K VIP', capability: 'image' },
+  { id: 'nano-banana-pro-vip', name: 'Nano Banana Pro VIP', capability: 'image' },
+  { id: 'nano-banana-2-4k-cl', name: 'Nano Banana 2 4K CL', capability: 'image' },
+  { id: 'gpt-5.4', name: 'GPT 5.4', capability: 'text' },
+  { id: 'gpt-5.5', name: 'GPT 5.5', capability: 'text' },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', capability: 'text' },
+  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', capability: 'text' },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', capability: 'text' },
+  { id: 'gemini-3-flash', name: 'Gemini 3 Flash', capability: 'text' },
+  { id: 'gemini-3-pro', name: 'Gemini 3 Pro', capability: 'text' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', capability: 'text' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', capability: 'text' },
+]
+
+const APIYI_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
+  { id: 'doubao-seedance-2-0-260128', name: 'Doubao Seedance 2.0', capability: 'video' },
+  { id: 'doubao-seedance-2-0-fast-260128', name: 'Doubao Seedance 2.0 Fast', capability: 'video' },
+  { id: 'doubao-seedance-2-0-mini-260615', name: 'Doubao Seedance 2.0 Mini', capability: 'video' },
+]
+
+const ARK_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
+  { id: 'doubao-seedance-2-0-260128', name: 'Doubao Seedance 2.0', capability: 'video' },
+  { id: 'doubao-seedance-2-0-fast-260128', name: 'Doubao Seedance 2.0 Fast', capability: 'video' },
+  { id: 'doubao-seedance-2-0-mini-260615', name: 'Doubao Seedance 2.0 Mini', capability: 'video' },
+  { id: 'doubao-seedance-1-5-pro-251215', name: 'Doubao Seedance 1.5 Pro', capability: 'video' },
+  { id: 'doubao-seedream-5-0-pro-260628', name: 'Doubao Seedream 5.0 Pro', capability: 'image' },
+]
+
+const OPENAI_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
+  { id: 'sora-2', name: 'Sora 2', capability: 'video' },
+  { id: 'sora-2-pro', name: 'Sora 2 Pro', capability: 'video' },
+]
+
+// Generic registry so any vendor can declare models that its standard OpenAI-compatible
+// GET /v1/models endpoint will not enumerate (typically video/image models behind a
+// dedicated endpoint). Vendors flagged `catalogOnly` skip the live request entirely.
+type VendorModelSupplement = {
+  match: (normalizedBaseUrl: string) => boolean
+  supplementalModels: RemoteModel[]
+  catalogOnly?: boolean
+}
+
+const VENDOR_MODEL_SUPPLEMENTS: VendorModelSupplement[] = [
+  { match: isGrsaiBaseUrl, supplementalModels: GRSAI_LOCAL_MODEL_MANIFEST, catalogOnly: true },
+  { match: (url) => /^https?:\/\/(?:api\.apiyi\.com|apiyi\.com|[^/]*\.apiyi\.com)(?:\/|$)/i.test(url), supplementalModels: APIYI_LOCAL_MODEL_MANIFEST },
+  { match: (url) => /^https?:\/\/[^/]*ark\.cn-beijing\.volces\.com(?:\/|$)/i.test(url), supplementalModels: ARK_LOCAL_MODEL_MANIFEST },
+  { match: (url) => /^https?:\/\/api\.openai\.com(?:\/|$)/i.test(url), supplementalModels: OPENAI_LOCAL_MODEL_MANIFEST },
+]
+
+const GRSAI_CATALOG_PROXY_PATH = '/api/model-catalog?provider=grsai'
+
+function parseRemoteModelCatalog(payload: unknown): RemoteModel[] {
+  const container = payload && typeof payload === 'object' ? payload as { data?: unknown[]; models?: unknown[]; object?: string } : {}
   const rows = Array.isArray(payload) ? payload : container.data ?? container.models ?? []
   const models = rows
     .map((model) => {
       if (typeof model === 'string') return { id: model.trim(), name: model.trim(), capability: inferModelCapability(model) }
       if (!model || typeof model !== 'object') return { id: '', name: '', capability: 'text' as const }
       const item = model as Record<string, unknown>
-      const id = String(item.id ?? item.model ?? item.model_id ?? '').trim()
-      const name = String(item.name ?? item.display_name ?? item.displayName ?? id).trim()
+      const id = String(item.id ?? item.model ?? item.model_id ?? item.slug ?? item.key ?? '').trim()
+      const name = String(item.name ?? item.display_name ?? item.displayName ?? item.title ?? id).trim()
+      if (!readModelAvailability(item)) return { id: '', name: '', capability: 'text' as const }
       return { id, name, capability: readDeclaredCapability(item, id) }
     })
     .filter((model) => model.id)
-  return Array.from(new Map([...models, ...(fallbackModels ?? [])].map((model) => [model.id, model])).values())
+  return Array.from(new Map(models.map((model) => [model.id, model])).values())
     .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+async function fetchGrsaiProxyCatalog(): Promise<RemoteModel[] | null> {
+  try {
+    const response = await fetch(GRSAI_CATALOG_PROXY_PATH)
+    if (!response.ok || !/application\/json/i.test(response.headers.get('content-type') ?? '')) return null
+    const models = parseRemoteModelCatalog(await response.json() as unknown)
+    return models.length ? models : null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'>): Promise<RemoteModel[]> {
+  const normalizedBase = normalizedApiBaseUrl(settings.baseUrl)
+  const supplement = VENDOR_MODEL_SUPPLEMENTS.find((entry) => entry.match(normalizedBase))
+  // Vendors flagged `catalogOnly` (GRS AI) keep the original behavior: never hit a
+  // standard models endpoint, fall back to the local manifest.
+  if (supplement?.catalogOnly) {
+    return await fetchGrsaiProxyCatalog()
+      ?? [...GRSAI_LOCAL_MODEL_MANIFEST].sort((left, right) => left.name.localeCompare(right.name))
+  }
+  let response: Response
+  try {
+    response = await fetch(endpoint(settings.baseUrl, 'models'), {
+      headers: { Authorization: `Bearer ${settings.apiKey}` },
+    })
+  } catch (error) {
+    if (supplement) return [...supplement.supplementalModels].sort((left, right) => left.name.localeCompare(right.name))
+    throw error
+  }
+  if (!response.ok) {
+    if (supplement) return [...supplement.supplementalModels].sort((left, right) => left.name.localeCompare(right.name))
+    throw new Error(await readError(response))
+  }
+  const live = parseRemoteModelCatalog(await response.json() as unknown)
+  if (!supplement) return live
+  const liveIds = new Set(live.map((model) => model.id))
+  const merged = [...live]
+  for (const model of supplement.supplementalModels) {
+    if (!liveIds.has(model.id)) merged.push(model)
+  }
+  return Array.from(new Map(merged.map((model) => [model.id, model])).values())
+    .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+// Only the clean baseline models are auto-enabled; suffixed variants
+// (vip/vt/lite/fast/cl/2k/4k) stay off so the catalog isn't flooded with every tier.
+const DEFAULT_TEXT_PATTERN = /gemini|gpt/i
+const DEFAULT_IMAGE_PATTERN = /nano-banana-2|nano-banana-pro|gpt-image-2/i
+const EXCLUDED_SUFFIX_PATTERN = /-(?:vip|vt|lite|fast|cl|2k|4k)(?:-|$)/i
+
+export function isModelAutoEnabled(model: { id: string; name: string; capability: ModelCapability }): boolean {
+  const haystack = `${model.id} ${model.name}`
+  if (model.capability === 'text') return DEFAULT_TEXT_PATTERN.test(haystack) && !EXCLUDED_SUFFIX_PATTERN.test(model.id)
+  if (model.capability === 'image') return DEFAULT_IMAGE_PATTERN.test(haystack) && !EXCLUDED_SUFFIX_PATTERN.test(model.id)
+  return false
+}
+
+export function pickPreferredModelId(
+  models: { id: string; name: string; capability: ModelCapability; enabled: boolean }[],
+  kind: 'text' | 'image',
+): string | undefined {
+  const enabled = models.filter((model) => model.enabled && model.capability === kind)
+  if (enabled.length === 0) return undefined
+  if (kind === 'text') {
+    return enabled.find((model) => /gpt/i.test(`${model.id} ${model.name}`))?.id
+      ?? enabled.find((model) => /gemini/i.test(`${model.id} ${model.name}`))?.id
+      ?? enabled[0].id
+  }
+  return enabled.find((model) => /gpt-image|image2/i.test(`${model.id} ${model.name}`))?.id
+    ?? enabled.find((model) => /nano/i.test(`${model.id} ${model.name}`))?.id
+    ?? enabled[0].id
 }
 
 function extractGeneratedImages(payload: unknown): GeneratedImage[] {

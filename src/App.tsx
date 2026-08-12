@@ -72,6 +72,9 @@ import {
   Rocket,
   WandSparkles,
   X,
+  Power,
+  Unplug,
+  PlugZap,
 } from 'lucide-react'
 import {
   Background,
@@ -99,15 +102,35 @@ import {
   type OnConnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useDisyStore, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability } from './store'
+import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability, type ModelSelection } from './store'
 import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
-import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, normalizeGenerationError, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
+import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
 gsap.registerPlugin(useGSAP)
+
+/** Recompute the persisted text/image model selections from a set of connections, dropping any that are no longer usable. */
+function pickValidSelections(connections: ApiConnection[], previous: { selectedTextModel?: ModelSelection; selectedImageModel?: ModelSelection }) {
+  const usable = connections.filter(isConnectionUsable)
+  const enabledText = usable.flatMap((connection) => connection.models
+    .filter((model) => model.enabled && model.capability === 'text')
+    .map((model) => ({ connectionId: connection.id, modelId: model.id })))
+  const enabledImage = usable.flatMap((connection) => connection.models
+    .filter((model) => model.enabled && model.capability === 'image')
+    .map((model) => ({ connectionId: connection.id, modelId: model.id })))
+  const selectedTextModel = previous.selectedTextModel
+    && enabledText.some((model) => model.connectionId === previous.selectedTextModel?.connectionId && model.modelId === previous.selectedTextModel?.modelId)
+    ? previous.selectedTextModel
+    : enabledText[0]
+  const selectedImageModel = previous.selectedImageModel
+    && enabledImage.some((model) => model.connectionId === previous.selectedImageModel?.connectionId && model.modelId === previous.selectedImageModel?.modelId)
+    ? previous.selectedImageModel
+    : enabledImage[0]
+  return { selectedTextModel, selectedImageModel }
+}
 
 type NodeKind = 'text' | 'image' | 'upload' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
@@ -374,8 +397,8 @@ const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
   text: '文本',
   image: '图像',
   video: '视频',
-  audio: '音频',
 }
+
 const API_PROVIDER_PRESETS = [
   { id: 'grsai', name: 'GRS AI', baseUrl: 'https://grsai.dakka.com.cn/v1', detail: '国内直连 · 图像与文本' },
   { id: 'apiyi', name: 'APIYI', baseUrl: 'https://api.apiyi.com/v1', detail: 'OpenAI 兼容聚合平台' },
@@ -1907,6 +1930,7 @@ function App() {
   const projectHomeContentRef = useRef<HTMLDivElement>(null)
   const nodeMenuButtonRef = useRef<HTMLButtonElement>(null)
   const firstApiInputRef = useRef<HTMLInputElement>(null)
+  const apiKeyInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
   const canvasNameInputRef = useRef<HTMLInputElement>(null)
   const styleReferenceInputRef = useRef<HTMLInputElement>(null)
@@ -1936,6 +1960,8 @@ function App() {
   const internalNodePastePreferredRef = useRef(false)
   const pasteSequenceRef = useRef(0)
   const modelFetchRequestRef = useRef(0)
+  const autoModelFetchTimerRef = useRef<number | null>(null)
+  const autoModelFetchKeyRef = useRef('')
   const generationTaskControllersRef = useRef(new Map<string, AbortController>())
   const generationTaskStopReasonRef = useRef(new Map<string, 'paused' | 'stopped'>())
   const agentPlanLocksRef = useRef(new Set<string>())
@@ -2318,10 +2344,19 @@ function App() {
     try {
       const models = await fetchRemoteModels({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
       if (requestId !== modelFetchRequestRef.current) return
-      setDraftModels((current) => models.map((model) => ({
-        ...model,
-        enabled: current.find((item) => item.id === model.id)?.enabled ?? false,
-      })))
+      const mapped = models.map((model) => ({ ...model, enabled: isModelAutoEnabled(model) }))
+      setDraftModels((current) => models.map((model) => {
+        const existing = current.find((item) => item.id === model.id)
+        return { ...model, enabled: existing ? existing.enabled : isModelAutoEnabled(model) }
+      }))
+      const preferredText = pickPreferredModelId(mapped, 'text')
+      const preferredImage = pickPreferredModelId(mapped, 'image')
+      if (preferredText && !apiSettings.selectedTextModel) {
+        saveApiSettings({ ...apiSettings, selectedTextModel: { connectionId: editingConnectionId, modelId: preferredText } })
+      }
+      if (preferredImage && !apiSettings.selectedImageModel) {
+        saveApiSettings({ ...apiSettings, selectedImageModel: { connectionId: editingConnectionId, modelId: preferredImage } })
+      }
       if (!models.length) setModelsError('接口没有返回可用模型')
     } catch (error) {
       if (requestId !== modelFetchRequestRef.current) return
@@ -2331,6 +2366,32 @@ function App() {
       if (requestId === modelFetchRequestRef.current) setModelsLoading(false)
     }
   }, [apiDraft.apiKey, apiDraft.baseUrl])
+
+  // Auto-fetch the model catalog (debounced ~600ms) when both baseUrl and apiKey are
+  // filled and this connection has not fetched a catalog yet. Uses a ref key so it never
+  // re-triggers while the user is typing the same connection, and only fires while
+  // draftModels is empty — preserving any manual edits the user has made.
+  useEffect(() => {
+    const key = `${apiDraft.baseUrl}|${apiDraft.apiKey}`
+    const canAutoFetch = apiDraft.baseUrl.trim() !== '' && apiDraft.apiKey.trim() !== '' && draftModels.length === 0
+    if (!canAutoFetch) {
+      autoModelFetchKeyRef.current = ''
+      return
+    }
+    if (autoModelFetchKeyRef.current === key) return
+    autoModelFetchKeyRef.current = key
+    if (autoModelFetchTimerRef.current !== null) window.clearTimeout(autoModelFetchTimerRef.current)
+    autoModelFetchTimerRef.current = window.setTimeout(() => {
+      autoModelFetchTimerRef.current = null
+      void refreshRemoteModels()
+    }, 600)
+    return () => {
+      if (autoModelFetchTimerRef.current !== null) {
+        window.clearTimeout(autoModelFetchTimerRef.current)
+        autoModelFetchTimerRef.current = null
+      }
+    }
+  }, [apiDraft.baseUrl, apiDraft.apiKey, draftModels.length, refreshRemoteModels])
 
   useEffect(() => {
     if (!canvasNameEditing) return
@@ -3432,6 +3493,8 @@ function App() {
     }
 
     const connectionId = editingConnectionId === 'new' ? `connection-${crypto.randomUUID()}` : editingConnectionId
+    const existingConnection = apiSettings.connections.find((connection) => connection.id === connectionId)
+    const hasKey = apiDraft.apiKey.trim() !== ''
     const nextConnection: ApiConnection = {
       id: connectionId,
       name: apiDraft.name.trim() || `连接 ${apiSettings.connections.length + 1}`,
@@ -3439,23 +3502,18 @@ function App() {
       apiKey: apiDraft.apiKey.trim(),
       models: draftModels,
       modelsFetchedAt: draftModels.length ? new Date().toISOString() : undefined,
+      enabled: existingConnection?.enabled === false ? false : true,
+      disconnected: existingConnection?.disconnected === true ? true : !hasKey,
     }
     const connections = apiSettings.connections.some((connection) => connection.id === connectionId)
       ? apiSettings.connections.map((connection) => connection.id === connectionId ? nextConnection : connection)
       : [...apiSettings.connections, nextConnection]
-    const enabledText = connections.flatMap((connection) => connection.models
-      .filter((model) => model.enabled && model.capability === 'text')
-      .map((model) => ({ connectionId: connection.id, modelId: model.id })))
-    const enabledImage = connections.flatMap((connection) => connection.models
-      .filter((model) => model.enabled && model.capability === 'image')
-      .map((model) => ({ connectionId: connection.id, modelId: model.id })))
-    const selectedTextStillValid = enabledText.some((model) => model.connectionId === apiSettings.selectedTextModel?.connectionId && model.modelId === apiSettings.selectedTextModel?.modelId)
-    const selectedImageStillValid = enabledImage.some((model) => model.connectionId === apiSettings.selectedImageModel?.connectionId && model.modelId === apiSettings.selectedImageModel?.modelId)
+    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
     try {
       saveApiSettings({
         connections,
-        selectedTextModel: selectedTextStillValid ? apiSettings.selectedTextModel : enabledText[0],
-        selectedImageModel: selectedImageStillValid ? apiSettings.selectedImageModel : enabledImage[0],
+        selectedTextModel,
+        selectedImageModel,
       })
     } catch {
       setApiError('保存失败，请检查浏览器本地存储权限')
@@ -3500,6 +3558,10 @@ function App() {
 
   const removeCurrentApiConnection = () => {
     if (editingConnectionId === 'new') return
+    const target = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
+    if (!target) return
+    const confirmed = window.confirm(`确认删除连接“${target.name}”？\n\n此操作会同时移除该连接下已获取的模型列表，且不可撤销。`)
+    if (!confirmed) return
     const connections = apiSettings.connections.filter((connection) => connection.id !== editingConnectionId)
     const selectedTextModel = apiSettings.selectedTextModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedTextModel
     const selectedImageModel = apiSettings.selectedImageModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedImageModel
@@ -3508,6 +3570,47 @@ function App() {
     if (next) selectApiConnection(next)
     else beginNewApiConnection()
     setToastMessage('API 连接已删除')
+  }
+
+  const toggleConnectionEnabled = (connectionId: string) => {
+    const target = apiSettings.connections.find((connection) => connection.id === connectionId)
+    if (!target) return
+    const turningOn = target.enabled === false
+    const connections = apiSettings.connections.map((connection) =>
+      connection.id === connectionId
+        ? { ...connection, enabled: turningOn }
+        : connection,
+    )
+    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
+    saveApiSettings({ connections, selectedTextModel, selectedImageModel })
+    setToastMessage(turningOn ? '已启用该连接，其模型可参与选择' : '已停用该连接，其模型不再参与选择')
+  }
+
+  const disconnectCurrentApiConnection = () => {
+    if (editingConnectionId === 'new') return
+    const connections = apiSettings.connections.map((connection) =>
+      connection.id === editingConnectionId
+        ? { ...connection, disconnected: true }
+        : connection,
+    )
+    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, {
+      selectedTextModel: apiSettings.selectedTextModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedTextModel,
+      selectedImageModel: apiSettings.selectedImageModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedImageModel,
+    })
+    saveApiSettings({ connections, selectedTextModel, selectedImageModel })
+    setToastMessage('连接已断开，点击「重新链接」即可恢复')
+  }
+
+  const reconnectCurrentApiConnection = () => {
+    if (editingConnectionId === 'new') return
+    const connections = apiSettings.connections.map((connection) =>
+      connection.id === editingConnectionId
+        ? { ...connection, disconnected: false }
+        : connection,
+    )
+    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
+    saveApiSettings({ connections, selectedTextModel, selectedImageModel })
+    setToastMessage('连接已重新链接')
   }
 
   const changeCanvasZoom = (value: number) => {
@@ -4830,14 +4933,14 @@ function App() {
     })
   }
 
-  const enabledTextModels = apiSettings.connections.flatMap((connection) => connection.models
+  const enabledTextModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'text')
     .map((model) => ({ connection, model })))
   const selectedTextModel = enabledTextModels.find(({ connection, model }) => (
     connection.id === apiSettings.selectedTextModel?.connectionId
     && model.id === apiSettings.selectedTextModel?.modelId
   )) ?? enabledTextModels[0]
-  const enabledImageModels = apiSettings.connections.flatMap((connection) => connection.models
+  const enabledImageModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'image')
     .map((model) => ({ connection, model })))
   const selectedImageModel = enabledImageModels.find(({ connection, model }) => (
@@ -4858,8 +4961,8 @@ function App() {
   const activeNodeImageModel = configuredActiveNodeImageModel ?? selectedImageModel
   const displayedActiveNodeImageModel = configuredActiveNodeImageModel
     ?? (activeNodeImageModelId ? undefined : selectedImageModel)
-  const hasCatalogTextModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'text'))
-  const hasCatalogImageModels = apiSettings.connections.some((connection) => connection.models.some((model) => model.capability === 'image'))
+  const hasCatalogTextModels = apiSettings.connections.filter(isConnectionUsable).some((connection) => connection.models.some((model) => model.capability === 'text'))
+  const hasCatalogImageModels = apiSettings.connections.filter(isConnectionUsable).some((connection) => connection.models.some((model) => model.capability === 'image'))
 
   useEffect(() => {
     const validTextKeys = new Set(enabledTextModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
@@ -8682,7 +8785,7 @@ function App() {
                               }}
                             >
                               <ModelBrandBadge name={model.name} image />
-                              <span><strong>{model.name}</strong><small>{connection.name} · ID: {model.id}</small></span>
+                              <span><strong>{model.name}</strong></span>
                               {displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id && <Check size={14} />}
                             </button>
                           ))}
@@ -8966,7 +9069,7 @@ function App() {
                               }}
                             >
                               <ModelBrandBadge name={model.name} />
-                              <span><strong>{model.name}</strong><small>{connection.name} · ID: {model.id}</small></span>
+                              <span><strong>{model.name}</strong></span>
                               {selectedTextModel?.connection.id === connection.id && selectedTextModel.model.id === model.id && <Check size={14} />}
                             </button>
                           ))}
@@ -10046,16 +10149,30 @@ function App() {
                   <div className="api-list-label">连接</div>
                   {apiSettings.connections.map((connection) => {
                     const enabledCount = connection.models.filter((model) => model.enabled).length
+                    const usable = isConnectionUsable(connection)
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={connection.id}
-                        className={editingConnectionId === connection.id ? 'is-active' : ''}
-                        onClick={() => selectApiConnection(connection)}
+                        className={`api-connection-card ${editingConnectionId === connection.id ? 'is-active' : ''} ${usable ? '' : 'is-disabled'}`}
                       >
-                        <span className={`api-connection-dot ${connection.apiKey ? 'is-online' : ''}`} />
-                        <span><strong>{connection.name}</strong><small>{connection.models.length ? `${enabledCount}/${connection.models.length} 个模型已启用` : '尚未获取模型'}</small></span>
-                      </button>
+                        <button
+                          type="button"
+                          className="api-connection-main"
+                          onClick={() => selectApiConnection(connection)}
+                        >
+                          <span className={`api-connection-dot ${usable && connection.apiKey ? 'is-online' : ''}`} />
+                          <span><strong>{connection.name}</strong><small>{connection.models.length ? `${enabledCount}/${connection.models.length} 个模型已启用` : (connection.disconnected ? '已断开' : '尚未获取模型')}</small></span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`api-connection-power ${usable ? 'is-on' : ''}`}
+                          aria-label={usable ? `停用 ${connection.name}` : `启用 ${connection.name}`}
+                          title={usable ? '点击停用该连接' : '点击启用该连接'}
+                          onClick={() => toggleConnectionEnabled(connection.id)}
+                        >
+                          <Power size={13} />
+                        </button>
+                      </div>
                     )
                   })}
                   {!apiSettings.connections.length && <p>添加第一条连接后，再单独获取它的模型。</p>}
@@ -10063,9 +10180,25 @@ function App() {
 
                 <section className="api-connection-detail">
                   <div className="api-detail-title">
-                    <div><strong>{editingConnectionId === 'new' ? '新建连接' : apiDraft.name || 'API 连接'}</strong><span>{editingConnectionId === 'new' ? '配置一个新的 OpenAI 兼容接口' : '编辑连接与启用模型'}</span></div>
-                    {editingConnectionId !== 'new' && <button type="button" className="api-delete-connection" onClick={removeCurrentApiConnection}><Trash2 size={14} />删除连接</button>}
+                    <div className="api-detail-heading"><strong>{editingConnectionId === 'new' ? '新建连接' : apiDraft.name || 'API 连接'}</strong><span>{editingConnectionId === 'new' ? '配置一个新的 OpenAI 兼容接口' : '编辑连接与启用模型'}</span></div>
+                    {editingConnectionId !== 'new' && (
+                      <div className="api-detail-actions">
+                        {apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected ? (
+                          <button type="button" className="api-icon-button is-success" title="重新链接" aria-label="重新链接" onClick={reconnectCurrentApiConnection}><PlugZap size={13} /></button>
+                        ) : (
+                          <button type="button" className="api-icon-button is-danger" title="断开链接" aria-label="断开链接" onClick={disconnectCurrentApiConnection}><Unplug size={13} /></button>
+                        )}
+                        <button type="button" className="api-icon-button is-danger" title="删除连接" aria-label="删除连接" onClick={removeCurrentApiConnection}><Trash2 size={13} /></button>
+                      </div>
+                    )}
                   </div>
+
+                  {editingConnectionId !== 'new' && apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected && (
+                    <div className="api-disconnected-banner">
+                      <Unplug size={15} />
+                      <span>该连接已断开，API Key 已保留。点击「重新链接」即可恢复，无需重新填写。</span>
+                    </div>
+                  )}
 
                   {editingConnectionId === 'new' && <div className="api-provider-presets">
                     <div><strong>从常用厂商开始</strong><span>自动填写连接名称与接口地址</span></div>
@@ -10088,7 +10221,7 @@ function App() {
                     </label>
                     <label className="api-field-wide">
                       API Key
-                      <input value={apiDraft.apiKey} onChange={(event) => setApiDraft((draft) => ({ ...draft, apiKey: event.target.value }))} type="password" placeholder="sk-••••••••••••••••" />
+                      <input ref={apiKeyInputRef} value={apiDraft.apiKey} onChange={(event) => setApiDraft((draft) => ({ ...draft, apiKey: event.target.value }))} type="password" placeholder="sk-••••••••••••••••" />
                     </label>
                     <button type="button" className="api-fetch-models" disabled={modelsLoading} onClick={() => void refreshRemoteModels()}>
                       {modelsLoading ? <LoaderCircle size={15} className="is-spinning" /> : <History size={15} />}

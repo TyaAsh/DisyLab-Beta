@@ -14,7 +14,7 @@ const API_SECRETS_KEY = 'disy-api-secrets'
 const LEGACY_API_SECRET_KEY = 'disy-api-secret'
 
 export type ActivePanel = 'canvas' | 'assets' | 'settings'
-export type ModelCapability = 'text' | 'image' | 'video' | 'audio'
+export type ModelCapability = 'text' | 'image' | 'video'
 
 export type ApiModelConfig = {
   id: string
@@ -30,6 +30,15 @@ export type ApiConnection = {
   apiKey: string
   models: ApiModelConfig[]
   modelsFetchedAt?: string
+  /** Master switch for whether this connection's models participate in selection. Defaults to true. */
+  enabled?: boolean
+  /** Soft disconnect state: API Key remains stored, but the connection and its models are hidden from all model selectors until re-linked. Defaults to false. */
+  disconnected?: boolean
+}
+
+/** A connection is usable only when it is enabled and not in a disconnected state. */
+export function isConnectionUsable(connection: ApiConnection): boolean {
+  return connection.enabled !== false && !connection.disconnected
 }
 
 export type ModelSelection = {
@@ -43,10 +52,10 @@ export type ApiSettings = {
   selectedImageModel?: ModelSelection
 }
 
-function inferLegacyCapability(modelId: string): ModelCapability {
+function inferLegacyCapability(modelId: string): ModelCapability | null {
   if (/image|seedream|imagen|flux|banana|dall-e|gpt-image/i.test(modelId)) return 'image'
   if (/video|seedance|sora|veo|kling|runway|hailuo/i.test(modelId)) return 'video'
-  if (/tts|speech|audio|voice|whisper/i.test(modelId)) return 'audio'
+  if (/tts|speech|audio|voice|whisper/i.test(modelId)) return null
   return 'text'
 }
 
@@ -72,8 +81,12 @@ function readApiSettings(): ApiSettings {
           name: typeof connection.name === 'string' ? connection.name : 'API 连接',
           baseUrl: typeof connection.baseUrl === 'string' ? connection.baseUrl : '',
           apiKey: secrets[id] ?? '',
-          models: Array.isArray(connection.models) ? connection.models : [],
+          models: Array.isArray(connection.models)
+            ? connection.models.filter((model): model is ApiModelConfig => Boolean(model) && ['text', 'image', 'video'].includes((model as ApiModelConfig).capability))
+            : [],
           modelsFetchedAt: typeof connection.modelsFetchedAt === 'string' ? connection.modelsFetchedAt : undefined,
+          enabled: connection.enabled === false ? false : true,
+          disconnected: connection.disconnected === true,
         }
       })
       return {
@@ -96,7 +109,7 @@ function readApiSettings(): ApiSettings {
           name: '默认连接',
           baseUrl,
           apiKey: legacySecret,
-          models: modelId ? [{ id: modelId, name: modelId, capability: legacyCapability, enabled: true }] : [],
+          models: modelId && legacyCapability ? [{ id: modelId, name: modelId, capability: legacyCapability, enabled: true }] : [],
         }],
         selectedTextModel: modelId && legacyCapability === 'text' ? { connectionId: id, modelId } : undefined,
         selectedImageModel: modelId && legacyCapability === 'image' ? { connectionId: id, modelId } : undefined,
@@ -139,14 +152,14 @@ type DisyStore = {
 
 export const useDisyStore = create<DisyStore>((set) => ({
   activePanel: 'canvas',
-  apiConfigured: initialApiSettings.connections.some((connection) => Boolean(connection.baseUrl && connection.apiKey)),
+  apiConfigured: initialApiSettings.connections.some((connection) => isConnectionUsable(connection) && Boolean(connection.baseUrl && connection.apiKey)),
   apiSettings: initialApiSettings,
   setActivePanel: (activePanel) => set({ activePanel }),
   saveApiSettings: (apiSettings) => {
     persistApiSettings(apiSettings)
     set({
       apiSettings,
-      apiConfigured: apiSettings.connections.some((connection) => Boolean(connection.baseUrl && connection.apiKey)),
+      apiConfigured: apiSettings.connections.some((connection) => isConnectionUsable(connection) && Boolean(connection.baseUrl && connection.apiKey)),
     })
   },
   clearApiSettings: () => {
