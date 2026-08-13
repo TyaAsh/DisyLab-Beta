@@ -220,6 +220,7 @@ type Props = {
   onVideoUnavailable: () => void
   onReferencesChange: (references: AgentImageReference[]) => void
   onCreateUploadedReference: (reference: Omit<AgentImageReference, 'nodeId'>) => AgentImageReference
+  onUploadNotice: (message: string) => void
   onPendingReferenceConsumed: () => void
   onPickFromCanvas: () => void
   onSend: (message: string, invocationText: string, references: AgentImageReference[]) => void
@@ -243,6 +244,7 @@ export function AgentPanel(props: Props) {
   const [imageModelChosen, setImageModelChosen] = useState(false)
   const [panelWidth, setPanelWidth] = useState(getInitialAgentPanelWidth)
   const [panelResizing, setPanelResizing] = useState(false)
+  const [referenceDropActive, setReferenceDropActive] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
@@ -544,17 +546,40 @@ export function AgentPanel(props: Props) {
     }
     setMentionOpen(false)
   }
-  const uploadReference = (file: File) => {
-    if (!file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') return
-      addReference(props.onCreateUploadedReference({
-        name: file.name,
-        url: reader.result,
-      }))
+  const uploadReferences = async (files: File[]) => {
+    const supported = files.filter((file) => ['image/png', 'image/jpeg', 'image/webp'].includes(file.type))
+    const remaining = Math.max(0, 16 - props.references.length)
+    if (!supported.length) {
+      props.onUploadNotice('仅支持 PNG、JPG/JPEG 和 WebP 图片')
+      return
     }
-    reader.readAsDataURL(file)
+    if (!remaining) {
+      props.onUploadNotice('参考图最多 16 张，请先移除部分图片')
+      return
+    }
+    const seenUrls = new Set(props.references.map((reference) => reference.url))
+    let added = 0
+    let duplicates = 0
+    for (const file of supported.slice(0, remaining)) {
+      const url = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('图片读取失败'))
+        reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+        reader.readAsDataURL(file)
+      }).catch(() => '')
+      if (!url) continue
+      if (seenUrls.has(url)) {
+        duplicates += 1
+        continue
+      }
+      seenUrls.add(url)
+      addReference(props.onCreateUploadedReference({ name: file.name, url }))
+      added += 1
+    }
+    const rejected = files.length - supported.length
+    const overLimit = Math.max(0, supported.length - remaining)
+    const notes = [rejected ? `${rejected} 个格式不支持` : '', duplicates ? `${duplicates} 张重复` : '', overLimit ? `${overLimit} 张超出上限` : ''].filter(Boolean)
+    props.onUploadNotice(added ? `已添加 ${added} 张参考图${notes.length ? `，跳过${notes.join('、')}` : ''}` : `没有添加图片${notes.length ? `：${notes.join('、')}` : ''}`)
   }
   useEffect(() => {
     if (!props.pendingReferences.length) return
@@ -773,7 +798,33 @@ export function AgentPanel(props: Props) {
         </div>
       </div>
       <div className="agent-panel-composer">
-        <div className="agent-composer-box">
+        <div
+          className={`agent-composer-box reference-drop-zone ${referenceDropActive ? 'is-drop-active' : ''}`}
+          onDragEnter={(event) => {
+            if (!Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return
+            event.preventDefault()
+            event.stopPropagation()
+            setReferenceDropActive(true)
+          }}
+          onDragOver={(event) => {
+            if (!Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return
+            event.preventDefault()
+            event.stopPropagation()
+            event.dataTransfer.dropEffect = 'copy'
+            setReferenceDropActive(true)
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setReferenceDropActive(false)
+          }}
+          onDrop={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setReferenceDropActive(false)
+            const files = Array.from(event.dataTransfer.files)
+            if (files.length) void uploadReferences(files)
+          }}
+        >
+          <span className="reference-drop-hint"><ImageUp size={15} />松开以添加参考图</span>
           <div
             className="agent-composer-input"
             ref={editorRef}
@@ -875,7 +926,7 @@ export function AgentPanel(props: Props) {
               <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>
               <button type="button" onMouseDown={rememberSelection} onClick={() => uploadInputRef.current?.click()} title="从本地上传参考图" aria-label="从本地上传参考图"><ImageUp size={15} /><span>上传参考图</span></button>
               {mediaKind === 'image' && imageModelChosen && props.imageModelKey && <button type="button" className={`agent-image-settings-button ${imageSettingsOpen ? 'is-open' : ''}`} onClick={() => setImageSettingsOpen((open) => !open)} title={`图像设置：${imageSettingsSummary}`} aria-label={`图像设置，当前参数：${imageSettingsSummary}`} aria-expanded={imageSettingsOpen}><SlidersHorizontal size={15} /><span>图像设置</span><em>{imageSettingsSummary}</em></button>}
-              <input ref={uploadInputRef} className="agent-reference-upload-input" type="file" accept="image/*" aria-label="上传 Agent 参考图" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadReference(file); event.target.value = '' }} />
+              <input ref={uploadInputRef} className="agent-reference-upload-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="上传 Agent 参考图" onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) void uploadReferences(files); event.target.value = '' }} />
             </div>
             <div className="agent-composer-actions">
               {props.busy && <button type="button" className="agent-stop-button" onClick={props.onStop} title="中止本次对话" aria-label="中止本次对话"><X size={16} /></button>}

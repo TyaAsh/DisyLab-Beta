@@ -38,7 +38,9 @@ export type ApiConnection = {
 
 /** A connection is usable only when it is enabled and not in a disconnected state. */
 export function isConnectionUsable(connection: ApiConnection): boolean {
-  return connection.enabled !== false && !connection.disconnected
+  return connection.enabled !== false
+    && !connection.disconnected
+    && Boolean(connection.baseUrl.trim() && connection.apiKey.trim())
 }
 
 export type ModelSelection = {

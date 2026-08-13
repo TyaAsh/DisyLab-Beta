@@ -270,6 +270,12 @@ function endpoint(baseUrl: string, path: string) {
   return `${normalizedApiBaseUrl(baseUrl)}/${path.replace(/^\//, '')}`
 }
 
+/** GRS's account endpoints live at the host root, outside the /v1 API prefix. */
+function grsaiControlEndpoint(baseUrl: string, path: string) {
+  const url = new URL(normalizedApiBaseUrl(baseUrl))
+  return `${url.origin}/${path.replace(/^\//, '')}`
+}
+
 function isGrsaiBaseUrl(baseUrl: string) {
   return /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(normalizedApiBaseUrl(baseUrl))
 }
@@ -548,7 +554,9 @@ export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'base
     throw error
   }
   if (!response.ok) {
-    if (supplement) return [...supplement.supplementalModels].sort((left, right) => left.name.localeCompare(right.name))
+    // A response means the provider evaluated the request. In particular, do
+    // not replace 401/403 credential failures with a local catalog: that makes a
+    // bad key look connected and leaves unusable models visible in the canvas.
     throw new Error(await readError(response))
   }
   const live = parseRemoteModelCatalog(await response.json() as unknown)
@@ -560,6 +568,48 @@ export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'base
   }
   return Array.from(new Map(merged.map((model) => [model.id, model])).values())
     .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+/** Validate credentials without performing a billable generation request. */
+export async function validateApiCredentials(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'>): Promise<void> {
+  const normalizedBase = normalizedApiBaseUrl(settings.baseUrl)
+  if (!settings.apiKey.trim()) throw new Error('API Key 不能为空')
+  const supplement = VENDOR_MODEL_SUPPLEMENTS.find((entry) => entry.match(normalizedBase))
+  if (supplement?.catalogOnly) {
+    // GRS documents this account endpoint specifically for querying an API key's
+    // credit balance. It authenticates the supplied key without starting a
+    // generation, unlike the static local catalog which proves nothing about it.
+    let response: Response
+    try {
+      response = await fetch(grsaiControlEndpoint(settings.baseUrl, 'client/openapi/getAPIKeyCredits'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: settings.apiKey.trim() }),
+      })
+    } catch (error) {
+      throw new Error(error instanceof Error ? `无法验证 GRS AI API Key：${error.message}` : '无法验证 GRS AI API Key，请检查地址和网络')
+    }
+    if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
+    try {
+      const payload = await response.json() as { code?: unknown; msg?: unknown; data?: unknown }
+      if (payload.code !== 0) {
+        throw new Error(typeof payload.msg === 'string' && payload.msg.trim() ? payload.msg : 'GRS AI API Key 无效或已失效')
+      }
+    } catch (error) {
+      if (error instanceof Error) throw error
+      throw new Error('GRS AI 未返回可确认的 API Key 校验结果')
+    }
+    return
+  }
+  let response: Response
+  try {
+    response = await fetch(endpoint(settings.baseUrl, 'models'), {
+      headers: { Authorization: `Bearer ${settings.apiKey.trim()}` },
+    })
+  } catch (error) {
+    throw new Error(error instanceof Error ? `无法连接接口：${error.message}` : '无法连接接口，请检查地址和网络')
+  }
+  if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
 }
 
 // Only the clean baseline models are auto-enabled; suffixed variants

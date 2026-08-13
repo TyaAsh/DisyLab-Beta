@@ -7,10 +7,11 @@
  * SPDX-FileCopyrightText: 2026 DisyLab
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
-import { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
+const LightingSpherePreview = lazy(() => import('./LightingSpherePreview'))
 import {
   ArrowUp,
   ArrowUpRight,
@@ -27,7 +28,11 @@ import {
   ChevronRight,
   Copy,
   Crown,
+  Crop,
   Download,
+  Expand,
+  Eye,
+  EyeOff,
   FileImage,
   Folder,
   FolderPlus,
@@ -62,6 +67,7 @@ import {
   Settings2,
   Shapes,
   Sparkles,
+  Scissors,
   Star,
   Type,
   Trash2,
@@ -106,8 +112,9 @@ import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConf
 import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
-import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
+import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
+import { PromptLibraryPanel, type PromptLibraryCase } from './PromptLibraryPanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
 gsap.registerPlugin(useGSAP)
@@ -143,6 +150,20 @@ type ImageReference = {
   id: string
   name: string
   url: string
+}
+
+const MAX_REFERENCE_IMAGES = 16
+const SUPPORTED_REFERENCE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+
+function readReferenceImage(file: File): Promise<ImageReference> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => typeof reader.result === 'string'
+      ? resolve({ id: `manual-${crypto.randomUUID()}`, name: file.name, url: reader.result })
+      : reject(new Error('图片读取失败'))
+    reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
+    reader.readAsDataURL(file)
+  })
 }
 type ProjectClipboardState = {
   projectId: string
@@ -207,8 +228,8 @@ type ActiveImageReference = Omit<ImageReference, 'url'> & {
 
 type ActiveNodeReference = {
   id: string
-  source: 'connection'
-  sourceNodeId: string
+  source: 'connection' | 'manual'
+  sourceNodeId?: string
   selected: boolean
   name: string
   mention: string
@@ -263,6 +284,8 @@ const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => vo
 const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
+type ImageToolMode = 'grid' | 'expand' | 'studio' | 'local-edit' | 'cutout'
+const ImageToolOpenContext = createContext<(nodeId: string, mode: ImageToolMode) => void>(() => undefined)
 const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
 const GroupCollapseContext = createContext<(nodeId: string, collapsed: boolean) => void>(() => undefined)
 const ActiveGenerationNodesContext = createContext<ReadonlySet<string>>(new Set())
@@ -519,11 +542,12 @@ function ModelBrandBadge({ name, image = false }: { name?: string; image?: boole
   return <span className={`welcome-model-badge ${image ? 'is-image' : ''}`} aria-hidden="true">{getWelcomeModelGlyph(name ?? '', image)}</span>
 }
 
-function WelcomeModelSelect({ value, placeholder, options, image, onChange }: {
+function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, onChange }: {
   value: string
   placeholder: string
   options: Array<{ key: string; name: string }>
   image?: boolean
+  typeSelect?: boolean
   onChange: (key: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -539,7 +563,9 @@ function WelcomeModelSelect({ value, placeholder, options, image, onChange }: {
   }, [open])
   return <div ref={rootRef} className={`welcome-model-select ${open ? 'is-open' : ''}`}>
     <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
-      <span className={`welcome-model-badge ${image ? 'is-image' : ''}`}>{getWelcomeModelGlyph(selected?.name ?? '', image)}</span>
+      {typeSelect
+        ? <span className="welcome-model-badge is-type"><Plus size={13} /></span>
+        : <span className={`welcome-model-badge ${image ? 'is-image' : ''}`}>{getWelcomeModelGlyph(selected?.name ?? '', image)}</span>}
       <strong>{selected?.name ?? placeholder}</strong>
       <ChevronDown size={13} />
     </button>
@@ -556,6 +582,7 @@ function WelcomeAgentComposer({
   imageModelKey,
   onTextModelChange,
   onImageModelChange,
+  onVideoUnavailable,
   onSend,
   busy,
 }: {
@@ -565,10 +592,13 @@ function WelcomeAgentComposer({
   imageModelKey: string
   onTextModelChange: (key: string) => void
   onImageModelChange: (key: string) => void
+  onVideoUnavailable: () => void
   onSend: (content: string) => void
   busy: boolean
 }) {
   const [value, setValue] = useState('')
+  const [mediaKind, setMediaKind] = useState<'choose' | 'image'>('choose')
+  const [imageModelChosen, setImageModelChosen] = useState(false)
   const [placeholder, setPlaceholder] = useState('比如：做一组夏日咖啡店的视觉方案')
   const prompts = ['比如：做一组夏日咖啡店的视觉方案', '比如：电商头脑风暴，帮我找 3 个方向', '比如：把这个产品做成更有记忆点的海报', '比如：为我的品牌整理一套视觉灵感']
   useEffect(() => {
@@ -593,7 +623,37 @@ function WelcomeAgentComposer({
   return <section className="welcome-agent-composer" aria-label="Disy Agent 快速对话">
     <div className="welcome-agent-title"><span className="welcome-agent-orb"><img src="/disy-logo.png" alt="" /></span><strong>今天想做点什么？</strong></div>
     <div className="welcome-agent-input-wrap"><textarea value={value} rows={2} placeholder={placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit() } }} /><button type="button" className="welcome-agent-send" disabled={!value.trim() || busy} onClick={submit}>{busy ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} />}</button></div>
-    <div className="welcome-agent-footer"><WelcomeModelSelect value={textModelKey} placeholder={textModels.length ? '选择对话模型' : '请先配置对话模型'} options={textModels} onChange={onTextModelChange} /><WelcomeModelSelect value={imageModelKey} placeholder={imageModels.length ? '自动选择生图模型' : '请先配置生图模型'} options={imageModels} image onChange={onImageModelChange} /></div>
+    <div className="welcome-agent-footer">
+      <WelcomeModelSelect value={textModelKey} placeholder={textModels.length ? '选择对话模型' : '请先配置对话模型'} options={textModels} onChange={onTextModelChange} />
+      {mediaKind === 'choose' ? <WelcomeModelSelect
+        value=""
+        placeholder="请选择"
+        typeSelect
+        options={[{ key: 'image', name: '图像' }, { key: 'video', name: '视频（暂未开放）' }]}
+        onChange={(kind) => {
+          if (kind === 'video') {
+            onVideoUnavailable()
+            return
+          }
+          setMediaKind('image')
+          setImageModelChosen(false)
+        }}
+      /> : <WelcomeModelSelect
+        value={imageModelChosen ? imageModelKey : ''}
+        placeholder={imageModels.length ? '选择生图模型' : '请先配置生图模型'}
+        options={[{ key: '__choose_type__', name: '返回生成类型' }, ...imageModels]}
+        image
+        onChange={(key) => {
+          if (key === '__choose_type__') {
+            setMediaKind('choose')
+            setImageModelChosen(false)
+            return
+          }
+          onImageModelChange(key)
+          setImageModelChosen(true)
+        }}
+      />}
+    </div>
   </section>
 }
 
@@ -871,12 +931,18 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
       aria-multiline="true"
       aria-label={ariaLabel}
       data-placeholder={placeholder}
-      onCompositionStart={() => {
+      onCompositionStart={(event) => {
         composingRef.current = true
+        // During IME composition the controlled value has not updated yet, but
+        // the browser is already painting the phonetic buffer. Hide the stale
+        // placeholder immediately so it never overlaps pinyin/zhuyin text.
+        event.currentTarget.classList.remove('is-empty')
+        event.currentTarget.dataset.composing = 'true'
       }}
       onCompositionEnd={(event) => {
         composingRef.current = false
         const root = event.currentTarget
+        delete root.dataset.composing
         window.requestAnimationFrame(() => {
           if (!root.isConnected || composingRef.current) return
           const nextValue = readAtomicPrompt(root)
@@ -1374,6 +1440,7 @@ const NodeCard = memo(function NodeCard({
   const updateNodeTitle = useContext(NodeTitleUpdateContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
+  const openImageTool = useContext(ImageToolOpenContext)
   const openExtensionMenu = useContext(NodeExtensionMenuContext)
   const setGroupCollapsed = useContext(GroupCollapseContext)
   const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
@@ -1554,6 +1621,13 @@ const NodeCard = memo(function NodeCard({
           {nodeTitle}
         </div>
         <div className="asset-image-frame">
+          <div className="image-node-toolbelt nodrag nowheel" role="toolbar" aria-label="图片编辑工具">
+            <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
+            <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
+            <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
+            <button type="button" title="评论修改" aria-label="评论修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
+            <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
+          </div>
           <img
             src={data.imageUrl}
             alt={data.fileName || '上传的参考图'}
@@ -1631,6 +1705,13 @@ const NodeCard = memo(function NodeCard({
                   if (data.imageUrl) openImagePreview(id)
                 }}
               />
+              <div className="image-node-toolbelt image-generation-toolbelt nodrag nowheel" role="toolbar" aria-label="图片编辑工具">
+                <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
+                <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
+                <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
+                <button type="button" title="评论修改" aria-label="评论修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
+                <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
+              </div>
               {(data.imageVariants?.length ?? 0) > 1 && (
                 <button
                   type="button"
@@ -1732,6 +1813,20 @@ function App() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initialNodes)
   const [edges, setEdges, applyEdgesChange] = useEdgesState(initialEdges)
+  const [imageTool, setImageTool] = useState<{ nodeId: string; mode: ImageToolMode } | null>(null)
+  const [autoGenerateNodeId, setAutoGenerateNodeId] = useState<string | null>(null)
+  const [gridGuides, setGridGuides] = useState({ vertical: [33.333, 66.667], horizontal: [33.333, 66.667] })
+  const [customGrid, setCustomGrid] = useState({ columns: 3, rows: 3 })
+  const [imageToolSourceSize, setImageToolSourceSize] = useState({ width: 1, height: 1 })
+  const [expandInsets, setExpandInsets] = useState({ top: -15, right: -15, bottom: -15, left: -15 })
+  const [expandSize, setExpandSize] = useState({ width: 1024, height: 1024 })
+  const [expandRatio, setExpandRatio] = useState<'original' | ImageAspectRatio | 'custom'>('original')
+  const [expandPrompt, setExpandPrompt] = useState('延展画面，保持主体、光线、材质与透视自然连续。')
+  const [studioLighting, setStudioLighting] = useState({ yaw: 0, pitch: 0, intensity: 50, temperatureK: 5600, fill: true, rim: false, rimStrength: 20 })
+  const [lightingView, setLightingView] = useState<'perspective' | 'front'>('front')
+  const [localEditMarks, setLocalEditMarks] = useState<Array<{ id: string; x: number; y: number; prompt: string }>>([])
+  const [cutoutProgress, setCutoutProgress] = useState<{ stage: string; progress?: number; detail?: string; failed?: boolean } | null>(null)
+  const cutoutWorkerRef = useRef<Worker | null>(null)
   const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null)
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null)
   const [nodeClipboard, setNodeClipboard] = useState<NodeClipboard | null>(null)
@@ -1741,9 +1836,11 @@ function App() {
   const [newFolderName, setNewFolderName] = useState('')
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [assetLibraryOpen, setAssetLibraryOpen] = useState(false)
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
   const [assetScope, setAssetScope] = useState<'all' | 'current'>('all')
   const [assetThumbnailSize, setAssetThumbnailSize] = useState(132)
+  const [assetLibraryPage, setAssetLibraryPage] = useState(1)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([])
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([])
@@ -1757,6 +1854,7 @@ function App() {
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
   const [generationHistorySearch, setGenerationHistorySearch] = useState('')
   const [historyThumbnailSize, setHistoryThumbnailSize] = useState(132)
+  const [generationHistoryPage, setGenerationHistoryPage] = useState(1)
   const [imageGalleryThumbnailSize, setImageGalleryThumbnailSize] = useState(190)
   const [outputHistory, setOutputHistory] = useState<OutputHistoryRecord[]>(readOutputHistory)
   const [outputHistoryOpen, setOutputHistoryOpen] = useState(false)
@@ -1783,6 +1881,7 @@ function App() {
   const [textMentionRange, setTextMentionRange] = useState<{ start: number; end: number } | null>(null)
   const [textReferencePreview, setTextReferencePreview] = useState<{ name: string; text: string; left: number; bottom: number } | null>(null)
   const [canvasReferencePickerNodeId, setCanvasReferencePickerNodeId] = useState<string | null>(null)
+  const [referenceDropTargetNodeId, setReferenceDropTargetNodeId] = useState<string | null>(null)
   const [activeGenerationTaskKeys, setActiveGenerationTaskKeys] = useState<Set<string>>(new Set())
   const generationLoading = activeGenerationTaskKeys.size > 0
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -1832,6 +1931,18 @@ function App() {
   const [createProjectBusy, setCreateProjectBusy] = useState(false)
   const [projectHomeView, setProjectHomeView] = useState<'grid' | 'list'>('grid')
   const [projectHomeSort, setProjectHomeSort] = useState<{ key: 'name' | 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' }>({ key: 'updatedAt', direction: 'desc' })
+  const [persistedProjectContent, setPersistedProjectContent] = useState<Record<string, { nodeCount: number; activeCanvasNodeCount: number }>>({})
+
+  const openApiSettings = useCallback((event?: React.SyntheticEvent) => {
+    event?.preventDefault()
+    event?.stopPropagation()
+    setProjectContextMenu(null)
+    setProjectMenuOpen(false)
+    setCreateProjectOpen(false)
+    setTransferOpen(false)
+    setProjectOpen(false)
+    setApiOpen(true)
+  }, [])
 
   useEffect(() => {
     projectHomeOpenRef.current = projectHomeOpen
@@ -1877,6 +1988,22 @@ function App() {
   const [workspaceCanvases, setWorkspaceCanvases] = useState<WorkspaceCanvas[]>([])
   const [activeProjectId, setActiveProjectId] = useState(CURRENT_PROJECT_ID)
   const [activeCanvasId, setActiveCanvasId] = useState(`${CURRENT_PROJECT_ID}--canvas-default`)
+  useEffect(() => {
+    if (!projectHomeOpen) return
+    let cancelled = false
+    void Promise.all(workspaceProjects.map(async (project) => {
+      const canvases = await listWorkspaceCanvases(project.id)
+      return [project.id, {
+        nodeCount: canvases.reduce((total, canvas) => total + canvas.nodes.length, 0),
+        activeCanvasNodeCount: canvases.find((canvas) => canvas.id === project.activeCanvasId)?.nodes.length ?? 0,
+      }] as const
+    })).then((entries) => {
+      if (!cancelled) setPersistedProjectContent(Object.fromEntries(entries))
+    }).catch(() => {
+      if (!cancelled) setPersistedProjectContent({})
+    })
+    return () => { cancelled = true }
+  }, [projectHomeOpen, workspaceProjects])
   const [projectName, setProjectName] = useState('DisyLab')
   const [canvasSwitcherOpen, setCanvasSwitcherOpen] = useState(false)
   const [projectCardScale, setProjectCardScale] = useState(1)
@@ -1922,9 +2049,17 @@ function App() {
   const [projectPromptSuffix, setProjectPromptSuffix] = useState('')
   const [editingConnectionId, setEditingConnectionId] = useState<string>(apiSettings.connections[0]?.id ?? 'new')
   const [apiDraft, setApiDraft] = useState({ name: '', baseUrl: '', apiKey: '' })
+  const [apiKeyVisible, setApiKeyVisible] = useState(false)
   const [draftModels, setDraftModels] = useState<ApiModelConfig[]>([])
   const [apiModelTab, setApiModelTab] = useState<ModelCapability>('text')
   const [apiError, setApiError] = useState('')
+  const [apiAlert, setApiAlert] = useState<string | null>(null)
+
+  const showApiAlert = useCallback((message: string) => {
+    setApiError('')
+    setModelsError('')
+    setApiAlert(message)
+  }, [])
 
   const shellRef = useRef<HTMLDivElement>(null)
   const projectHomeContentRef = useRef<HTMLDivElement>(null)
@@ -1963,6 +2098,7 @@ function App() {
   const autoModelFetchTimerRef = useRef<number | null>(null)
   const autoModelFetchKeyRef = useRef('')
   const generationTaskControllersRef = useRef(new Map<string, AbortController>())
+  const generationTaskProjectIdsRef = useRef(new Map<string, string>())
   const generationTaskStopReasonRef = useRef(new Map<string, 'paused' | 'stopped'>())
   const agentPlanLocksRef = useRef(new Set<string>())
   const agentSaveTimerRef = useRef<number | null>(null)
@@ -1998,11 +2134,13 @@ function App() {
     }
     const controller = new AbortController()
     generationTaskControllersRef.current.set(taskKey, controller)
+    generationTaskProjectIdsRef.current.set(taskKey, activeProjectId)
     setActiveGenerationTaskKeys(new Set(generationTaskControllersRef.current.keys()))
     return controller
   }
   const finishGenerationTask = (taskKey: string) => {
     generationTaskControllersRef.current.delete(taskKey)
+    generationTaskProjectIdsRef.current.delete(taskKey)
     generationTaskStopReasonRef.current.delete(taskKey)
     setActiveGenerationTaskKeys(new Set(generationTaskControllersRef.current.keys()))
   }
@@ -2335,37 +2473,57 @@ function App() {
 
   const refreshRemoteModels = useCallback(async () => {
     if (!apiDraft.baseUrl.trim() || !apiDraft.apiKey.trim()) {
-      setModelsError('请先填写当前连接的接口地址和 API Key')
+      showApiAlert('请先填写当前连接的接口地址和 API Key')
       return
+    }
+    // Editing a saved credential invalidates every model fetched with the old
+    // one before any new lookup begins. This keeps stale choices out of nodes
+    // even when the lookup itself fails.
+    const savedConnection = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
+    const credentialsChanged = Boolean(savedConnection && (
+      savedConnection.apiKey.trim() !== apiDraft.apiKey.trim()
+      || savedConnection.baseUrl.replace(/\/$/, '') !== apiDraft.baseUrl.trim().replace(/\/$/, '')
+    ))
+    if (credentialsChanged && savedConnection) {
+      const connections = apiSettings.connections.map((connection) => connection.id === savedConnection.id
+        ? { ...connection, models: [], modelsFetchedAt: undefined, disconnected: true }
+        : connection)
+      const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
+      saveApiSettings({ connections, selectedTextModel, selectedImageModel })
+      setDraftModels([])
     }
     setModelsLoading(true)
     setModelsError('')
     const requestId = ++modelFetchRequestRef.current
     try {
+      await validateApiCredentials({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
       const models = await fetchRemoteModels({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
       if (requestId !== modelFetchRequestRef.current) return
       const mapped = models.map((model) => ({ ...model, enabled: isModelAutoEnabled(model) }))
-      setDraftModels((current) => models.map((model) => {
+      const nextDraftModels = models.map((model) => {
+        const current = draftModels
         const existing = current.find((item) => item.id === model.id)
         return { ...model, enabled: existing ? existing.enabled : isModelAutoEnabled(model) }
-      }))
+      })
+      setDraftModels(nextDraftModels)
       const preferredText = pickPreferredModelId(mapped, 'text')
       const preferredImage = pickPreferredModelId(mapped, 'image')
-      if (preferredText && !apiSettings.selectedTextModel) {
-        saveApiSettings({ ...apiSettings, selectedTextModel: { connectionId: editingConnectionId, modelId: preferredText } })
+      if (editingConnectionId !== 'new') {
+        const nextSettings = { ...apiSettings,
+          selectedTextModel: apiSettings.selectedTextModel ?? (preferredText ? { connectionId: editingConnectionId, modelId: preferredText } : undefined),
+          selectedImageModel: apiSettings.selectedImageModel ?? (preferredImage ? { connectionId: editingConnectionId, modelId: preferredImage } : undefined),
+        }
+        saveApiSettings(nextSettings)
       }
-      if (preferredImage && !apiSettings.selectedImageModel) {
-        saveApiSettings({ ...apiSettings, selectedImageModel: { connectionId: editingConnectionId, modelId: preferredImage } })
-      }
-      if (!models.length) setModelsError('接口没有返回可用模型')
+      if (!models.length) showApiAlert('接口没有返回可用模型')
     } catch (error) {
       if (requestId !== modelFetchRequestRef.current) return
       setDraftModels([])
-      setModelsError(error instanceof Error ? error.message : '模型列表读取失败')
+      showApiAlert(error instanceof Error ? error.message : '模型列表读取失败')
     } finally {
       if (requestId === modelFetchRequestRef.current) setModelsLoading(false)
     }
-  }, [apiDraft.apiKey, apiDraft.baseUrl])
+  }, [apiDraft.apiKey, apiDraft.baseUrl, apiSettings, draftModels, editingConnectionId, saveApiSettings, showApiAlert])
 
   // Auto-fetch the model catalog (debounced ~600ms) when both baseUrl and apiKey are
   // filled and this connection has not fetched a catalog yet. Uses a ref key so it never
@@ -2622,6 +2780,8 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toastMessage, transferBusy])
 
+  useEffect(() => () => cutoutWorkerRef.current?.terminate(), [])
+
   useEffect(() => {
     if (!transferOpen) return
     let cancelled = false
@@ -2841,6 +3001,50 @@ function App() {
       setToastMessage('图片读取失败，请重新选择')
     }
   }, [setNodes])
+
+  const addPromptCaseImage = useCallback((item: PromptLibraryCase, position?: { x: number; y: number }) => {
+    const center = position || screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const id = `prompt-reference-${item.id}-${Date.now()}`
+    setNodes((current) => [...current, {
+      id,
+      type: 'disy',
+      position: { x: center.x - 130, y: center.y - 110 },
+      data: {
+        kind: 'upload',
+        title: item.title,
+        body: `提示库案例 · ${item.sourceLabel || '来源见案例详情'}`,
+        fileName: `prompt-case-${item.id}.webp`,
+        imageUrl: item.image,
+      },
+    }])
+    setPromptLibraryOpen(false)
+    setToastMessage('参考图已加入画布，可继续拖拽或连接到生成节点')
+    window.requestAnimationFrame(() => measureNodeOverlay(id))
+  }, [measureNodeOverlay, screenToFlowPosition, setNodes])
+
+  const addPromptCaseNode = useCallback((item: PromptLibraryCase) => {
+    const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const id = `prompt-case-${item.id}-${Date.now()}`
+    setNodes((current) => [...current, {
+      id,
+      type: 'disy',
+      position: { x: center.x - 150, y: center.y - 120 },
+      data: {
+        kind: 'image',
+        title: item.title,
+        body: item.prompt,
+        promptText: item.prompt,
+        imageUrl: item.image,
+        fileName: `prompt-${item.id}.webp`,
+        referenceImageUrl: item.image,
+        referenceImageName: `案例 ${item.id} · ${item.title}`,
+      },
+    }])
+    setPromptLibraryOpen(false)
+    setActiveGenerationNodeId(id)
+    setToastMessage('案例 Prompt 与参考图已写入新的图像节点')
+    window.requestAnimationFrame(() => measureNodeOverlay(id))
+  }, [measureNodeOverlay, screenToFlowPosition, setNodes])
 
   const openImagePicker = useCallback((position: { x: number; y: number }) => {
     uploadPositionRef.current = position
@@ -3479,31 +3683,47 @@ function App() {
     closeContextMenu()
   }
 
-  const saveApi = () => {
+  const saveApi = async () => {
     if (!apiDraft.baseUrl.trim() || !apiDraft.apiKey.trim()) {
-      setApiError('请完整填写接口地址和 API Key。')
+      showApiAlert('请完整填写接口地址和 API Key。')
       return
     }
 
     try {
-      new URL(apiDraft.baseUrl)
+      const parsedUrl = new URL(apiDraft.baseUrl)
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') throw new Error('protocol')
     } catch {
-      setApiError('接口地址必须是完整的 http 或 https URL。')
+      showApiAlert('接口地址必须是完整的 http 或 https URL。')
+      return
+    }
+    setApiKeyVisible(false)
+    try {
+      await validateApiCredentials({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
+    } catch (error) {
+      showApiAlert(error instanceof Error ? error.message : 'API Key 校验失败')
       return
     }
 
     const connectionId = editingConnectionId === 'new' ? `connection-${crypto.randomUUID()}` : editingConnectionId
     const existingConnection = apiSettings.connections.find((connection) => connection.id === connectionId)
     const hasKey = apiDraft.apiKey.trim() !== ''
+    const credentialsChanged = Boolean(existingConnection && (
+      existingConnection.apiKey.trim() !== apiDraft.apiKey.trim()
+      || existingConnection.baseUrl.replace(/\/$/, '') !== apiDraft.baseUrl.trim().replace(/\/$/, '')
+    ))
+    // Models returned for a previous key must never remain selectable after the
+    // connection credentials change. Catalog-only providers cannot validate a
+    // key by listing models, so preserve an explicit disconnected state.
+    const keepDisconnected = existingConnection?.disconnected === true || credentialsChanged || !hasKey
     const nextConnection: ApiConnection = {
       id: connectionId,
       name: apiDraft.name.trim() || `连接 ${apiSettings.connections.length + 1}`,
       baseUrl: apiDraft.baseUrl.trim().replace(/\/$/, ''),
       apiKey: apiDraft.apiKey.trim(),
-      models: draftModels,
-      modelsFetchedAt: draftModels.length ? new Date().toISOString() : undefined,
+      models: keepDisconnected ? [] : draftModels,
+      modelsFetchedAt: keepDisconnected || !draftModels.length ? undefined : new Date().toISOString(),
       enabled: existingConnection?.enabled === false ? false : true,
-      disconnected: existingConnection?.disconnected === true ? true : !hasKey,
+      disconnected: keepDisconnected,
     }
     const connections = apiSettings.connections.some((connection) => connection.id === connectionId)
       ? apiSettings.connections.map((connection) => connection.id === connectionId ? nextConnection : connection)
@@ -3516,10 +3736,15 @@ function App() {
         selectedImageModel,
       })
     } catch {
-      setApiError('保存失败，请检查浏览器本地存储权限')
+      showApiAlert('保存失败，请检查浏览器本地存储权限')
       return
     }
     setEditingConnectionId(connectionId)
+    if (credentialsChanged) {
+      setDraftModels([])
+      showApiAlert('API Key 或接口地址已变更。为避免旧模型继续出现在节点中，连接已保存为断开状态且模型目录已清空；请确认新凭据有效后再重新链接。')
+      return
+    }
     setToastMessage('API 连接已保存')
   }
 
@@ -3528,6 +3753,7 @@ function App() {
     setModelsLoading(false)
     setEditingConnectionId('new')
     setApiDraft({ name: '', baseUrl: '', apiKey: '' })
+    setApiKeyVisible(false)
     setDraftModels([])
     setModelsError('')
     setApiError('')
@@ -3540,6 +3766,7 @@ function App() {
     setModelsLoading(false)
     setEditingConnectionId('new')
     setApiDraft({ name: preset.name, baseUrl: preset.baseUrl, apiKey: '' })
+    setApiKeyVisible(false)
     setDraftModels([])
     setModelsError('')
     setApiError('')
@@ -3551,6 +3778,7 @@ function App() {
     setModelsLoading(false)
     setEditingConnectionId(connection.id)
     setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey })
+    setApiKeyVisible(false)
     setDraftModels(connection.models)
     setModelsError('')
     setApiError('')
@@ -3563,8 +3791,7 @@ function App() {
     const confirmed = window.confirm(`确认删除连接“${target.name}”？\n\n此操作会同时移除该连接下已获取的模型列表，且不可撤销。`)
     if (!confirmed) return
     const connections = apiSettings.connections.filter((connection) => connection.id !== editingConnectionId)
-    const selectedTextModel = apiSettings.selectedTextModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedTextModel
-    const selectedImageModel = apiSettings.selectedImageModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedImageModel
+    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
     saveApiSettings({ connections, selectedTextModel, selectedImageModel })
     const next = connections[0]
     if (next) selectApiConnection(next)
@@ -3588,6 +3815,12 @@ function App() {
 
   const disconnectCurrentApiConnection = () => {
     if (editingConnectionId === 'new') return
+    const target = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
+    if (!target) return
+    const confirmed = window.confirm(
+      `确认断开连接“${target.name}”？\n\n断开后，该连接的所有模型会立即从节点选择器中隐藏。API Key 和已获取的模型目录仍会保留，之后可以重新连接。`,
+    )
+    if (!confirmed) return
     const connections = apiSettings.connections.map((connection) =>
       connection.id === editingConnectionId
         ? { ...connection, disconnected: true }
@@ -3598,7 +3831,7 @@ function App() {
       selectedImageModel: apiSettings.selectedImageModel?.connectionId === editingConnectionId ? undefined : apiSettings.selectedImageModel,
     })
     saveApiSettings({ connections, selectedTextModel, selectedImageModel })
-    setToastMessage('连接已断开，点击「重新链接」即可恢复')
+    setToastMessage('连接已断开，相关模型已从节点中隐藏')
   }
 
   const reconnectCurrentApiConnection = () => {
@@ -3610,7 +3843,7 @@ function App() {
     )
     const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
     saveApiSettings({ connections, selectedTextModel, selectedImageModel })
-    setToastMessage('连接已重新链接')
+    setToastMessage('连接已恢复，相关模型可重新使用')
   }
 
   const changeCanvasZoom = (value: number) => {
@@ -4429,8 +4662,9 @@ function App() {
   const activeTextReferences = useMemo<ActiveNodeReference[]>(() => {
     if (!activeEditorNodeId) return []
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
-    const promptText = nodeById.get(activeEditorNodeId)?.data.promptText ?? ''
-    return edges.flatMap<ActiveNodeReference>((edge): ActiveNodeReference[] => {
+    const targetNode = nodeById.get(activeEditorNodeId)
+    const promptText = targetNode?.data.promptText ?? ''
+    const connected = edges.flatMap<ActiveNodeReference>((edge): ActiveNodeReference[] => {
       if (edge.target !== activeEditorNodeId) return []
       const sourceNode = nodeById.get(edge.source)
       if (!sourceNode) return []
@@ -4462,6 +4696,23 @@ function App() {
       }
       return []
     })
+    const seenUrls = new Set(connected.map((reference) => reference.url).filter(Boolean))
+    const manual = (targetNode?.data.referenceImages ?? []).flatMap<ActiveNodeReference>((reference, index) => {
+      if (!reference.url || seenUrls.has(reference.url)) return []
+      seenUrls.add(reference.url)
+      const name = getReferenceLabel(reference.name, connected.length + index)
+      const mention = getReferenceMention(name)
+      return [{
+        id: reference.id,
+        source: 'manual',
+        selected: true,
+        name,
+        mention,
+        kind: 'image',
+        url: reference.url,
+      }]
+    })
+    return [...connected, ...manual]
   }, [activeEditorNodeId, edges, nodes])
   const activeGenerationTextReferences = useMemo<ActiveNodeReference[]>(() => {
     if (!activeGenerationNodeId) return []
@@ -4750,6 +5001,73 @@ function App() {
   const selectedTextNodeReferences = activeTextReferences.filter((reference) => (
     reference.selected || (activeTextNode?.data.promptText ?? '').includes(reference.mention)
   ))
+  const addReferenceFilesToNode = async (nodeId: string, incomingFiles: File[]) => {
+    const imageFiles = incomingFiles.filter((file) => SUPPORTED_REFERENCE_IMAGE_TYPES.has(file.type))
+    const rejectedCount = incomingFiles.length - imageFiles.length
+    const targetNode = nodes.find((node) => node.id === nodeId)
+    if (!targetNode || (targetNode.data.kind !== 'image' && targetNode.data.kind !== 'text')) return
+    if (!imageFiles.length) {
+      setToastMessage('仅支持 PNG、JPG/JPEG 和 WebP 图片')
+      return
+    }
+
+    const connectedImageCount = edges.filter((edge) => {
+      if (edge.target !== nodeId) return false
+      const source = nodes.find((node) => node.id === edge.source)
+      return source?.data.kind === 'image' || source?.data.kind === 'upload'
+    }).length
+    const currentImageCount = targetNode.data.kind === 'image' && targetNode.data.imageUrl ? 1 : 0
+    const existingManual = targetNode.data.referenceImages ?? []
+    const remaining = Math.max(0, MAX_REFERENCE_IMAGES - connectedImageCount - currentImageCount - existingManual.length)
+    if (!remaining) {
+      setToastMessage(`参考图最多 ${MAX_REFERENCE_IMAGES} 张，请先移除部分图片`)
+      return
+    }
+
+    try {
+      const read = await Promise.all(imageFiles.slice(0, remaining).map(readReferenceImage))
+      const existingUrls = new Set(existingManual.map((reference) => reference.url))
+      const unique = read.filter((reference) => {
+        if (existingUrls.has(reference.url)) return false
+        existingUrls.add(reference.url)
+        return true
+      })
+      if (unique.length) {
+        setNodes((current) => current.map((node) => node.id === nodeId ? {
+          ...node,
+          data: { ...node.data, referenceImages: [...(node.data.referenceImages ?? []), ...unique] },
+        } : node))
+      }
+      const skippedForLimit = Math.max(0, imageFiles.length - remaining)
+      const duplicateCount = read.length - unique.length
+      const notes = [
+        rejectedCount ? `${rejectedCount} 个格式不支持` : '',
+        duplicateCount ? `${duplicateCount} 张重复` : '',
+        skippedForLimit ? `${skippedForLimit} 张超出上限` : '',
+      ].filter(Boolean)
+      setToastMessage(unique.length
+        ? `已添加 ${unique.length} 张参考图${notes.length ? `，跳过${notes.join('、')}` : ''}`
+        : `没有添加图片${notes.length ? `：${notes.join('、')}` : ''}`)
+    } catch {
+      setToastMessage('部分图片读取失败，请重新尝试')
+    } finally {
+      setReferenceDropTargetNodeId(null)
+    }
+  }
+  const handleReferenceDragOver = (event: React.DragEvent<HTMLElement>, nodeId: string) => {
+    if (!Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    setReferenceDropTargetNodeId(nodeId)
+  }
+  const handleReferenceDrop = (event: React.DragEvent<HTMLElement>, nodeId: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const files = Array.from(event.dataTransfer.files)
+    setReferenceDropTargetNodeId(null)
+    if (files.length) void addReferenceFilesToNode(nodeId, files)
+  }
   const selectTextMention = (reference: ActiveNodeReference) => {
     if (!activeTextNode) return
     if (reference.kind === 'text' ? !reference.text?.trim() : !reference.url) {
@@ -4763,9 +5081,11 @@ function App() {
     setNodes((current) => current.map((node) => node.id === activeTextNode.id
       ? { ...node, data: { ...node.data, promptText: nextPrompt } }
       : node))
-    setEdges((current) => current.map((edge) => edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
-      ? { ...edge, data: { ...edge.data, referenceSelected: true } }
-      : edge))
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.map((edge) => edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
+        ? { ...edge, data: { ...edge.data, referenceSelected: true } }
+        : edge))
+    }
     setTextMentionOpen(false)
     setTextMentionQuery('')
     setTextMentionRange(null)
@@ -4773,9 +5093,11 @@ function App() {
   }
   const removeTextReference = (reference: ActiveNodeReference) => {
     if (!activeTextNode) return
-    setEdges((current) => current.filter((edge) => !(
-      edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
-    )))
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.filter((edge) => !(
+        edge.source === reference.sourceNodeId && edge.target === activeTextNode.id
+      )))
+    }
     setNodes((current) => current.map((node) => {
       if (node.id !== activeTextNode.id) return node
       const promptText = (node.data.promptText ?? '')
@@ -4783,7 +5105,13 @@ function App() {
         .replace(/[ \t]{2,}/g, ' ')
         .replace(/ +\n/g, '\n')
         .trimStart()
-      return { ...node, data: { ...node.data, promptText } }
+      return { ...node, data: {
+        ...node.data,
+        promptText,
+        referenceImages: reference.source === 'manual'
+          ? (node.data.referenceImages ?? []).filter((item) => item.id !== reference.id)
+          : node.data.referenceImages,
+      } }
     }))
   }
   const handleTextPromptChange = (value: string, cursor: number) => {
@@ -4837,6 +5165,132 @@ function App() {
     setPreviewImageDirection(1)
     setPreviewImageNodeId(nodeId)
   }, [nodes])
+
+  const openImageTool = useCallback((nodeId: string, mode: ImageToolMode) => {
+    const node = nodes.find((item) => item.id === nodeId)
+    if (!node?.data.imageUrl) {
+      setToastMessage('请先选择已生成或已上传的图片')
+      return
+    }
+    const image = new Image()
+    image.onload = () => {
+      setImageToolSourceSize({ width: image.naturalWidth, height: image.naturalHeight })
+      if (mode === 'expand') {
+        setExpandSize({ width: image.naturalWidth, height: image.naturalHeight })
+        setExpandRatio('original')
+      }
+    }
+    image.src = node.data.imageUrl
+    if (mode === 'local-edit') setLocalEditMarks([])
+    setImageTool({ nodeId, mode })
+  }, [nodes])
+
+  const createDerivedImage = useCallback((sourceId: string, imageUrl: string, title: string, suffix: string) => {
+    const source = nodes.find((node) => node.id === sourceId)
+    if (!source) return
+    const id = `image-tool-${crypto.randomUUID()}`
+    const derived: CanvasNode = {
+      id,
+      type: 'disy',
+      position: { x: source.position.x + 330, y: source.position.y + 24 },
+      data: { kind: 'upload', title, body: '', fileName: `${source.data.fileName || title}-${suffix}.png`, imageUrl, generationSourceNodeId: sourceId },
+    }
+    setNodes((current) => [...current, derived])
+    setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: sourceId, target: id, type: 'luminous' }])
+  }, [nodes, setEdges, setNodes])
+
+  const cropImageToDataUrl = useCallback(async (source: string, x: number, y: number, width: number, height: number) => {
+    const image = new Image()
+    image.crossOrigin = 'anonymous'
+    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width)); canvas.height = Math.max(1, Math.round(height))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('浏览器不支持图片处理')
+    context.drawImage(image, x, y, width, height, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/png')
+  }, [])
+
+  const applyGridCut = useCallback(async () => {
+    if (!imageTool) return
+    const source = nodes.find((node) => node.id === imageTool.nodeId)
+    if (!source?.data.imageUrl) return
+    const x = [0, ...gridGuides.vertical.map((value) => value / 100), 1]
+    const y = [0, ...gridGuides.horizontal.map((value) => value / 100), 1]
+    try {
+      const image = new Image(); image.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source.data.imageUrl! })
+      let index = 0
+      for (let row = 0; row < y.length - 1; row += 1) for (let column = 0; column < x.length - 1; column += 1) {
+        const result = await cropImageToDataUrl(source.data.imageUrl, x[column] * image.naturalWidth, y[row] * image.naturalHeight, (x[column + 1] - x[column]) * image.naturalWidth, (y[row + 1] - y[row]) * image.naturalHeight)
+        createDerivedImage(source.id, result, `${getNodeDisplayTitle(source.data)} · 宫格 ${row + 1}-${column + 1}`, `grid-${++index}`)
+      }
+      setImageTool(null); setToastMessage(`已切分为 ${index} 张图片`)
+    } catch { setToastMessage('当前图片不允许浏览器读取像素，请先下载后重新上传再切分') }
+  }, [createDerivedImage, cropImageToDataUrl, gridGuides, imageTool, nodes])
+
+  const applyLocalCutout = useCallback(() => {
+    if (!imageTool) return
+    const source = nodes.find((node) => node.id === imageTool.nodeId)
+    if (!source?.data.imageUrl) return
+    cutoutWorkerRef.current?.terminate()
+    const worker = new Worker(new URL('./backgroundRemoval.worker.ts', import.meta.url), { type: 'module' })
+    cutoutWorkerRef.current = worker
+    setCutoutProgress({ stage: '正在启动本地抠图引擎', progress: 0 })
+    worker.onmessage = (event: MessageEvent<{ type: string; stage?: string; progress?: number; detail?: string; blob?: Blob; message?: string }>) => {
+      const message = event.data
+      if (message.type === 'progress') {
+        setCutoutProgress({ stage: message.stage || '正在处理', progress: message.progress, detail: message.detail })
+        return
+      }
+      worker.terminate()
+      cutoutWorkerRef.current = null
+      if (message.type === 'complete' && message.blob) {
+        const imageUrl = URL.createObjectURL(message.blob)
+        const nodeId = `cutout-${crypto.randomUUID()}`
+        const createdAt = new Date().toISOString()
+        const fileName = `${source.data.fileName || getNodeDisplayTitle(source.data)}-cutout.png`
+        const variant: ImageVariant = { id: `variant-${crypto.randomUUID()}`, url: imageUrl, fileName, createdAt, revisedPrompt: '本地 AI 自动识别主体并移除背景' }
+        const derived: CanvasNode = {
+          id: nodeId,
+          type: 'disy',
+          selected: true,
+          position: { x: source.position.x + 330, y: source.position.y + 24 },
+          style: source.style ? { ...source.style } : getImageGenerationNodeSize('auto'),
+          data: {
+            kind: 'image',
+            title: '透明抠图',
+            body: '本地 AI 自动识别主体并移除背景',
+            promptText: '本地 AI 自动识别主体并移除背景',
+            status: '已完成',
+            imageUrl,
+            fileName,
+            imageVariants: [variant],
+            activeImageVariantId: variant.id,
+            generationSourceNodeId: source.id,
+            referenceImageUrl: source.data.imageUrl,
+            referenceImageName: getNodeDisplayTitle(source.data),
+          },
+        }
+        setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), derived])
+        setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: nodeId, type: 'luminous' }])
+        setActiveImageNodeId(null)
+        setActiveGenerationNodeId(nodeId)
+        appendOutputHistory({ kind: 'image', status: 'success', prompt: '本地 AI 自动识别主体并移除背景', modelId: 'studioludens/birefnet-lite-512', modelName: 'BiRefNet Lite 本地抠图', connectionName: '本地浏览器', requestedCount: 1, outputCount: 1, preview: '透明 PNG · 本地处理 · 原图未上传' })
+        setCutoutProgress(null)
+        setImageTool(null)
+        setToastMessage('本地抠图完成，已自动生成并连接透明 PNG 节点')
+        return
+      }
+      setCutoutProgress({ stage: `抠图失败：${message.message || '未知错误'}`, failed: true })
+    }
+    worker.onerror = (event) => {
+      worker.terminate()
+      cutoutWorkerRef.current = null
+      setCutoutProgress({ stage: `抠图线程失败：${event.message || '浏览器无法启动后台模型'}`, failed: true })
+    }
+    worker.postMessage({ type: 'start', source: source.data.imageUrl })
+  }, [createDerivedImage, imageTool, nodes])
   const movePreviewImage = useCallback((step: number) => {
     if (previewImageItems.length < 2) return
     setPreviewImageDirection(step > 0 ? 1 : -1)
@@ -5496,6 +5950,12 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!autoGenerateNodeId || activeGenerationNode?.id !== autoGenerateNodeId) return
+    setAutoGenerateNodeId(null)
+    void generateFromActiveImageNode()
+  }, [autoGenerateNodeId, activeGenerationNode?.id])
+
   const agentImageCandidates: AgentImageReference[] = nodes.flatMap((node) => {
     if ((node.data.kind !== 'image' && node.data.kind !== 'upload') || !node.data.imageUrl) return []
     return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
@@ -6050,6 +6510,20 @@ function App() {
     const current = latestProjectCoverById.get(projectId)
     if (!current || record.createdAt > current.createdAt) latestProjectCoverById.set(projectId, record)
   })
+  const activeTaskCountByProjectId = new Map<string, number>()
+  activeGenerationTaskKeys.forEach((taskKey) => {
+    const projectId = generationTaskProjectIdsRef.current.get(taskKey)
+    if (projectId) activeTaskCountByProjectId.set(projectId, (activeTaskCountByProjectId.get(projectId) ?? 0) + 1)
+  })
+  const getProjectNodeCount = (projectId: string) => {
+    const persisted = persistedProjectContent[projectId]
+    if (projectId !== activeProjectId) return persisted?.nodeCount ?? 0
+    return Math.max(0, (persisted?.nodeCount ?? 0) - (persisted?.activeCanvasNodeCount ?? 0) + nodes.length)
+  }
+  const getProjectProcessCount = (projectId: string) => {
+    const generationCount = activeTaskCountByProjectId.get(projectId) ?? 0
+    return generationCount || (agentBusy && projectId === activeProjectId ? 1 : 0)
+  }
 
   useGSAP(() => {
     if (!projectHomeOpen || !projectHomeContentRef.current) return
@@ -6634,6 +7108,16 @@ function App() {
     await downloadSelectedImages([node])
   }
 
+  const saveImageUrlToAssets = (imageUrl: string, fileName: string, title = fileName) => {
+    const node: CanvasNode = {
+      id: `preview-asset-${crypto.randomUUID()}`,
+      type: 'disy',
+      position: { x: 0, y: 0 },
+      data: { kind: 'image', title, body: '', imageUrl, fileName, status: '已完成' },
+    }
+    saveNodeToAssets(node)
+  }
+
   const downloadAsset = async (asset: SavedAsset) => {
     if (asset.nodes?.some((node) => node.data.imageUrl)) {
       await downloadSelectedImages(asset.nodes)
@@ -6851,7 +7335,10 @@ function App() {
       .toLowerCase()
     return searchable.includes(query)
   })
-  const groupedAssets = Array.from(filteredAssets.reduce((groups, asset) => {
+  const libraryPageSize = 60
+  const assetLibraryTotalPages = Math.max(1, Math.ceil(filteredAssets.length / libraryPageSize))
+  const pagedAssets = filteredAssets.slice((assetLibraryPage - 1) * libraryPageSize, assetLibraryPage * libraryPageSize)
+  const groupedAssets = Array.from(pagedAssets.reduce((groups, asset) => {
     const date = new Date(asset.savedAt)
     const key = Number.isNaN(date.getTime())
       ? '未知日期'
@@ -6871,7 +7358,9 @@ function App() {
     const query = generationHistorySearch.trim().toLowerCase()
     return !query || `${record.prompt} ${record.model} ${record.fileName}`.toLowerCase().includes(query)
   })
-  const groupedHistory = Array.from(filteredHistory.reduce((groups, record) => {
+  const generationHistoryTotalPages = Math.max(1, Math.ceil(filteredHistory.length / libraryPageSize))
+  const pagedHistory = filteredHistory.slice((generationHistoryPage - 1) * libraryPageSize, generationHistoryPage * libraryPageSize)
+  const groupedHistory = Array.from(pagedHistory.reduce((groups, record) => {
     const date = new Date(record.createdAt)
     const key = Number.isNaN(date.getTime())
       ? '未知日期'
@@ -6881,6 +7370,10 @@ function App() {
     groups.set(key, current)
     return groups
   }, new Map<string, GenerationRecord[]>()).entries()).reverse()
+  useEffect(() => { setAssetLibraryPage(1) }, [activeAssetFolderId, assetSearch, assetScope])
+  useEffect(() => { setGenerationHistoryPage(1) }, [activeProjectId, generationHistorySearch])
+  useEffect(() => { if (assetLibraryPage > assetLibraryTotalPages) setAssetLibraryPage(assetLibraryTotalPages) }, [assetLibraryPage, assetLibraryTotalPages])
+  useEffect(() => { if (generationHistoryPage > generationHistoryTotalPages) setGenerationHistoryPage(generationHistoryTotalPages) }, [generationHistoryPage, generationHistoryTotalPages])
   const outputFailureCount = currentOutputHistory.filter((record) => record.status === 'failed').length
   const filteredOperatorLogs = operatorLogs.filter((log) => {
     const query = outputHistorySearch.trim().toLowerCase()
@@ -6965,10 +7458,9 @@ function App() {
                 {projectHomeSelectionMode && selectedProjectIds.length > 0 && <button className="project-home-batch-delete" onClick={() => void removeProjects(selectedProjectIds)}><Trash2 size={15} />批量删除 ({selectedProjectIds.length})</button>}
                 <button className={`project-home-icon ${projectHomeView === 'list' ? 'is-active' : ''}`} onClick={() => setProjectHomeView((view) => view === 'grid' ? 'list' : 'grid')} aria-label={projectHomeView === 'grid' ? '切换到列表视图' : '切换到宫格视图'} title={projectHomeView === 'grid' ? '列表视图' : '宫格视图'}>{projectHomeView === 'grid' ? <List size={18} /> : <Grid3X3 size={17} />}</button>
                 <button className="project-home-icon" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
-                <button className="project-home-create" onClick={() => void createNewProject()}><Plus size={16} /> 新建项目</button>
                 <button
                   className={`project-home-api ${apiConfigured ? 'is-configured' : ''}`}
-                  onClick={() => setApiOpen(true)}
+                  onClick={openApiSettings}
                   aria-label={apiConfigured ? '管理 API 配置' : '配置 API'}
                   title={apiConfigured ? '管理 API 配置' : '配置 API'}
                 >
@@ -6997,6 +7489,8 @@ function App() {
                   const cover = latestProjectCoverById.get(project.id)
                   const isSelected = selectedProjectIds.includes(project.id)
                   const isRenaming = projectRename?.id === project.id && projectRename.source === 'home'
+                  const nodeCount = getProjectNodeCount(project.id)
+                  const processCount = getProjectProcessCount(project.id)
                   return <article className={`project-home-card ${isSelected ? 'is-selected' : ''}`} key={project.id} onClick={() => {
                     if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
                     if (isRenaming) return
@@ -7015,8 +7509,14 @@ function App() {
                     {projectHomeSelectionMode && <button className="project-home-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={14} />}</button>}
                     <button className="project-home-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
                     <button className="project-home-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
-                    <div className={`project-home-cover cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <div className="cover-orbit"><i /><i /><i /></div>}</div>
-                    <div className="project-home-meta">{isRenaming ? <input autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<small>{project.canvasIds.length} 张画布 · 编辑于 {formatRelativeTime(project.updatedAt)}</small></div>
+                    <div className={`project-home-cover cover-${index % 4}`}>
+                      {cover ? <img src={cover.imageUrl} alt="" /> : <div className="cover-orbit"><i /><i /><i /></div>}
+                      {(nodeCount > 0 || processCount > 0) && <div className="project-home-statuses">
+                        {processCount > 0 && <span className="project-status-badge is-running"><i />进行中{processCount > 1 ? ` ${processCount}` : ''}</span>}
+                        {nodeCount > 0 && <span className="project-status-badge is-content"><Box size={11} />{nodeCount} 个节点</span>}
+                      </div>}
+                    </div>
+                    <div className="project-home-meta">{isRenaming ? <input autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<small>{project.canvasIds.length} 张画布{nodeCount > 0 ? ` · ${nodeCount} 个节点` : ''} · 编辑于 {formatRelativeTime(project.updatedAt)}</small></div>
                   </article>
                 })}
               </div> : <div className="project-home-list" role="table" aria-label="项目列表">
@@ -7025,6 +7525,8 @@ function App() {
                   const cover = latestProjectCoverById.get(project.id)
                   const isSelected = selectedProjectIds.includes(project.id)
                   const isRenaming = projectRename?.id === project.id && projectRename.source === 'home'
+                  const nodeCount = getProjectNodeCount(project.id)
+                  const processCount = getProjectProcessCount(project.id)
                   return <div className={`project-home-list-row ${isSelected ? 'is-selected' : ''}`} role="row" tabIndex={0} key={project.id} onClick={() => {
                     if (projectHomeSelectionMode) { setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]); return }
                     if (isRenaming) return
@@ -7040,7 +7542,7 @@ function App() {
                     })
                   }}>
                     {projectHomeSelectionMode && <button className="project-home-list-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={13} />}</button>}
-                    <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span>{project.canvasIds.length} 张画布</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
+                    <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span className="project-home-list-content">{processCount > 0 && <span className="project-status-badge is-running"><i />进行中{processCount > 1 ? ` ${processCount}` : ''}</span>}{nodeCount > 0 ? <span className="project-status-badge is-content"><Box size={11} />{nodeCount} 个节点</span> : <em>空项目</em>}</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
                     <button className="project-home-list-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
                     <button className="project-home-list-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
                   </div>
@@ -7061,6 +7563,7 @@ function App() {
       <main className="canvas-area">
         <ActiveGenerationNodesContext.Provider value={activeGeneratingNodeIds}>
         <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
+          <ImageToolOpenContext.Provider value={openImageTool}>
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
               <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
@@ -7187,12 +7690,25 @@ function App() {
             openNodeMenu(event)
           }}
           onDragOver={(event) => {
-            if (event.dataTransfer.types.includes('application/x-disy-asset') || Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) {
+            if (event.dataTransfer.types.includes('application/x-disy-asset') || event.dataTransfer.types.includes('application/x-disy-prompt-case') || Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) {
               event.preventDefault()
               event.dataTransfer.dropEffect = 'copy'
             }
           }}
           onDrop={(event) => {
+            const promptCasePayload = event.dataTransfer.getData('application/x-disy-prompt-case')
+            if (promptCasePayload) {
+              event.preventDefault()
+              closeAllMenus()
+              try {
+                const item = JSON.parse(promptCasePayload) as PromptLibraryCase
+                const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                addPromptCaseImage(item, flowPosition)
+              } catch {
+                setToastMessage('案例参考图读取失败，请从详情中点击加入画布')
+              }
+              return
+            }
             const assetId = event.dataTransfer.getData('application/x-disy-asset')
             if (assetId) {
               event.preventDefault()
@@ -7274,8 +7790,88 @@ function App() {
               </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
+          </ImageToolOpenContext.Provider>
         </ImagePreviewOpenContext.Provider>
         </ActiveGenerationNodesContext.Provider>
+
+        <AnimatePresence>
+          {imageTool && (() => {
+            const source = nodes.find((node) => node.id === imageTool.nodeId)
+            const sourceUrl = source?.data.imageUrl
+            if (!source || !sourceUrl) return null
+            const cutoutBusy = Boolean(cutoutProgress && !cutoutProgress.failed)
+            const setGuide = (axis: 'vertical' | 'horizontal', index: number, value: number) => setGridGuides((current) => ({ ...current, [axis]: current[axis].map((guide, guideIndex) => guideIndex === index ? value : guide).sort((a, b) => a - b) }))
+            const applyGridPreset = (columns: number, rows = columns) => {
+              const evenlySpaced = (count: number) => Array.from({ length: Math.max(0, count - 1) }, (_, index) => (index + 1) * 100 / count)
+              setCustomGrid({ columns, rows })
+              setGridGuides({ vertical: evenlySpaced(columns), horizontal: evenlySpaced(rows) })
+            }
+            const applyExpandRatio = (ratio: typeof expandRatio) => {
+              setExpandRatio(ratio)
+              if (ratio === 'original') {
+                setExpandSize(imageToolSourceSize)
+                return
+              }
+              if (ratio === 'custom') return
+              const [widthRatio, heightRatio] = ratio.split(':').map(Number)
+              const longestEdge = Math.max(expandSize.width, expandSize.height, 1024)
+              if (widthRatio >= heightRatio) setExpandSize({ width: longestEdge, height: Math.round(longestEdge * heightRatio / widthRatio) })
+              else setExpandSize({ width: Math.round(longestEdge * widthRatio / heightRatio), height: longestEdge })
+            }
+            const startExpandDrag = (side: keyof typeof expandInsets, event: React.PointerEvent<HTMLButtonElement>) => { const plane = event.currentTarget.closest('.image-tool-image-plane')!; const move = (moveEvent: PointerEvent) => { const rect = plane.getBoundingClientRect(); const value = side === 'left' ? (moveEvent.clientX - rect.left) / rect.width * 100 : side === 'right' ? (rect.right - moveEvent.clientX) / rect.width * 100 : side === 'top' ? (moveEvent.clientY - rect.top) / rect.height * 100 : (rect.bottom - moveEvent.clientY) / rect.height * 100; setExpandInsets((current) => ({ ...current, [side]: Math.round(Math.min(60, Math.max(-80, value))) })) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }
+            const createImageEditTask = (title: string, prompt: string) => { const id = `image-edit-${crypto.randomUUID()}`; const nodeSize = getImageGenerationNodeSize('auto'); setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), { id, type: 'disy', selected: true, position: { x: source.position.x + 330, y: source.position.y + 24 }, style: nodeSize, data: { kind: 'image', title, body: prompt, promptText: prompt, referenceImageUrl: sourceUrl, referenceImageName: getNodeDisplayTitle(source.data), imageAspectRatio: 'auto', status: '待生成', generationSourceNodeId: source.id } }]); setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }]); setActiveImageNodeId(null); setActiveGenerationNodeId(id); setAutoGenerateNodeId(id); setImageTool(null); setToastMessage(`正在执行${title}…`) }
+            const addLocalEditMark = (event: React.PointerEvent<HTMLDivElement>) => {
+              if (imageTool.mode !== 'local-edit' || localEditMarks.length >= 5 || event.button !== 0) return
+              const image = event.currentTarget.querySelector(':scope > img')
+              if (!(image instanceof HTMLImageElement)) return
+              const rect = image.getBoundingClientRect()
+              if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return
+              const x = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100))
+              const y = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100))
+              setLocalEditMarks((current) => current.length >= 5 ? current : [...current, { id: crypto.randomUUID(), x, y, prompt: '' }])
+            }
+            return <motion.div className="image-tool-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => { if (!cutoutBusy) setImageTool(null) }}>
+              <motion.section className={`image-tool-dialog mode-${imageTool.mode}`} initial={{ opacity: 0, y: 18, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }} onMouseDown={(event) => event.stopPropagation()}>
+                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'local-edit' ? '评论修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'local-edit' ? '点击图片添加修改意见，最多 5 条' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
+                <div className="image-tool-content">
+                  <div className={`image-tool-stage mode-${imageTool.mode}`}>
+                    <div className="image-tool-image-plane" onPointerDown={addLocalEditMark} style={{ aspectRatio: imageTool.mode === 'expand' ? `${expandSize.width} / ${expandSize.height}` : `${imageToolSourceSize.width} / ${imageToolSourceSize.height}`, ...(imageTool.mode === 'local-edit' ? { width: `min(100%, ${Math.max(1, Math.round(500 * imageToolSourceSize.width / imageToolSourceSize.height))}px)` } : {}) }}>
+                      <img src={sourceUrl} alt="编辑预览" />
+                      {imageTool.mode === 'grid' && <>{gridGuides.vertical.map((guide, index) => <i key={`v-${index}`} className="image-guide is-vertical" style={{ left: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientX - stage.getBoundingClientRect().left) / stage.getBoundingClientRect().width * 100)); setGuide('vertical', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}{gridGuides.horizontal.map((guide, index) => <i key={`h-${index}`} className="image-guide is-horizontal" style={{ top: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientY - stage.getBoundingClientRect().top) / stage.getBoundingClientRect().height * 100)); setGuide('horizontal', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}</>}
+                      {imageTool.mode === 'expand' && <div className="expand-boundary" style={{ inset: `${expandInsets.top}% ${expandInsets.right}% ${expandInsets.bottom}% ${expandInsets.left}%` }}><button className="expand-handle top" onPointerDown={(event) => startExpandDrag('top', event)} /><button className="expand-handle right" onPointerDown={(event) => startExpandDrag('right', event)} /><button className="expand-handle bottom" onPointerDown={(event) => startExpandDrag('bottom', event)} /><button className="expand-handle left" onPointerDown={(event) => startExpandDrag('left', event)} /></div>}
+                      {imageTool.mode === 'studio' && <div className="lighting-three-shell"><div className="lighting-three-tabs"><button className={lightingView === 'perspective' ? 'is-active' : ''} onClick={() => setLightingView('perspective')}>透视</button><button className={lightingView === 'front' ? 'is-active' : ''} onClick={() => setLightingView('front')}>正面</button></div><Suspense fallback={<div className="lighting-three-loading"><LoaderCircle className="is-spinning" size={20} />正在载入三维光场…</div>}><LightingSpherePreview imageUrl={sourceUrl} yaw={studioLighting.yaw} pitch={studioLighting.pitch} intensity={studioLighting.intensity} temperatureK={studioLighting.temperatureK} view={lightingView} onChange={(yaw, pitch) => setStudioLighting((current) => ({ ...current, yaw, pitch }))} /></Suspense><span className="lighting-three-label">主光源</span><button type="button" className="lighting-three-reset" onClick={() => setStudioLighting({ yaw: 0, pitch: 0, intensity: 50, temperatureK: 5600, fill: true, rim: false, rimStrength: 20 })}>↻ 重置</button><em>水平 {studioLighting.yaw}° · 垂直 {studioLighting.pitch}°</em></div>}
+                      {imageTool.mode === 'local-edit' && <div className="local-edit-overlay">{localEditMarks.map((mark, index) => <span key={mark.id} className="local-edit-pin" style={{ left: `${mark.x}%`, top: `${mark.y}%` }} onPointerDown={(event) => event.stopPropagation()}>{index + 1}</span>)}</div>}
+                    </div>
+                  </div>
+                  {imageTool.mode === 'grid' ? <div className="image-tool-controls">
+                    <p>选择预设后仍可拖动青色辅助线微调。</p>
+                    <div className="grid-preset-list">{[2, 3, 4, 5].map((size) => <button key={size} type="button" className={customGrid.columns === size && customGrid.rows === size ? 'is-selected' : ''} onClick={() => applyGridPreset(size)}><Grid3X3 size={14} /><span>{size * size} 宫格</span><small>{size} × {size}</small></button>)}</div>
+                    <div className="custom-grid-fields"><strong>自定义裁切</strong><label>列数<input type="number" min="1" max="10" value={customGrid.columns} onChange={(event) => applyGridPreset(Math.min(10, Math.max(1, Number(event.target.value))), customGrid.rows)} /></label><span>×</span><label>行数<input type="number" min="1" max="10" value={customGrid.rows} onChange={(event) => applyGridPreset(customGrid.columns, Math.min(10, Math.max(1, Number(event.target.value))))} /></label></div>
+                    <div className="guide-actions"><button type="button" onClick={() => setGridGuides((current) => ({ ...current, vertical: [...current.vertical, 50].sort((a, b) => a - b) }))}>+ 竖线</button><button type="button" onClick={() => setGridGuides((current) => ({ ...current, horizontal: [...current.horizontal, 50].sort((a, b) => a - b) }))}>+ 横线</button></div>
+                  </div> : imageTool.mode === 'expand' ? <div className="image-tool-controls">
+                    <strong className="control-title">目标比例</strong>
+                    <div className="expand-ratio-list">{(['original', '1:1', '4:3', '16:9', '3:4', '9:16'] as const).map((ratio) => <button key={ratio} type="button" className={expandRatio === ratio ? 'is-selected' : ''} onClick={() => applyExpandRatio(ratio)}>{ratio === 'original' ? '原比例' : ratio}</button>)}</div>
+                    <div className="expand-size-fields"><strong>具体尺寸</strong><label><input type="number" min="64" max="8192" value={expandSize.width} onChange={(event) => { setExpandRatio('custom'); setExpandSize((current) => ({ ...current, width: Math.min(8192, Math.max(64, Number(event.target.value))) })) }} /><small>宽 px</small></label><span>×</span><label><input type="number" min="64" max="8192" value={expandSize.height} onChange={(event) => { setExpandRatio('custom'); setExpandSize((current) => ({ ...current, height: Math.min(8192, Math.max(64, Number(event.target.value))) })) }} /><small>高 px</small></label></div>
+                    <label className="expand-prompt-label">延展提示词<textarea value={expandPrompt} onChange={(event) => setExpandPrompt(event.target.value)} /></label>
+                    <div className="inset-fields"><small>负值表示向原图外侧扩展，可直接拖动画框四边。</small>{(['top', 'right', 'bottom', 'left'] as const).map((side) => <label key={side}>{({ top: '上', right: '右', bottom: '下', left: '左' } as const)[side]} <input type="range" min="-80" max="60" value={expandInsets[side]} onChange={(event) => setExpandInsets((current) => ({ ...current, [side]: Number(event.target.value) }))} /><b>{expandInsets[side]}%</b></label>)}</div>
+                  </div> : imageTool.mode === 'studio' ? <div className="image-tool-controls studio-controls">
+                    <section className="lighting-global"><strong>全局</strong><label><span>亮度</span><input type="range" min="10" max="100" value={studioLighting.intensity} onChange={(event) => setStudioLighting((current) => ({ ...current, intensity: Number(event.target.value) }))} /><b>{studioLighting.intensity}%</b></label><label><span>色温</span><input type="range" min="3200" max="7600" step="100" value={studioLighting.temperatureK} onChange={(event) => setStudioLighting((current) => ({ ...current, temperatureK: Number(event.target.value) }))} /><b>{studioLighting.temperatureK}K</b></label></section>
+                    <section><strong>主光源</strong><div className="studio-presets">{[['左侧', -90, 15], ['顶部', 0, 75], ['右侧', 90, 15], ['前方', 0, 10], ['底部', 0, -60], ['后方', 180, 15]].map(([label, yaw, pitch]) => <button key={String(label)} className={studioLighting.yaw === Number(yaw) && studioLighting.pitch === Number(pitch) ? 'is-selected' : ''} onClick={() => setStudioLighting((current) => ({ ...current, yaw: Number(yaw), pitch: Number(pitch) }))}>{label}</button>)}</div></section>
+                    <section className="lighting-rim"><div><strong>轮廓光</strong><button type="button" className={studioLighting.rim ? 'is-on' : ''} onClick={() => setStudioLighting((current) => ({ ...current, rim: !current.rim }))}><i /></button></div>{studioLighting.rim && <label><span>强度</span><input type="range" min="5" max="80" value={studioLighting.rimStrength} onChange={(event) => setStudioLighting((current) => ({ ...current, rimStrength: Number(event.target.value) }))} /><b>{studioLighting.rimStrength}%</b></label>}</section>
+                    <div className="lighting-prompt-preview"><small>打光提示</small><p>{`主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，轮廓光 ${studioLighting.rimStrength}%` : ''}`}</p></div>
+                  </div> : imageTool.mode === 'local-edit' ? <div className="image-tool-controls local-edit-controls">
+                    <div className="local-edit-heading"><strong>评论列表</strong><span>{localEditMarks.length} / 5</span></div>
+                    <p>点击左侧图片需要修改的位置，再为对应编号填写修改要求。</p>
+                    <div className="local-edit-comment-list">{localEditMarks.map((mark, index) => <label key={mark.id}><b>{index + 1}</b><textarea autoFocus={index === localEditMarks.length - 1} value={mark.prompt} placeholder="描述这个位置要怎么修改…" onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setLocalEditMarks((current) => current.map((item) => item.id === mark.id ? { ...item, prompt: event.target.value } : item))} /><button type="button" aria-label={`删除评论 ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setLocalEditMarks((current) => current.filter((item) => item.id !== mark.id))}><X size={14} /></button></label>)}</div>
+                    {!localEditMarks.length && <div className="local-edit-empty"><MessageCircle size={20} /><strong>在图片上添加评论</strong><span>点击任意位置，最多添加 5 条</span></div>}
+                    {localEditMarks.length >= 5 && <small className="local-edit-limit">已达到 5 条评论上限</small>}
+                  </div> : <div className="image-tool-controls cutout-info"><p>本机后台运行 MIT 许可的通用主体模型；首次下载后会缓存，不消耗 API 积分，也不会上传原图。</p><small>适合人像、商品主体；复杂毛发建议生成后检查边缘。</small>{cutoutProgress && <div className="cutout-progress-panel" role="status" aria-live="polite"><div><LoaderCircle className="is-spinning" size={15} /><strong>{cutoutProgress.stage}</strong><b>{typeof cutoutProgress.progress === 'number' ? `${Math.round(cutoutProgress.progress)}%` : ''}</b></div><span><i style={{ width: `${cutoutProgress.progress ?? 8}%` }} /></span>{cutoutProgress.detail && <small>{cutoutProgress.detail}</small>}<em>处理完成前窗口会保持打开，随后自动生成并连接结果节点。</em></div>}</div>}
+                </div>
+                <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" onClick={() => { const direction = studioLighting.yaw > 135 || studioLighting.yaw < -135 ? '后方逆光' : studioLighting.yaw > 45 ? '右侧光' : studioLighting.yaw < -45 ? '左侧光' : studioLighting.pitch > 45 ? '顶部光' : studioLighting.pitch < -35 ? '底部光' : '前方光'; createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线：${direction}，主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，全局亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，增加 ${studioLighting.rimStrength}% 轮廓光` : ''}。光影自然、曝光准确，不改变产品形状、画面内容与视角。`) }}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('评论修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
+              </motion.section>
+            </motion.div>
+          })()}
+        </AnimatePresence>
 
         <AnimatePresence>
           {canvasReferencePickerNodeId && (
@@ -7405,15 +8001,15 @@ function App() {
                       <PanelsTopLeft size={15} /><span>创建模板</span>
                     </button>
                   </>}
-                  <button type="button" onClick={saveSelectedNodesToAssets}>
-                    <Library size={15} /><span>加入资产库</span>
-                  </button>
                   <span className="selection-toolbar-divider" />
                   <button type="button" onClick={ungroupSelectedNode}>
                     <Unlink2 size={15} /><span>解组</span>
                   </button>
                   <button type="button" aria-label="整组下载" title="整组下载" onClick={() => void downloadSelectedImages()}>
                     <Download size={15} />
+                  </button>
+                  <button type="button" onClick={saveSelectedNodesToAssets}>
+                    <Library size={15} /><span>加入资产库</span>
                   </button>
                 </>
               ) : (
@@ -7451,6 +8047,7 @@ function App() {
                 imageModelKey={agentImageModelKey}
                 onTextModelChange={setAgentTextModelKey}
                 onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
+                onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
                 onSend={(message) => void sendAgentMessage(message, message)}
                 busy={agentBusy}
               /></motion.div>}
@@ -7510,33 +8107,13 @@ function App() {
           ref={generationReferenceInputRef}
           className="image-file-input"
           type="file"
-          accept="image/*"
+          accept="image/png,image/jpeg,image/webp"
           multiple
           aria-label="为图像生成节点上传参考图片"
           onChange={(event) => {
-            const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
+            const files = Array.from(event.target.files ?? [])
             const nodeId = generationReferenceNodeIdRef.current
-            if (files.length && nodeId) {
-              void Promise.all(files.map((file) => new Promise<ImageReference>((resolve, reject) => {
-                const reader = new FileReader()
-                reader.onload = () => resolve({
-                  id: `manual-${crypto.randomUUID()}`,
-                  name: file.name,
-                  url: String(reader.result),
-                })
-                reader.onerror = () => reject(reader.error ?? new Error('图片读取失败'))
-                reader.readAsDataURL(file)
-              }))).then((references) => {
-                setNodes((current) => current.map((node) => node.id === nodeId ? {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    referenceImages: [...(node.data.referenceImages ?? []), ...references],
-                  },
-                } : node))
-                setToastMessage(`已添加 ${references.length} 张参考图`)
-              }).catch(() => setToastMessage('图片读取失败'))
-            }
+            if (files.length && nodeId) void addReferenceFilesToNode(nodeId, files)
             event.target.value = ''
             generationReferenceNodeIdRef.current = null
           }}
@@ -7929,7 +8506,7 @@ function App() {
           <button
             ref={apiButtonRef}
             className={`api-chip ${apiConfigured ? 'configured' : ''}`}
-            onClick={() => setApiOpen(true)}
+            onClick={openApiSettings}
           >
             <KeyRound size={15} />
             {apiConfigured ? 'API 已配置' : '配置 API'}
@@ -7963,6 +8540,14 @@ function App() {
             <Search size={18} />
           </button>
           <button
+            className={promptLibraryOpen ? 'is-active' : ''}
+            aria-label="提示库"
+            data-tooltip="提示库"
+            onClick={() => setPromptLibraryOpen(true)}
+          >
+            <BookOpen size={18} />
+          </button>
+          <button
             aria-label="资产库"
             data-tooltip={`资产库 · ${savedAssets.length}`}
             onClick={() => {
@@ -7980,7 +8565,7 @@ function App() {
             <History size={18} />
           </button>
           <span className="rail-divider" />
-          <button aria-label="设置" data-tooltip="设置" onClick={() => setApiOpen(true)}>
+          <button aria-label="设置" data-tooltip="设置" onClick={openApiSettings}>
             <Settings2 size={18} />
           </button>
           <button className={`rail-avatar ${agentOpen ? 'is-active' : ''}`} aria-label="Disy 与您对话" data-tooltip="Disy 与您对话" aria-expanded={agentOpen} aria-controls="disy-agent-panel" onClick={() => { setAgentOpen((open) => !open); setAgentCanvasPicking(false) }}>
@@ -8120,6 +8705,7 @@ function App() {
                 onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
                 onReferencesChange={setAgentReferences}
                 onCreateUploadedReference={createAgentUploadedReference}
+                onUploadNotice={setToastMessage}
                 onPendingReferenceConsumed={() => setAgentPendingReferences([])}
                 onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
                 onSend={(message, invocationText, references) => void sendAgentMessage(message, invocationText, references)}
@@ -8258,7 +8844,7 @@ function App() {
             <motion.div
               className="node-quick-toolbar image-node-quick-toolbar nodrag nowheel"
               style={{
-                left: Math.min(window.innerWidth - 150, Math.max(150, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
+                left: Math.min(window.innerWidth - 320, Math.max(320, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
                 top: nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
@@ -8271,15 +8857,14 @@ function App() {
                 <span>放大查看</span>
               </button>
               <span className="quick-toolbar-divider" />
-              <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])}>
-                <Download size={14} />
-                <span>下载</span>
-              </button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'local-edit')} title="评论修改"><MessageCircle size={14} /><span>评论修改</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
               <span className="quick-toolbar-divider" />
-              <button type="button" onClick={() => saveNodeToAssets(activeImageNode)}>
-                <Library size={14} />
-                <span>加入资产库</span>
-              </button>
+              <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])}><Download size={14} /><span>下载</span></button>
+              <button type="button" onClick={() => saveNodeToAssets(activeImageNode)}><Library size={14} /><span>加入资产库</span></button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -8289,7 +8874,9 @@ function App() {
             <motion.div
               className={`node-quick-toolbar ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
               style={{
-                left: nodeEditorCenterX,
+                left: activeGenerationNode.data.imageUrl
+                  ? Math.min(window.innerWidth - 320, Math.max(320, nodeEditorCenterX))
+                  : nodeEditorCenterX,
                 top: nodeOverlayRect.top - 10,
               }}
               initial={{ opacity: 0 }}
@@ -8304,15 +8891,14 @@ function App() {
                     <span>放大查看</span>
                   </button>
                   <span className="quick-toolbar-divider" />
-                  <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])}>
-                    <Download size={14} />
-                    <span>下载</span>
-                  </button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'local-edit')} title="评论修改"><MessageCircle size={14} /><span>评论修改</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
                   <span className="quick-toolbar-divider" />
-                  <button type="button" onClick={() => saveNodeToAssets(activeGenerationNode)}>
-                    <Library size={14} />
-                    <span>加入资产库</span>
-                  </button>
+                  <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])}><Download size={14} /><span>下载</span></button>
+                  <button type="button" onClick={() => saveNodeToAssets(activeGenerationNode)}><Library size={14} /><span>加入资产库</span></button>
                 </>
               ) : (
                 <button
@@ -8374,6 +8960,9 @@ function App() {
               <header className="image-preview-toolbar" onPointerDown={(event) => event.stopPropagation()}>
                 <span>{safePreviewImageIndex + 1} / {previewImageItems.length}</span>
                 <div>
+                  <button type="button" className="image-preview-action" onClick={() => void downloadImageUrl(previewImage.url, previewImage.fileName)}><Download size={16} /><span>下载</span></button>
+                  <button type="button" className="image-preview-action" onClick={() => saveImageUrlToAssets(previewImage.url, previewImage.fileName, previewImageNode ? getNodeDisplayTitle(previewImageNode.data) : previewImage.fileName)}><Library size={16} /><span>加入资产库</span></button>
+                  <span className="image-preview-toolbar-divider" />
                   <button type="button" aria-label="关闭图片预览" onClick={() => setPreviewImageNodeId(null)}>
                     <X size={21} strokeWidth={1.6} />
                   </button>
@@ -8445,6 +9034,8 @@ function App() {
                   <span>{libraryPreviewIndex + 1} / {libraryPreviewItems.length}</span>
                 </div>
                 <div>
+                  <button type="button" className="library-gallery-action" onClick={() => void downloadImageUrl(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Download size={15} /><span>下载</span></button>
+                  <button type="button" className="library-gallery-action" disabled={libraryPreview.kind === 'asset'} title={libraryPreview.kind === 'asset' ? '该图片已在资产库' : '加入资产库'} onClick={() => saveImageUrlToAssets(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Library size={15} /><span>{libraryPreview.kind === 'asset' ? '已在资产库' : '加入资产库'}</span></button>
                   <button type="button" aria-label="关闭画廊" onClick={() => setLibraryPreview(null)}><X size={20} /></button>
                 </div>
               </header>
@@ -8594,7 +9185,16 @@ function App() {
                 onPointerDown={(event) => event.stopPropagation()}
                 onWheel={(event) => event.stopPropagation()}
               >
-                <div className="image-editor-reference-row">
+                <div
+                  className={`image-editor-reference-row reference-drop-zone ${referenceDropTargetNodeId === activeGenerationNode.id ? 'is-drop-active' : ''}`}
+                  onDragEnter={(event) => handleReferenceDragOver(event, activeGenerationNode.id)}
+                  onDragOver={(event) => handleReferenceDragOver(event, activeGenerationNode.id)}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setReferenceDropTargetNodeId(null)
+                  }}
+                  onDrop={(event) => handleReferenceDrop(event, activeGenerationNode.id)}
+                >
+                  <span className="reference-drop-hint"><Upload size={15} />松开以添加参考图</span>
                   <div
                     className="image-reference-thumbnails"
                     onWheel={(event) => {
@@ -8789,7 +9389,7 @@ function App() {
                         >
                           <div className="editor-model-menu-heading">
                             <span>图像模型</span>
-                            <button type="button" onClick={() => { setImageModelMenuOpen(false); setApiOpen(true) }} title="管理 API 连接">
+                            <button type="button" onClick={() => { setImageModelMenuOpen(false); openApiSettings() }} title="管理 API 连接">
                               <Settings2 size={13} />
                             </button>
                           </div>
@@ -8825,7 +9425,7 @@ function App() {
                         setImageParameterMenuOpen(false)
                         setQuantityMenuOpen(false)
                         if (enabledImageModels.length) setImageModelMenuOpen((open) => !open)
-                        else setApiOpen(true)
+                        else openApiSettings()
                       }}
                     >
                       <ModelBrandBadge name={activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name} image />
@@ -8950,7 +9550,16 @@ function App() {
                 exit={{ opacity: 0, y: 10, scale: 0.98 }}
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <div className="image-editor-reference-row text-editor-reference-row">
+                <div
+                  className={`image-editor-reference-row text-editor-reference-row reference-drop-zone ${referenceDropTargetNodeId === activeTextNode.id ? 'is-drop-active' : ''}`}
+                  onDragEnter={(event) => handleReferenceDragOver(event, activeTextNode.id)}
+                  onDragOver={(event) => handleReferenceDragOver(event, activeTextNode.id)}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setReferenceDropTargetNodeId(null)
+                  }}
+                  onDrop={(event) => handleReferenceDrop(event, activeTextNode.id)}
+                >
+                    <span className="reference-drop-hint"><Upload size={15} />松开以添加参考图</span>
                     <div className="image-reference-thumbnails">
                       {activeTextReferences.map((reference) => (
                         <button
@@ -8988,6 +9597,15 @@ function App() {
                         </button>
                       ))}
                     </div>
+                    <button
+                      type="button"
+                      className="add-image-reference-button"
+                      title="上传本地参考图片"
+                      onClick={() => {
+                        generationReferenceNodeIdRef.current = activeTextNode.id
+                        generationReferenceInputRef.current?.click()
+                      }}
+                    ><Upload size={15} /></button>
                     <button
                       type="button"
                       className="add-image-reference-button"
@@ -9078,7 +9696,7 @@ function App() {
                         >
                           <div className="editor-model-menu-heading">
                             <span>文本模型</span>
-                            <button type="button" onClick={() => { setModelMenuOpen(false); setApiOpen(true) }} title="管理 API 连接">
+                            <button type="button" onClick={() => { setModelMenuOpen(false); openApiSettings() }} title="管理 API 连接">
                               <Settings2 size={13} />
                             </button>
                           </div>
@@ -9107,7 +9725,7 @@ function App() {
                       type="button"
                       className="editor-model-empty"
                       title={selectedTextModel?.model.name || '选择文本模型'}
-                      onClick={() => enabledTextModels.length ? setModelMenuOpen((open) => !open) : setApiOpen(true)}
+                      onClick={() => enabledTextModels.length ? setModelMenuOpen((open) => !open) : openApiSettings()}
                     >
                       <ModelBrandBadge name={selectedTextModel?.model.name} />
                       <span>{selectedTextModel?.model.name || (hasCatalogTextModels ? '文本模型尚未启用' : hasCatalogImageModels ? '当前只有图像模型，请切换' : '配置并启用文本模型')}</span>
@@ -9463,6 +10081,13 @@ function App() {
         )}
       </AnimatePresence>
 
+      <PromptLibraryPanel
+        open={promptLibraryOpen}
+        onClose={() => setPromptLibraryOpen(false)}
+        onUsePrompt={addPromptCaseNode}
+        onAddImage={addPromptCaseImage}
+      />
+
       <AnimatePresence>
         {assetLibraryOpen && (
           <motion.div
@@ -9521,6 +10146,7 @@ function App() {
                 </label>
                 <button type="button" className="asset-action-button" onClick={() => setCreatingFolder(true)}><FolderPlus size={15} />新建文件夹</button>
                 <button type="button" className="asset-action-button is-primary" onClick={() => assetUploadInputRef.current?.click()}><Upload size={15} />上传图片</button>
+                <div className="library-page-control"><button disabled={assetLibraryPage <= 1} onClick={() => setAssetLibraryPage((page) => page - 1)}><ChevronLeft size={14} /></button><span>{assetLibraryPage} / {assetLibraryTotalPages}</span><button disabled={assetLibraryPage >= assetLibraryTotalPages} onClick={() => setAssetLibraryPage((page) => page + 1)}><ChevronRight size={14} /></button></div>
                 {selectedAssetIds.length > 0 && (
                   <div className="library-batch-actions" role="toolbar" aria-label="资产批量操作">
                     <strong>已选 {selectedAssetIds.length}</strong>
@@ -9623,7 +10249,7 @@ function App() {
                               }}
                             >
                               <div className="asset-library-thumbnail">
-                                {previewUrl ? <img src={previewUrl} alt="" draggable={false} /> : (
+                                {previewUrl ? <img src={previewUrl} alt="" draggable={false} loading="lazy" decoding="async" /> : (
                                   <div className="asset-library-placeholder">
                                     {asset.type === 'group' ? <Box size={24} /> : <Type size={24} />}
                                     <span>{asset.data?.body || asset.title || '资产'}</span>
@@ -9711,6 +10337,7 @@ function App() {
               <div className="asset-library-toolbar history-toolbar">
                 <div className="asset-library-tabs"><button type="button" className="is-active">{projectName} · 全部画布</button></div>
                 <label className="asset-library-search"><Search size={15} /><input value={generationHistorySearch} placeholder="搜索提示词、模型或文件名" onChange={(event) => setGenerationHistorySearch(event.target.value)} /></label>
+                <div className="library-page-control"><button disabled={generationHistoryPage <= 1} onClick={() => setGenerationHistoryPage((page) => page - 1)}><ChevronLeft size={14} /></button><span>{generationHistoryPage} / {generationHistoryTotalPages}</span><button disabled={generationHistoryPage >= generationHistoryTotalPages} onClick={() => setGenerationHistoryPage((page) => page + 1)}><ChevronRight size={14} /></button></div>
                 {selectedHistoryIds.length > 0 && (
                   <div className="library-batch-actions" role="toolbar" aria-label="生成历史批量操作">
                     <strong>已选 {selectedHistoryIds.length}</strong>
@@ -9776,6 +10403,8 @@ function App() {
                               src={record.imageUrl}
                               alt={record.prompt}
                               draggable={false}
+                              loading="lazy"
+                              decoding="async"
                               onLoad={() => {
                                 setBrokenHistoryIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : current)
                                 ensureHistoryRecordArchived(record)
@@ -10208,9 +10837,15 @@ function App() {
                     {editingConnectionId !== 'new' && (
                       <div className="api-detail-actions">
                         {apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected ? (
-                          <button type="button" className="api-icon-button is-success" title="重新链接" aria-label="重新链接" onClick={reconnectCurrentApiConnection}><PlugZap size={13} /></button>
+                          <>
+                            <span className="api-connection-status is-offline"><i />已断开</span>
+                            <button type="button" className="api-link-action is-reconnect" onClick={reconnectCurrentApiConnection}><PlugZap size={13} />重新连接</button>
+                          </>
                         ) : (
-                          <button type="button" className="api-icon-button is-danger" title="断开链接" aria-label="断开链接" onClick={disconnectCurrentApiConnection}><Unplug size={13} /></button>
+                          <>
+                            <span className="api-connection-status is-online"><i />已连接</span>
+                            <button type="button" className="api-link-action is-disconnect" onClick={disconnectCurrentApiConnection}><Unplug size={13} />断开连接</button>
+                          </>
                         )}
                         <button type="button" className="api-icon-button is-danger" title="删除连接" aria-label="删除连接" onClick={removeCurrentApiConnection}><Trash2 size={13} /></button>
                       </div>
@@ -10220,7 +10855,7 @@ function App() {
                   {editingConnectionId !== 'new' && apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected && (
                     <div className="api-disconnected-banner">
                       <Unplug size={15} />
-                      <span>该连接已断开，API Key 已保留。点击「重新链接」即可恢复，无需重新填写。</span>
+                      <span><strong>当前连接已断开</strong>节点中不会显示此连接的模型。API Key 与模型目录仍保留，点击右上角「重新连接」即可恢复。</span>
                     </div>
                   )}
 
@@ -10245,7 +10880,12 @@ function App() {
                     </label>
                     <label className="api-field-wide">
                       API Key
-                      <input ref={apiKeyInputRef} value={apiDraft.apiKey} onChange={(event) => setApiDraft((draft) => ({ ...draft, apiKey: event.target.value }))} type="password" placeholder="sk-••••••••••••••••" />
+                      <span className="api-key-input-wrap">
+                        <input ref={apiKeyInputRef} value={apiDraft.apiKey} onChange={(event) => setApiDraft((draft) => ({ ...draft, apiKey: event.target.value }))} type={apiKeyVisible ? 'text' : 'password'} placeholder="sk-••••••••••••••••" autoComplete="off" />
+                        <button type="button" className="api-key-visibility" aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'} onClick={() => setApiKeyVisible((visible) => !visible)}>
+                          {apiKeyVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </span>
                     </label>
                     <button type="button" className="api-fetch-models" disabled={modelsLoading} onClick={() => void refreshRemoteModels()}>
                       {modelsLoading ? <LoaderCircle size={15} className="is-spinning" /> : <History size={15} />}
@@ -10289,18 +10929,26 @@ function App() {
                     </div>
                   </div>
 
-                  {modelsError && <p className="form-error" role="alert">{modelsError}</p>}
-                  {apiError && <p className="form-error" role="alert">{apiError}</p>}
-
                   <footer className="api-manager-footer">
                     <span className="secure-note"><KeyRound size={14} />API Key 只保留在当前标签页会话</span>
                     <div className="modal-buttons">
                       {apiConfigured && <button className="clear-button" onClick={() => { clearApiSettings(); beginNewApiConnection() }}>清除全部</button>}
-                      <button className="connect-button" onClick={saveApi}>保存当前连接 <ArrowUpRight size={15} /></button>
+                      <button className="connect-button" onClick={() => void saveApi()}>保存当前连接 <ArrowUpRight size={15} /></button>
                     </div>
                   </footer>
                 </section>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {apiAlert && (
+          <motion.div className="api-alert-backdrop" role="alertdialog" aria-modal="true" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setApiAlert(null)}>
+            <motion.div className="api-alert-dialog" initial={{ y: 12, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 12, opacity: 0, scale: .98 }} onClick={(event) => event.stopPropagation()}>
+              <div className="api-alert-icon"><Info size={22} /></div>
+              <div><strong>API 连接未通过</strong><p>{apiAlert}</p></div>
+              <button type="button" onClick={() => setApiAlert(null)}>知道了</button>
             </motion.div>
           </motion.div>
         )}
