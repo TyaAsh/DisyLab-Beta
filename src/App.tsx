@@ -106,7 +106,7 @@ import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConf
 import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
-import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
+import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
@@ -5174,10 +5174,16 @@ function App() {
     const textReferenceGuide = selectedTextReferences.length
       ? `参考文本：\n${selectedTextReferences.map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
       : ''
-    const imageReferenceGuide = buildNumberedReferenceGuide(selectedVisualReferences.map((reference) => ({
-      name: reference.name,
-      url: reference.url!,
-    })))
+    const imageReferenceGuide = shouldAppendReferenceGuide({
+      modelId: selectedTextModel.model.id,
+      baseUrl: selectedTextModel.connection.baseUrl,
+      isImageGeneration: false,
+    })
+      ? buildNumberedReferenceGuide(selectedVisualReferences.map((reference) => ({
+        name: reference.name,
+        url: reference.url!,
+      })))
+      : ''
     const prompt = [promptText, textReferenceGuide, imageReferenceGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
     if (!prompt) {
       setToastMessage('请先输入文本提示词')
@@ -5285,7 +5291,13 @@ function App() {
       ...selectedAvailableImageReferences.map((reference) => ({ name: reference.name, url: reference.url })),
       ...styleInvocation.references.map((reference) => ({ name: reference.name, url: reference.url })),
     ])
-    const mentionGuide = buildNumberedReferenceGuide(orderedImageReferences)
+    const mentionGuide = shouldAppendReferenceGuide({
+      modelId: activeNodeImageModel.model.id,
+      baseUrl: activeNodeImageModel.connection.baseUrl,
+      isImageGeneration: true,
+    })
+      ? buildNumberedReferenceGuide(orderedImageReferences)
+      : ''
     const textReferenceGuide = selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).length
       ? `参考文本：\n${selectedGenerationTextReferences.filter((reference) => reference.text?.trim()).map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
       : ''
@@ -5652,7 +5664,13 @@ function App() {
       const resolvedContextGuide = resolvedContextReferences.length
         ? `系统已为本轮解析出这些上下文对象：${resolvedContextReferences.map((reference) => `${reference.kind === 'image' ? '图片' : '文本'}“${reference.name}”${reference.excerpt ? `（内容摘要：${reference.excerpt}）` : ''}${reference.autoResolved ? `，自动关联依据：${reference.resolutionReason}` : ''}`).join('；')}。必须按这些对象理解用户指代；如语义仍不唯一，在 reply 中追问，不要自行替换成其他对象。`
         : '本轮没有解析出明确的上下文对象；遇到“那个/它/上面”等无法唯一落到对象的指代时，必须先追问。'
-      const agentReferenceGuide = buildNumberedReferenceGuide(sentReferences)
+      const agentReferenceGuide = shouldAppendReferenceGuide({
+        modelId: selection.model.id,
+        baseUrl: selection.connection.baseUrl,
+        isImageGeneration: false,
+      })
+        ? buildNumberedReferenceGuide(sentReferences)
+        : ''
       const numberedUserRequest = numberAgentReferenceMentions(content, sentReferences)
       const referenceUsageGuide = sentReferences.length
         ? `本次多图任务的用户原始要求如下，必须逐字理解图像角色，并把关系明确写入每个 imagePlans.prompt；不得把待修复主体、风格参考、构图参考或其他用途互换：\n${numberedUserRequest}`
@@ -5795,7 +5813,13 @@ function App() {
       .filter((reference) => !userReferenceUrls.has(reference.url))
     const orderedPlanReferences = [...userPlanReferences, ...appendedStyleReferences]
     const referenceUrls = orderedPlanReferences.map((reference) => reference.url)
-    const numberedReferenceGuide = buildNumberedReferenceGuide(orderedPlanReferences)
+    const numberedReferenceGuide = shouldAppendReferenceGuide({
+      modelId: model.model.id,
+      baseUrl: model.connection.baseUrl,
+      isImageGeneration: true,
+    })
+      ? buildNumberedReferenceGuide(orderedPlanReferences)
+      : ''
     const requestPrompt = [plan.prompt.trim(), numberedReferenceGuide].filter(Boolean).join('\n\n')
     if (referenceUrls.length > 16) {
       setToastMessage(`参考图最多 16 张，当前共 ${referenceUrls.length} 张`)

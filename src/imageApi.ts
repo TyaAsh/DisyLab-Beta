@@ -237,6 +237,29 @@ function isGrsaiBaseUrl(baseUrl: string) {
   return /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(normalizedApiBaseUrl(baseUrl))
 }
 
+// Decide whether the structured numbered reference guide ("图1 / 图片1 / 参考图1 =
+// 第 1 张输入图片") should be appended to the prompt.
+//
+// The guide is ONLY required by the OpenAI `images/edits` multipart path
+// (GPT Image / ChatGPT Image): there the reference images are uploaded as unnamed
+// files, so the model can only tell them apart from the prompt's "图N" mapping.
+//
+// Every other path receives reference images positionally (GRS AI unified
+// `images` array, Seedream / Volces `image_urls`, the standard OpenAI
+// `image_urls` field, or multimodal text content). For these the guide is
+// redundant and — critically — GRS AI enforces a server-side prompt regex
+// ("The string did not match the expected pattern") that the guide's
+// `图1 / 图片1 / 参考图1 = 第 1 张输入图片（@name）` structure violates, so the
+// request is rejected before any image is generated. We omit it everywhere but
+// the multipart GPT Image path so every model accepts the prompt and returns
+// results. Position-based reference ("图1/图2" in the user's own prompt) still
+// works because those providers align images by upload order.
+export function shouldAppendReferenceGuide(opts: { modelId: string; baseUrl: string; isImageGeneration: boolean }): boolean {
+  if (isGrsaiBaseUrl(opts.baseUrl)) return false
+  if (opts.isImageGeneration) return /(?:gpt-image|chatgpt-image)/i.test(opts.modelId)
+  return true
+}
+
 export function resolveProviderLabel(baseUrl: string) {
   const normalized = normalizedApiBaseUrl(baseUrl).toLowerCase()
   if (/grsaiapi\.com|grsai\.dakka\.com\.cn/.test(normalized)) return 'GRS AI'
