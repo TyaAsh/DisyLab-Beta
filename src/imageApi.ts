@@ -152,6 +152,30 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
         break
       }
     }
+
+    // Quality-only compression couldn't reach the target (common with very
+    // high-resolution source images).  Progressively downscale until the file
+    // fits within the byte budget or we hit a sensible floor.
+    if (compressed && compressed.size > REFERENCE_IMAGE_TARGET_BYTES) {
+      const DOWNSCALE_MAX_DIMS = [2048, 1536, 1024, 768] as const
+      for (const maxDim of DOWNSCALE_MAX_DIMS) {
+        if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
+        const scale = Math.min(maxDim / bitmap.width, maxDim / bitmap.height, 1)
+        if (scale >= 1) break // already small enough, further loops won't help
+        canvas.width = Math.round(bitmap.width * scale)
+        canvas.height = Math.round(bitmap.height * scale)
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+        for (const quality of [0.82, 0.72]) {
+          const candidate = await canvasToBlob(canvas, 'image/webp', quality)
+          if (!compressed || candidate.size < compressed.size) compressed = candidate
+          if (candidate.size <= REFERENCE_IMAGE_TARGET_BYTES) {
+            compressed = candidate
+            break
+          }
+        }
+        if (compressed!.size <= REFERENCE_IMAGE_TARGET_BYTES) break
+      }
+    }
     if (!compressed) throw new Error('参考图片转码失败')
     return blobToDataUrl(compressed)
   } finally {
