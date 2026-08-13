@@ -34,7 +34,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.1-77bdf2" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.2-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
@@ -43,7 +43,7 @@
 > [!IMPORTANT]
 > **DisyLab 是源码公开可见（source-available）的专有软件，不是开源软件。** 未经版权所有者事先书面许可，不得商用、售卖、出租、白标、再分发、再许可或将本项目及其修改版本用于收费服务。查看完整的[中文授权声明](LICENSE.zh-CN.md)与[英文许可证](LICENSE)。
 
-> 这里是 DisyLab v1.0.1。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
+> 这里是 DisyLab v1.0.2。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
 
 ![DisyLab Y2K 角色视觉项目](docs/assets/y2k-canvas-overview.png)
 
@@ -125,11 +125,11 @@ Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择
 | 系统图片粘贴 | 支持将系统剪贴板中的图片直接粘贴到画布，并与内部节点复制粘贴正确区分。 |
 | 完整项目包 | 以 `.disy` 导出/导入全部工作区或当前项目；包含画布、资产、文件夹、生成历史、输出历史和 Agent 会话，不包含 API Key。 |
 
-更完整的功能边界和版本信息见 [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)。
+更完整的功能边界和版本信息见 [v1.0.2 版本说明](docs/Disy-v1.0.2-版本说明.md)。
 
 ## 当前版本边界
 
-Disy v1.0.1 聚焦于浏览器端的个人创作闭环，目前尚未提供：
+Disy v1.0.2 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 
 - 账号注册、登录和用户权限。
 - 云端项目同步与多人实时协作。
@@ -153,7 +153,7 @@ Disy v1.0.1 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 | IndexedDB / localStorage / sessionStorage | 本地项目、资产、历史和会话密钥 |
 | Cloudflare Pages | Web 体验版部署 |
 
-当前版本改动可查看 [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)。
+当前版本改动可查看 [v1.0.2 版本说明](docs/Disy-v1.0.2-版本说明.md)。
 
 ## 快速开始
 
@@ -224,7 +224,7 @@ netlify.toml           # 旧版 Netlify 部署兼容配置
 
 ## 项目文档
 
-- [v1.0.1 版本说明](docs/Disy-v1.0.1-版本说明.md)
+- [v1.0.2 版本说明](docs/Disy-v1.0.2-版本说明.md)
 
 ## Roadmap
 

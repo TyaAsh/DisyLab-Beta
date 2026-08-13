@@ -745,7 +745,7 @@ export async function exportWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       version: 1,
       producer: {
         name: 'DisyLab',
-        release: '1.0.1',
+        release: '1.0.2',
         ashOrigin: 'ashhaveaniceday::disylab::origin',
         tyaCanvas: 'tya::infinite-canvas::2026',
         rights: 'LicenseRef-DisyLab-Proprietary',
