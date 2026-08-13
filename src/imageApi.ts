@@ -469,12 +469,6 @@ const GRSAI_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', capability: 'text' },
 ]
 
-const APIYI_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
-  { id: 'doubao-seedance-2-0-260128', name: 'Doubao Seedance 2.0', capability: 'video' },
-  { id: 'doubao-seedance-2-0-fast-260128', name: 'Doubao Seedance 2.0 Fast', capability: 'video' },
-  { id: 'doubao-seedance-2-0-mini-260615', name: 'Doubao Seedance 2.0 Mini', capability: 'video' },
-]
-
 const ARK_LOCAL_MODEL_MANIFEST: RemoteModel[] = [
   { id: 'doubao-seedance-2-0-260128', name: 'Doubao Seedance 2.0', capability: 'video' },
   { id: 'doubao-seedance-2-0-fast-260128', name: 'Doubao Seedance 2.0 Fast', capability: 'video' },
@@ -499,7 +493,6 @@ type VendorModelSupplement = {
 
 const VENDOR_MODEL_SUPPLEMENTS: VendorModelSupplement[] = [
   { match: isGrsaiBaseUrl, supplementalModels: GRSAI_LOCAL_MODEL_MANIFEST, catalogOnly: true },
-  { match: (url) => /^https?:\/\/(?:api\.apiyi\.com|apiyi\.com|[^/]*\.apiyi\.com)(?:\/|$)/i.test(url), supplementalModels: APIYI_LOCAL_MODEL_MANIFEST },
   { match: (url) => /^https?:\/\/[^/]*ark\.cn-beijing\.volces\.com(?:\/|$)/i.test(url), supplementalModels: ARK_LOCAL_MODEL_MANIFEST },
   { match: (url) => /^https?:\/\/api\.openai\.com(?:\/|$)/i.test(url), supplementalModels: OPENAI_LOCAL_MODEL_MANIFEST },
 ]
