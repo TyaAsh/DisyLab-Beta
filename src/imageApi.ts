@@ -60,6 +60,13 @@ export type ImageGenerationOptions = {
 }
 
 const REFERENCE_IMAGE_TARGET_BYTES = 1_800_000
+// Soft budget: quality-only WebP compression keeps full resolution. 1.8MB is a
+// *target*, never a hard cap — normal 4K/2K references pass through untouched.
+const REFERENCE_IMAGE_HARD_LIMIT_BYTES = 10_000_000
+// Hard ceiling: downscale ONLY as a true last resort — when the re-encoded
+// reference still exceeds 10MB (genuinely huge sources, e.g. the ~14MB case) or
+// breaches the 4K-class dimension cap. Anything at/under 4K stays at full res.
+const REFERENCE_IMAGE_MAX_DIMENSION = 4096
 const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
 const GRSAI_IMAGE_POLL_INTERVAL_MS = 2_500
 const GRSAI_IMAGE_POLL_TIMEOUT_MS = 15 * 60_000
@@ -135,7 +142,9 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
   try {
     if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
     const canvas = document.createElement('canvas')
-    // Preserve the exact pixel dimensions. Only encoded file size is reduced.
+    // Default: preserve the exact pixel dimensions; only encoded file size is
+    // reduced via WebP quality. Resolution is dropped only as a last-resort
+    // fallback below when the hard byte/dimension ceiling is still exceeded.
     canvas.width = bitmap.width
     canvas.height = bitmap.height
     const context = canvas.getContext('2d')
@@ -153,27 +162,31 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
       }
     }
 
-    // Quality-only compression couldn't reach the target (common with very
-    // high-resolution source images).  Progressively downscale until the file
-    // fits within the byte budget or we hit a sensible floor.
-    if (compressed && compressed.size > REFERENCE_IMAGE_TARGET_BYTES) {
-      const DOWNSCALE_MAX_DIMS = [2048, 1536, 1024, 768] as const
+    // Quality-only compression above already targets the 1.8MB soft budget
+    // while preserving resolution. We downscale ONLY as a true last resort:
+    // when the re-encoded reference still exceeds the 10MB hard ceiling
+    // (genuinely huge sources, e.g. the ~14MB case) or breaches the 4K-class
+    // dimension cap. Normal 4K/2K references stay at full resolution.
+    const exceedsHardLimit = (compressed?.size ?? 0) > REFERENCE_IMAGE_HARD_LIMIT_BYTES
+    const exceedsMaxDim = bitmap.width > REFERENCE_IMAGE_MAX_DIMENSION || bitmap.height > REFERENCE_IMAGE_MAX_DIMENSION
+    if (compressed && (exceedsHardLimit || exceedsMaxDim)) {
+      const DOWNSCALE_MAX_DIMS = [4096, 2048, 1536, 1024, 768] as const
       for (const maxDim of DOWNSCALE_MAX_DIMS) {
         if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
         const scale = Math.min(maxDim / bitmap.width, maxDim / bitmap.height, 1)
-        if (scale >= 1) break // already small enough, further loops won't help
+        if (scale >= 1) continue // no-op step; a scale<1 step is required to help
         canvas.width = Math.round(bitmap.width * scale)
         canvas.height = Math.round(bitmap.height * scale)
         context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
         for (const quality of [0.82, 0.72]) {
           const candidate = await canvasToBlob(canvas, 'image/webp', quality)
           if (!compressed || candidate.size < compressed.size) compressed = candidate
-          if (candidate.size <= REFERENCE_IMAGE_TARGET_BYTES) {
+          if (candidate.size <= REFERENCE_IMAGE_HARD_LIMIT_BYTES) {
             compressed = candidate
             break
           }
         }
-        if (compressed!.size <= REFERENCE_IMAGE_TARGET_BYTES) break
+        if (compressed!.size <= REFERENCE_IMAGE_HARD_LIMIT_BYTES) break
       }
     }
     if (!compressed) throw new Error('参考图片转码失败')
