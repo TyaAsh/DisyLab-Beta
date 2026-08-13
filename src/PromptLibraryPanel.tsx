@@ -121,6 +121,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   }
 
   const deleteCase = (item: PromptLibraryCase) => {
+    if (!window.confirm(`确认从灵感案例中删除「${item.title}」吗？此操作仅影响当前浏览器，可在刷新数据后恢复公共案例。`)) return
     if (String(item.id).startsWith('custom-')) {
       const next = customCases.filter((current) => current.id !== item.id)
       saveCustomCases(next); setCustomCases(next)
@@ -132,6 +133,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   }
 
   const deleteCategory = (value: string) => {
+    if (!window.confirm(`确认删除分类「${categoryName(value)}」吗？该分类下的案例会保留在“全部”中。`)) return
     const nextSettings = { ...categorySettings, hidden: Array.from(new Set([...categorySettings.hidden, value])) }
     localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings)
     if (category === value) setCategory('all')
@@ -171,7 +173,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
             {catalog && !results.length && <div className="prompt-library-state"><Search size={28} /><strong>没有找到匹配案例</strong><span>试试减少筛选条件</span></div>}
             {pageCases.map((item) => (
               <article key={item.id} className={`prompt-case-card ${selected?.id === item.id ? 'is-selected' : ''}`} draggable onDragStart={(event) => beginDrag(event, item)} onClick={() => setSelected(item)}>
-                <div className="prompt-case-image"><img loading="lazy" decoding="async" src={item.image} alt={item.title} /><button type="button" className="prompt-case-remove" title="从灵感案例移除" onClick={(event) => { event.stopPropagation(); deleteCase(item) }}><Trash2 size={13} /></button><span><GripVertical size={12} />拖入画布</span></div>
+                <div className="prompt-case-image"><img loading="lazy" decoding="async" src={item.image} alt={item.title} /><button type="button" className="prompt-case-remove" title="从灵感案例移除" onClick={(event) => { event.stopPropagation(); deleteCase(item) }}><Trash2 size={13} /></button></div>
                 <div className="prompt-case-copy"><strong>{item.title}</strong><small>{categoryName(item.category)}</small><p>{item.prompt}</p></div>
               </article>
             ))}

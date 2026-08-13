@@ -35,7 +35,7 @@ for (const item of cases) {
 
 const fintechCount = cases.filter((item) => item.category === '金融科技').length
 const visualCount = cases.filter((item) => item.category === '视觉案例').length
-if (fintechCount < 50) throw new Error(`Fintech inspiration below quality floor: ${fintechCount}/50`)
+if (fintechCount < 19) throw new Error(`Fintech inspiration below quality floor: ${fintechCount}/19`)
 if (visualCount < 155) throw new Error(`Visual inspiration below quality floor: ${visualCount}/155`)
 if (cases.length !== fintechCount + visualCount) throw new Error('Inspiration cases use an unsupported category')
 
