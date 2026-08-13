@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Upload, X } from 'lucide-react'
+import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Trash2, Upload, X } from 'lucide-react'
 
 export type PromptLibraryCase = {
   id: number | string
@@ -27,23 +27,19 @@ type PromptCatalog = {
   industryCases?: PromptLibraryCase[]
 }
 
-const categoryLabels: Record<string, string> = {
-  'UI & Interfaces': 'UI 与界面', 'Charts & Infographics': '图表与信息可视化',
-  'Posters & Typography': '海报与排版', 'Products & E-commerce': '商品与电商',
-  'Brand & Logos': '品牌与标志', 'Architecture & Spaces': '建筑与空间',
-  'Photography & Realism': '摄影与写实', 'Illustration & Art': '插画与艺术',
-  'Characters & People': '人物与角色', 'Scenes & Storytelling': '场景与叙事',
-  'History & Classical Themes': '历史与古风', 'Documents & Publishing': '文档与出版物',
-  'Other Use Cases': '其他应用',
-}
-const styleLabels: Record<string, string> = { '3D': '3D', Architecture: '建筑', Brand: '品牌', Character: '角色', Characters: '人物', Charts: '图表', Classical: '古典', Documents: '文档', History: '历史', Illustration: '插画', Infographic: '信息图', 'Other Use Cases': '其他应用', Photography: '摄影', Poster: '海报', Product: '商品', Products: '商品', Realistic: '写实', Scenes: '场景', UI: '界面' }
-const sceneLabels: Record<string, string> = { Commerce: '商业', Creative: '创意', Education: '教育', Fashion: '时尚', Food: '食品饮品', History: '历史', Social: '社媒', Story: '叙事', Tech: '科技', Travel: '旅行' }
 const PAGE_SIZE = 24
 const CUSTOM_CASES_KEY = 'disy-prompt-library-custom-v1'
+const HIDDEN_CASES_KEY = 'disy-prompt-library-hidden-v1'
+const CUSTOM_CATEGORIES_KEY = 'disy-prompt-library-categories-v1'
+const SYSTEM_CATEGORIES = ['金融科技', '视觉案例']
 
 const readCustomCases = (): PromptLibraryCase[] => {
   try { return JSON.parse(localStorage.getItem(CUSTOM_CASES_KEY) || '[]') as PromptLibraryCase[] } catch { return [] }
 }
+const readStringList = (key: string): string[] => {
+  try { const value = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [] } catch { return [] }
+}
+const saveCustomCases = (items: PromptLibraryCase[]) => localStorage.setItem(CUSTOM_CASES_KEY, JSON.stringify(items))
 
 const compressReference = (file: File) => new Promise<string>((resolve, reject) => {
   const image = new Image()
@@ -70,15 +66,15 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('all')
-  const [style, setStyle] = useState('all')
   const [selected, setSelected] = useState<PromptLibraryCase | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
   const [customCases, setCustomCases] = useState<PromptLibraryCase[]>(readCustomCases)
+  const [hiddenCaseIds, setHiddenCaseIds] = useState<string[]>(() => readStringList(HIDDEN_CASES_KEY))
+  const [customCategories, setCustomCategories] = useState<string[]>(() => readStringList(CUSTOM_CATEGORIES_KEY))
   const [creatorOpen, setCreatorOpen] = useState(false)
-  const [libraryView, setLibraryView] = useState<'cases' | 'templates' | 'industry' | 'mine'>('cases')
-  const [draft, setDraft] = useState({ title: '', prompt: '', category: '', styles: '', scenes: '', image: '' })
+  const [draft, setDraft] = useState({ title: '', prompt: '', category: '视觉案例', image: '' })
 
   useEffect(() => {
     if (!open || catalog) return
@@ -91,21 +87,20 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   const results = useMemo(() => {
     if (!catalog) return []
     const normalized = query.trim().toLocaleLowerCase()
-    const sourceItems = libraryView === 'templates' ? (catalog.templates || []) : libraryView === 'industry' ? (catalog.industryCases || []) : libraryView === 'mine' ? customCases : catalog.cases
+    const sourceItems = [...(catalog.cases || []), ...(catalog.industryCases || []), ...customCases]
     return sourceItems.filter((item) => {
+      if (hiddenCaseIds.includes(String(item.id))) return false
       if (category !== 'all' && item.category !== category) return false
-      if (style !== 'all' && !item.styles.includes(style)) return false
       if (!normalized) return true
-      return [item.title, item.prompt, item.sourceLabel, item.category, ...item.styles, ...item.scenes]
+      return [item.title, item.prompt, item.sourceLabel, item.category]
         .filter(Boolean).some((value) => String(value).toLocaleLowerCase().includes(normalized))
     })
-  }, [catalog, category, customCases, libraryView, query, style])
-  const categories = useMemo(() => Array.from(new Set([...(catalog?.categories || []), ...(catalog?.industryCases || []).map((item) => item.category), ...customCases.map((item) => item.category).filter(Boolean)])), [catalog, customCases])
-  const styles = useMemo(() => Array.from(new Set([...(catalog?.styles || []), ...(catalog?.industryCases || []).flatMap((item) => item.styles), ...customCases.flatMap((item) => item.styles)])), [catalog, customCases])
+  }, [catalog, category, customCases, hiddenCaseIds, query])
+  const categories = useMemo(() => [...SYSTEM_CATEGORIES, ...Array.from(new Set([...customCategories, ...customCases.map((item) => item.category)])).filter((value) => value && !SYSTEM_CATEGORIES.includes(value))], [customCategories, customCases])
   const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE))
   const pageCases = useMemo(() => results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [page, results])
 
-  useEffect(() => { setPage(1); setSelected(null) }, [category, libraryView, query, style])
+  useEffect(() => { setPage(1); setSelected(null) }, [category, query])
   useEffect(() => { if (page > totalPages) setPage(totalPages) }, [page, totalPages])
 
   if (!open) return null
@@ -114,6 +109,25 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
     event.dataTransfer.effectAllowed = 'copy'
     event.dataTransfer.setData('application/x-disy-prompt-case', JSON.stringify(item))
     event.dataTransfer.setData('text/plain', item.prompt)
+  }
+
+  const deleteCase = (item: PromptLibraryCase) => {
+    if (String(item.id).startsWith('custom-')) {
+      const next = customCases.filter((current) => current.id !== item.id)
+      saveCustomCases(next); setCustomCases(next)
+    } else {
+      const next = Array.from(new Set([...hiddenCaseIds, String(item.id)]))
+      localStorage.setItem(HIDDEN_CASES_KEY, JSON.stringify(next)); setHiddenCaseIds(next)
+    }
+    setSelected(null)
+  }
+
+  const deleteCategory = (value: string) => {
+    const nextCategories = customCategories.filter((item) => item !== value)
+    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(nextCategories)); setCustomCategories(nextCategories)
+    const nextCases = customCases.map((item) => item.category === value ? { ...item, category: '视觉案例' } : item)
+    saveCustomCases(nextCases); setCustomCases(nextCases)
+    if (category === value) setCategory('all')
   }
 
   return (
@@ -125,14 +139,13 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
         </header>
 
           <div className="prompt-library-search-row">
-          <nav className="prompt-library-view-tabs"><button className={libraryView === 'cases' ? 'is-active' : ''} onClick={() => setLibraryView('cases')}>灵感案例</button><button className={libraryView === 'industry' ? 'is-active' : ''} onClick={() => setLibraryView('industry')}>行业灵感 <b>{catalog?.industryCases?.length || 0}</b></button><button className={libraryView === 'mine' ? 'is-active' : ''} onClick={() => setLibraryView('mine')}>我的创作 <b>{customCases.length}</b></button></nav>
+          <div className="prompt-library-view-tabs"><span>灵感案例</span><b>{results.length}</b></div>
           <label><Search size={15} /><input autoFocus value={query} placeholder="搜索案例、风格或 Prompt" onChange={(event) => setQuery(event.target.value)} /></label>
           <span>{results.length} 个匹配</span>
         </div>
 
         <div className="prompt-library-filter-strip">
-          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{categories.map((value) => <button key={value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{categoryLabels[value] || value}</button>)}</div></div>
-          <div><strong>风格</strong><div className="prompt-filter-chips"><button className={style === 'all' ? 'is-active' : ''} onClick={() => setStyle('all')}>全部</button>{styles.map((value) => <button key={value} className={style === value ? 'is-active' : ''} onClick={() => setStyle(value)}>{styleLabels[value] || value}</button>)}</div></div>
+          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{categories.map((value) => <span className="prompt-category-chip" key={value}><button className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{value}</button>{!SYSTEM_CATEGORIES.includes(value) && <button className="prompt-category-delete" title={`删除分类 ${value}`} onClick={() => deleteCategory(value)}><X size={11} /></button>}</span>)}</div></div>
         </div>
 
         <div className={`prompt-library-content ${selected ? 'has-detail' : ''}`}>
@@ -143,7 +156,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
             {pageCases.map((item) => (
               <article key={item.id} className={`prompt-case-card ${selected?.id === item.id ? 'is-selected' : ''}`} draggable onDragStart={(event) => beginDrag(event, item)} onClick={() => setSelected(item)}>
                 <div className="prompt-case-image"><img loading="lazy" decoding="async" src={item.image} alt={item.title} /><span><GripVertical size={12} />拖入画布</span></div>
-                <div className="prompt-case-copy"><strong>{item.title}</strong><small>{categoryLabels[item.category] || item.category}</small><p>{item.prompt}</p></div>
+                <div className="prompt-case-copy"><strong>{item.title}</strong><small>{item.category}</small><p>{item.prompt}</p></div>
               </article>
             ))}
             {results.length > PAGE_SIZE && <nav className="prompt-pagination" aria-label="提示库分页">
@@ -155,15 +168,26 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
 
           {selected && <aside className="prompt-case-detail" draggable onDragStart={(event) => beginDrag(event, selected)}>
             <div className="prompt-detail-image" draggable onDragStart={(event) => beginDrag(event, selected)}><img src={selected.image} alt={selected.title} /><span><GripVertical size={13} />拖动参考图到画布</span></div>
-            <div className="prompt-detail-title"><div><small>{selected.template ? '工业模板' : selected.industry ? '行业视觉' : `CASE ${selected.id}`}</small><h3>{selected.title}</h3></div>{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer" title="查看原始来源"><ArrowUpRight size={16} /></a>}</div>
-            <div className="prompt-detail-tags"><span>{categoryLabels[selected.category] || selected.category}</span>{selected.styles.map((tag) => <span key={`style-${tag}`}>{styleLabels[tag] || tag}</span>)}{selected.scenes.map((tag) => <span key={`scene-${tag}`}>{sceneLabels[tag] || tag}</span>)}</div>
+            <div className="prompt-detail-title"><div><small>{selected.industry ? '行业灵感' : selected.sourceLabel === '我的创作' ? '我的创作' : `CASE ${selected.id}`}</small><h3>{selected.title}</h3></div><div className="prompt-detail-title-actions">{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer" title="查看原始来源"><ArrowUpRight size={16} /></a>}<button type="button" title="从灵感案例移除" onClick={() => deleteCase(selected)}><Trash2 size={15} /></button></div></div>
+            <div className="prompt-detail-tags"><span>{selected.category}</span></div>
             <div className="prompt-detail-prompt"><div><strong>Prompt</strong><button onClick={async () => { await navigator.clipboard.writeText(selected.prompt); setCopied(true); window.setTimeout(() => setCopied(false), 1400) }}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div><p>{selected.prompt}</p></div>
             <div className="prompt-detail-actions"><button onClick={() => onUsePrompt(selected)}><BookOpen size={15} />写入提示词节点</button><button onClick={() => onAddImage(selected)}><ImagePlus size={15} />加入画布</button></div>
             <footer>案例来自 <a href={selected.sourceUrl || selected.githubUrl} target="_blank" rel="noreferrer">{selected.sourceLabel || '原项目收录来源'}</a>。使用前请自行确认原作者授权。</footer>
           </aside>}
         </div>
       </section>
-      {creatorOpen && <div className="prompt-creator-backdrop" onMouseDown={() => setCreatorOpen(false)}><form className="prompt-creator-dialog" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (!draft.title.trim() || !draft.prompt.trim() || !draft.image) return; const item: PromptLibraryCase = { id: `custom-${crypto.randomUUID()}`, title: draft.title.trim(), prompt: draft.prompt.trim(), image: draft.image, category: draft.category.trim() || '我的创作', styles: draft.styles.split(/[,，]/).map((value) => value.trim()).filter(Boolean), scenes: draft.scenes.split(/[,，]/).map((value) => value.trim()).filter(Boolean), featured: false, sourceLabel: '我的创作' }; const next = [item, ...customCases]; try { localStorage.setItem(CUSTOM_CASES_KEY, JSON.stringify(next)); setCustomCases(next); setSelected(item); setCreatorOpen(false); setDraft({ title: '', prompt: '', category: '', styles: '', scenes: '', image: '' }) } catch { setError('本地空间不足，请减少自定义案例或使用更小的参考图') } }}><header><div><small>MY PROMPT</small><h3>添加我的案例</h3></div><button type="button" onClick={() => setCreatorOpen(false)}><X size={17} /></button></header><label className="prompt-upload-field">{draft.image ? <img src={draft.image} alt="参考图预览" /> : <><Upload size={20} /><strong>上传参考图</strong><small>会自动压缩为最长边 640px WebP</small></>}<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void compressReference(file).then((image) => setDraft((current) => ({ ...current, image }))) }} /></label><label>案例名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Prompt<textarea value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} /></label><div className="prompt-creator-fields"><label>分类（可新建）<input value={draft.category} placeholder="如：产品摄影" onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /></label><label>风格（逗号分隔）<input value={draft.styles} placeholder="如：极简，写实" onChange={(event) => setDraft((current) => ({ ...current, styles: event.target.value }))} /></label><label>场景（逗号分隔）<input value={draft.scenes} placeholder="如：商业，社媒" onChange={(event) => setDraft((current) => ({ ...current, scenes: event.target.value }))} /></label></div><footer><button type="button" onClick={() => setCreatorOpen(false)}>取消</button><button type="submit" disabled={!draft.title.trim() || !draft.prompt.trim() || !draft.image}>保存到提示库</button></footer></form></div>}
+      {creatorOpen && <div className="prompt-creator-backdrop" onMouseDown={() => setCreatorOpen(false)}><form className="prompt-creator-dialog" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => {
+        event.preventDefault()
+        if (!draft.title.trim() || !draft.prompt.trim() || !draft.image) return
+        const selectedCategory = draft.category.trim() || '视觉案例'
+        const item: PromptLibraryCase = { id: `custom-${crypto.randomUUID()}`, title: draft.title.trim(), prompt: draft.prompt.trim(), image: draft.image, category: selectedCategory, styles: [], scenes: [], featured: false, sourceLabel: '我的创作' }
+        const next = [item, ...customCases]
+        try {
+          saveCustomCases(next); setCustomCases(next)
+          if (!SYSTEM_CATEGORIES.includes(selectedCategory) && !customCategories.includes(selectedCategory)) { const nextCategories = [...customCategories, selectedCategory]; localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(nextCategories)); setCustomCategories(nextCategories) }
+          setSelected(item); setCreatorOpen(false); setDraft({ title: '', prompt: '', category: '视觉案例', image: '' })
+        } catch { setError('本地空间不足，请减少自定义案例或使用更小的参考图') }
+      }}><header><div><small>MY PROMPT</small><h3>添加我的案例</h3></div><button type="button" onClick={() => setCreatorOpen(false)}><X size={17} /></button></header><label className="prompt-upload-field">{draft.image ? <img src={draft.image} alt="参考图预览" /> : <><Upload size={20} /><strong>上传参考图</strong><small>会自动压缩为最长边 640px WebP</small></>}<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void compressReference(file).then((image) => setDraft((current) => ({ ...current, image }))) }} /></label><label>案例名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Prompt<textarea value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} /></label><div className="prompt-creator-fields"><label>分类（支持自建）<input list="prompt-category-options" value={draft.category} placeholder="金融科技、视觉案例，或输入新分类" onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /><datalist id="prompt-category-options">{categories.map((value) => <option value={value} key={value} />)}</datalist></label></div><footer><button type="button" onClick={() => setCreatorOpen(false)}>取消</button><button type="submit" disabled={!draft.title.trim() || !draft.prompt.trim() || !draft.image}>保存到灵感案例</button></footer></form></div>}
     </div>
   )
 }

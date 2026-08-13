@@ -1892,6 +1892,8 @@ button { border: 0; cursor: pointer; }
 .prompt-header-actions .prompt-create-button { padding: 0 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--accent-soft); font-size: 9px; }
 .prompt-library-search-row { padding: 10px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
 .prompt-library-view-tabs { display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: rgba(5,7,6,.28); }
+.prompt-library-view-tabs > span { height: 30px; padding: 0 9px; display: grid; place-items: center; color: var(--accent); font-size: 9px; font-weight: 720; }
+.prompt-library-view-tabs > b { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); background: rgba(255,255,255,.055); font-size: 8px; }
 .prompt-library-view-tabs button { height: 30px; padding: 0 10px; border-radius: 7px; display: flex; align-items: center; gap: 5px; color: var(--muted); background: transparent; font-size: 9px; white-space: nowrap; }
 .prompt-library-view-tabs button b { color: inherit; font-size: 8px; }
 .prompt-library-view-tabs button.is-active { color: var(--accent); background: var(--accent-soft); }
@@ -1902,6 +1904,11 @@ button { border: 0; cursor: pointer; }
 .prompt-library-filter-strip > div { min-width: 0; display: grid; grid-template-columns: 38px minmax(0,1fr); align-items: start; gap: 8px; }
 .prompt-library-filter-strip strong { padding-top: 6px; color: var(--muted); font-size: 9px; }
 .prompt-filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.prompt-category-chip { display: inline-flex; align-items: center; }
+.prompt-filter-chips .prompt-category-chip > button { border-radius: 999px; }
+.prompt-filter-chips .prompt-category-chip > button.is-active { position: relative; z-index: 1; }
+.prompt-filter-chips .prompt-category-chip .prompt-category-delete { width: 20px; margin-left: -5px; padding: 0 0 0 4px; border-left: 0; border-radius: 0 999px 999px 0; color: var(--muted); }
+.prompt-filter-chips .prompt-category-chip:hover .prompt-category-delete { color: #efb0ae; border-color: rgba(217,101,96,.45); }
 .prompt-filter-chips button { height: 27px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.025); font-size: 9px; }
 .prompt-filter-chips button:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); }
 .prompt-filter-chips button.is-active { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); }
@@ -1928,6 +1935,9 @@ button { border: 0; cursor: pointer; }
 .prompt-detail-title small { color: var(--accent); font-size: 8px; letter-spacing: .12em; }
 .prompt-detail-title h3 { margin: 4px 0 0; font-size: 15px; line-height: 1.35; }
 .prompt-detail-title a { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--muted); background: rgba(255,255,255,.05); }
+.prompt-detail-title-actions { display: flex; gap: 6px; }
+.prompt-detail-title-actions > button { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--muted); background: rgba(255,255,255,.05); }
+.prompt-detail-title-actions > button:hover { color: #efb0ae; background: rgba(185,70,65,.12); }
 .prompt-detail-tags { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
 .prompt-detail-tags span { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.055); font-size: 8px; }
 .prompt-detail-prompt { margin-top: 14px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: rgba(4,6,5,.28); }
