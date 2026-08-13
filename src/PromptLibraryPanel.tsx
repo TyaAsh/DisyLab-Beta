@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Trash2, Upload, X } from 'lucide-react'
+import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Pencil, Plus, Search, Trash2, Upload, X } from 'lucide-react'
 
 export type PromptLibraryCase = {
   id: number | string
@@ -31,6 +31,7 @@ const PAGE_SIZE = 24
 const CUSTOM_CASES_KEY = 'disy-prompt-library-custom-v1'
 const HIDDEN_CASES_KEY = 'disy-prompt-library-hidden-v1'
 const CUSTOM_CATEGORIES_KEY = 'disy-prompt-library-categories-v1'
+const CATEGORY_SETTINGS_KEY = 'disy-prompt-library-category-settings-v1'
 const SYSTEM_CATEGORIES = ['金融科技', '视觉案例']
 
 const readCustomCases = (): PromptLibraryCase[] => {
@@ -38,6 +39,12 @@ const readCustomCases = (): PromptLibraryCase[] => {
 }
 const readStringList = (key: string): string[] => {
   try { const value = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [] } catch { return [] }
+}
+const readCategorySettings = (): { hidden: string[]; names: Record<string, string> } => {
+  try {
+    const value = JSON.parse(localStorage.getItem(CATEGORY_SETTINGS_KEY) || '{}') as { hidden?: unknown; names?: unknown }
+    return { hidden: Array.isArray(value.hidden) ? value.hidden.filter((item): item is string => typeof item === 'string') : [], names: value.names && typeof value.names === 'object' ? value.names as Record<string, string> : {} }
+  } catch { return { hidden: [], names: {} } }
 }
 const saveCustomCases = (items: PromptLibraryCase[]) => localStorage.setItem(CUSTOM_CASES_KEY, JSON.stringify(items))
 
@@ -73,6 +80,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   const [customCases, setCustomCases] = useState<PromptLibraryCase[]>(readCustomCases)
   const [hiddenCaseIds, setHiddenCaseIds] = useState<string[]>(() => readStringList(HIDDEN_CASES_KEY))
   const [customCategories, setCustomCategories] = useState<string[]>(() => readStringList(CUSTOM_CATEGORIES_KEY))
+  const [categorySettings, setCategorySettings] = useState(readCategorySettings)
   const [creatorOpen, setCreatorOpen] = useState(false)
   const [draft, setDraft] = useState({ title: '', prompt: '', category: '视觉案例', image: '' })
 
@@ -97,6 +105,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
     })
   }, [catalog, category, customCases, hiddenCaseIds, query])
   const categories = useMemo(() => [...SYSTEM_CATEGORIES, ...Array.from(new Set([...customCategories, ...customCases.map((item) => item.category)])).filter((value) => value && !SYSTEM_CATEGORIES.includes(value))], [customCategories, customCases])
+  const visibleCategories = useMemo(() => categories.filter((value) => !categorySettings.hidden.includes(value)), [categories, categorySettings.hidden])
   const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE))
   const pageCases = useMemo(() => results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [page, results])
 
@@ -123,12 +132,19 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   }
 
   const deleteCategory = (value: string) => {
-    const nextCategories = customCategories.filter((item) => item !== value)
-    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(nextCategories)); setCustomCategories(nextCategories)
-    const nextCases = customCases.map((item) => item.category === value ? { ...item, category: '视觉案例' } : item)
-    saveCustomCases(nextCases); setCustomCases(nextCases)
+    const nextSettings = { ...categorySettings, hidden: Array.from(new Set([...categorySettings.hidden, value])) }
+    localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings)
     if (category === value) setCategory('all')
   }
+
+  const renameCategory = (value: string) => {
+    const nextName = window.prompt('输入新的分类名称', categorySettings.names[value] || value)?.trim()
+    if (!nextName) return
+    const nextSettings = { ...categorySettings, names: { ...categorySettings.names, [value]: nextName } }
+    localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings)
+  }
+
+  const categoryName = (value: string) => categorySettings.names[value] || value
 
   return (
     <div className="prompt-library-backdrop" onMouseDown={onClose} onDragEnter={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' }} onDrop={(event) => { event.preventDefault(); const payload = event.dataTransfer.getData('application/x-disy-prompt-case'); if (payload) onAddImage(JSON.parse(payload) as PromptLibraryCase) }}>
@@ -145,7 +161,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
         </div>
 
         <div className="prompt-library-filter-strip">
-          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{categories.map((value) => <span className="prompt-category-chip" key={value}><button className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{value}</button>{!SYSTEM_CATEGORIES.includes(value) && <button className="prompt-category-delete" title={`删除分类 ${value}`} onClick={() => deleteCategory(value)}><X size={11} /></button>}</span>)}</div></div>
+          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{visibleCategories.map((value) => <span className="prompt-category-chip" key={value}><button className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{categoryName(value)}</button><button className="prompt-category-edit" title={`改名 ${categoryName(value)}`} onClick={() => renameCategory(value)}><Pencil size={10} /></button><button className="prompt-category-delete" title={`删除分类 ${categoryName(value)}`} onClick={() => deleteCategory(value)}><X size={11} /></button></span>)}</div></div>
         </div>
 
         <div className={`prompt-library-content ${selected ? 'has-detail' : ''}`}>
@@ -155,8 +171,8 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
             {catalog && !results.length && <div className="prompt-library-state"><Search size={28} /><strong>没有找到匹配案例</strong><span>试试减少筛选条件</span></div>}
             {pageCases.map((item) => (
               <article key={item.id} className={`prompt-case-card ${selected?.id === item.id ? 'is-selected' : ''}`} draggable onDragStart={(event) => beginDrag(event, item)} onClick={() => setSelected(item)}>
-                <div className="prompt-case-image"><img loading="lazy" decoding="async" src={item.image} alt={item.title} /><span><GripVertical size={12} />拖入画布</span></div>
-                <div className="prompt-case-copy"><strong>{item.title}</strong><small>{item.category}</small><p>{item.prompt}</p></div>
+                <div className="prompt-case-image"><img loading="lazy" decoding="async" src={item.image} alt={item.title} /><button type="button" className="prompt-case-remove" title="从灵感案例移除" onClick={(event) => { event.stopPropagation(); deleteCase(item) }}><Trash2 size={13} /></button><span><GripVertical size={12} />拖入画布</span></div>
+                <div className="prompt-case-copy"><strong>{item.title}</strong><small>{categoryName(item.category)}</small><p>{item.prompt}</p></div>
               </article>
             ))}
             {results.length > PAGE_SIZE && <nav className="prompt-pagination" aria-label="提示库分页">
