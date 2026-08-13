@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Pencil, Plus, Search, Trash2, Upload, X } from 'lucide-react'
+import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Settings2, Trash2, Upload, X } from 'lucide-react'
 
 export type PromptLibraryCase = {
   id: number | string
@@ -82,6 +82,10 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   const [customCategories, setCustomCategories] = useState<string[]>(() => readStringList(CUSTOM_CATEGORIES_KEY))
   const [categorySettings, setCategorySettings] = useState(readCategorySettings)
   const [creatorOpen, setCreatorOpen] = useState(false)
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false)
+  const [editingCategory, setEditingCategory] = useState<string | null>(null)
+  const [categoryDraft, setCategoryDraft] = useState('')
+  const [pendingDeleteCategory, setPendingDeleteCategory] = useState<string | null>(null)
   const [draft, setDraft] = useState({ title: '', prompt: '', category: '视觉案例', image: '' })
 
   useEffect(() => {
@@ -133,17 +137,17 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   }
 
   const deleteCategory = (value: string) => {
-    if (!window.confirm(`确认删除分类「${categoryName(value)}」吗？该分类下的案例会保留在“全部”中。`)) return
     const nextSettings = { ...categorySettings, hidden: Array.from(new Set([...categorySettings.hidden, value])) }
     localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings)
     if (category === value) setCategory('all')
   }
 
   const renameCategory = (value: string) => {
-    const nextName = window.prompt('输入新的分类名称', categorySettings.names[value] || value)?.trim()
+    const nextName = categoryDraft.trim()
     if (!nextName) return
     const nextSettings = { ...categorySettings, names: { ...categorySettings.names, [value]: nextName } }
     localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings)
+    setEditingCategory(null); setCategoryDraft('')
   }
 
   const categoryName = (value: string) => categorySettings.names[value] || value
@@ -163,7 +167,8 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
         </div>
 
         <div className="prompt-library-filter-strip">
-          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{visibleCategories.map((value) => <span className="prompt-category-chip" key={value}><button className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{categoryName(value)}</button><button className="prompt-category-edit" title={`改名 ${categoryName(value)}`} onClick={() => renameCategory(value)}><Pencil size={10} /></button><button className="prompt-category-delete" title={`删除分类 ${categoryName(value)}`} onClick={() => deleteCategory(value)}><X size={11} /></button></span>)}</div></div>
+          <div><strong>分类</strong><div className="prompt-filter-chips"><button className={category === 'all' ? 'is-active' : ''} onClick={() => setCategory('all')}>全部</button>{visibleCategories.map((value) => <button key={value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}>{categoryName(value)}</button>)}<button className={`prompt-category-manage-trigger ${categoryManagerOpen ? 'is-open' : ''}`} onClick={() => { setCategoryManagerOpen((open) => !open); setEditingCategory(null); setPendingDeleteCategory(null) }}><Settings2 size={12} />管理分类</button></div></div>
+          {categoryManagerOpen && <div className="prompt-category-manager"><header><div><strong>管理分类</strong><small>改名或移除筛选项，案例仍保留在“全部”中</small></div><button type="button" aria-label="关闭分类管理" onClick={() => setCategoryManagerOpen(false)}><X size={14} /></button></header><div className="prompt-category-manager-list">{categories.map((value) => { const hidden = categorySettings.hidden.includes(value); const editing = editingCategory === value; const confirming = pendingDeleteCategory === value; return <div className={`prompt-category-manager-row ${hidden ? 'is-hidden' : ''}`} key={value}><span className="prompt-category-status" />{editing ? <input autoFocus value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') renameCategory(value); if (event.key === 'Escape') setEditingCategory(null) }} /> : <div><strong>{categoryName(value)}</strong><small>{hidden ? '已从筛选中移除' : '正在使用'}</small></div>}{confirming ? <div className="prompt-category-confirm"><span>确定移除？</span><button onClick={() => setPendingDeleteCategory(null)}>取消</button><button className="is-danger" onClick={() => { deleteCategory(value); setPendingDeleteCategory(null) }}>移除</button></div> : hidden ? <button className="prompt-category-restore" onClick={() => { const nextSettings = { ...categorySettings, hidden: categorySettings.hidden.filter((item) => item !== value) }; localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings)); setCategorySettings(nextSettings) }}>恢复</button> : <div className="prompt-category-row-actions">{editing ? <><button onClick={() => setEditingCategory(null)}>取消</button><button className="is-primary" onClick={() => renameCategory(value)}>保存</button></> : <><button onClick={() => { setEditingCategory(value); setCategoryDraft(categoryName(value)); setPendingDeleteCategory(null) }}>重命名</button><button className="is-danger" onClick={() => { setPendingDeleteCategory(value); setEditingCategory(null) }}>移除</button></>}</div>}</div> })}</div></div>}
         </div>
 
         <div className={`prompt-library-content ${selected ? 'has-detail' : ''}`}>

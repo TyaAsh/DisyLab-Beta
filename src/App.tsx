@@ -545,7 +545,7 @@ function ModelBrandBadge({ name, image = false }: { name?: string; image?: boole
 function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, onChange }: {
   value: string
   placeholder: string
-  options: Array<{ key: string; name: string }>
+  options: Array<{ key: string; name: string; connectionName?: string }>
   image?: boolean
   typeSelect?: boolean
   onChange: (key: string) => void
@@ -553,6 +553,8 @@ function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, on
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const selected = options.find((model) => model.key === value)
+  const providerNames = Array.from(new Set(options.map((model) => model.connectionName).filter(Boolean))) as string[]
+  const grouped = providerNames.length > 1
   useEffect(() => {
     if (!open) return
     const close = (event: PointerEvent) => {
@@ -570,7 +572,7 @@ function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, on
       <ChevronDown size={13} />
     </button>
     {open && <div className="welcome-model-menu" role="listbox">
-      {options.length ? options.map((model) => <button type="button" role="option" aria-selected={model.key === value} key={model.key} onClick={() => { onChange(model.key); setOpen(false) }}><span>{model.name}</span>{model.key === value && <Check size={13} />}</button>) : <p>{placeholder}</p>}
+      {options.length ? (grouped ? providerNames.map((provider) => <section className="welcome-model-group" key={provider}><small>{provider}</small>{options.filter((model) => model.connectionName === provider).map((model) => <button type="button" role="option" aria-selected={model.key === value} key={model.key} onClick={() => { onChange(model.key); setOpen(false) }}><span>{model.name}</span>{model.key === value && <Check size={13} />}</button>)}</section>) : options.map((model) => <button type="button" role="option" aria-selected={model.key === value} key={model.key} onClick={() => { onChange(model.key); setOpen(false) }}><span>{model.name}</span>{model.key === value && <Check size={13} />}</button>)) : <p>{placeholder}</p>}
     </div>}
   </div>
 }
@@ -586,8 +588,8 @@ function WelcomeAgentComposer({
   onSend,
   busy,
 }: {
-  textModels: Array<{ key: string; name: string }>
-  imageModels: Array<{ key: string; name: string }>
+  textModels: Array<{ key: string; name: string; connectionName?: string }>
+  imageModels: Array<{ key: string; name: string; connectionName?: string }>
   textModelKey: string
   imageModelKey: string
   onTextModelChange: (key: string) => void
@@ -5397,6 +5399,8 @@ function App() {
   const enabledImageModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'image')
     .map((model) => ({ connection, model })))
+  const groupTextModelsByProvider = new Set(enabledTextModels.map(({ connection }) => connection.id)).size > 1
+  const groupImageModelsByProvider = new Set(enabledImageModels.map(({ connection }) => connection.id)).size > 1
   const selectedImageModel = enabledImageModels.find(({ connection, model }) => (
     connection.id === apiSettings.selectedImageModel?.connectionId
     && model.id === apiSettings.selectedImageModel?.modelId
@@ -8041,8 +8045,8 @@ function App() {
           >
             <AnimatePresence initial={false}>
               {!agentOpen && <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><WelcomeAgentComposer
-                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name }))}
-                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name }))}
+                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
                 textModelKey={agentTextModelKey}
                 imageModelKey={agentImageModelKey}
                 onTextModelChange={setAgentTextModelKey}
@@ -9393,10 +9397,10 @@ function App() {
                               <Settings2 size={13} />
                             </button>
                           </div>
-                          {enabledImageModels.map(({ connection, model }) => (
+                          {enabledImageModels.map(({ connection, model }, index) => (<div className="editor-model-option-wrap" key={`${connection.id}-${model.id}`}>
+                            {groupImageModelsByProvider && (index === 0 || enabledImageModels[index - 1]?.connection.id !== connection.id) && <div className="editor-model-provider"><span>{connection.name}</span><small>{enabledImageModels.filter((item) => item.connection.id === connection.id).length} 个模型</small></div>}
                             <button
                               type="button"
-                              key={`${connection.id}-${model.id}`}
                               className={displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id ? 'is-selected' : ''}
                               onClick={() => {
                                 saveApiSettings({ ...apiSettings, selectedImageModel: { connectionId: connection.id, modelId: model.id } })
@@ -9412,7 +9416,7 @@ function App() {
                               <span><strong>{model.name}</strong></span>
                               {displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id && <Check size={14} />}
                             </button>
-                          ))}
+                          </div>))}
                           {!enabledImageModels.length && <p>{hasCatalogImageModels ? '已获取到图像模型，但尚未启用，请到 API 设置中勾选。' : '还没有图像模型，请先到 API 设置中获取并启用。'}</p>}
                         </motion.div>
                       )}
@@ -9700,10 +9704,10 @@ function App() {
                               <Settings2 size={13} />
                             </button>
                           </div>
-                          {enabledTextModels.map(({ connection, model }) => (
+                          {enabledTextModels.map(({ connection, model }, index) => (<div className="editor-model-option-wrap" key={`${connection.id}-${model.id}`}>
+                            {groupTextModelsByProvider && (index === 0 || enabledTextModels[index - 1]?.connection.id !== connection.id) && <div className="editor-model-provider"><span>{connection.name}</span><small>{enabledTextModels.filter((item) => item.connection.id === connection.id).length} 个模型</small></div>}
                             <button
                               type="button"
-                              key={`${connection.id}-${model.id}`}
                               className={selectedTextModel?.connection.id === connection.id && selectedTextModel.model.id === model.id ? 'is-selected' : ''}
                               onClick={() => {
                                 saveApiSettings({ ...apiSettings, selectedTextModel: { connectionId: connection.id, modelId: model.id } })
@@ -9714,7 +9718,7 @@ function App() {
                               <span><strong>{model.name}</strong></span>
                               {selectedTextModel?.connection.id === connection.id && selectedTextModel.model.id === model.id && <Check size={14} />}
                             </button>
-                          ))}
+                          </div>))}
                           {!enabledTextModels.length && (
                             <p>{hasCatalogTextModels ? '已经获取到文本模型，但尚未启用，请到 API 设置中勾选。' : hasCatalogImageModels ? '当前只有图像模型，请切换或添加文本模型。' : '还没有文本模型，请到 API 设置中获取并勾选。'}</p>
                           )}
