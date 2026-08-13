@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ArrowUp, Check, ChevronDown, FileText, Focus, ImagePlus, ImageUp, LoaderCircle, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, Download, FileText, Focus, ImagePlus, ImageUp, KeyRound, LoaderCircle, Maximize2, MessageCircle, MousePointer2, Plus, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react'
 import { compactReferenceName, normalizeAgentMessageContent, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
 export type AgentModelOption = { key: string; name: string; connectionName: string }
@@ -209,8 +209,11 @@ type Props = {
   imageModelKey: string
   imageDefaults: { aspectRatio: string; resolution: string; detail: string; count: number }
   busy: boolean
+  agentOnly: boolean
   onStop: () => void
   onClose: () => void
+  onOpenApiSettings: () => void
+  onDownloadImage: (url: string, fileName: string) => void
   onNewConversation: () => void
   onDeleteConversation: () => void
   onSelectConversation: (id: string) => void
@@ -245,6 +248,10 @@ export function AgentPanel(props: Props) {
   const [panelWidth, setPanelWidth] = useState(getInitialAgentPanelWidth)
   const [panelResizing, setPanelResizing] = useState(false)
   const [referenceDropActive, setReferenceDropActive] = useState(false)
+  const [previewResult, setPreviewResult] = useState<{ url: string; fileName: string } | null>(null)
+  const previewCloseRef = useRef<HTMLButtonElement>(null)
+  const previewDialogRef = useRef<HTMLDivElement>(null)
+  const previewTriggerRef = useRef<HTMLButtonElement | null>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
@@ -262,6 +269,29 @@ export function AgentPanel(props: Props) {
     imageSettingLabel(props.detailOptions, props.imageDefaults.detail),
     `${props.imageDefaults.count}张`,
   ].join(' · ')
+
+  useEffect(() => {
+    if (!previewResult) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewResult(null)
+      if (event.key === 'Tab') {
+        const buttons = [...(previewDialogRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+        if (!buttons.length) return
+        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        const nextIndex = event.shiftKey
+          ? (currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1)
+          : (currentIndex < 0 || currentIndex >= buttons.length - 1 ? 0 : currentIndex + 1)
+        event.preventDefault()
+        buttons[nextIndex]?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.requestAnimationFrame(() => previewCloseRef.current?.focus())
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      previewTriggerRef.current?.focus()
+    }
+  }, [previewResult])
 
   ;[...props.candidates, ...props.references].forEach((reference) => referenceRegistryRef.current.set(reference.nodeId, reference))
 
@@ -634,23 +664,43 @@ export function AgentPanel(props: Props) {
   }
   const renderPlan = (plan: AgentImagePlan) => {
     const statusLabel = plan.status === 'ready' ? '待确认' : plan.status === 'running' ? '生成中' : plan.status === 'completed' ? '已完成' : plan.status === 'cancelled' ? '已取消' : '失败'
-    const isCompact = plan.status === 'completed' || plan.status === 'cancelled'
+    const isCompact = plan.status === 'completed' || plan.status === 'cancelled' || Boolean(plan.results?.length)
     const disabled = plan.status !== 'ready'
     const displayedContextReferences: AgentContextReference[] = plan.contextReferences?.length
       ? plan.contextReferences
       : (plan.references ?? []).map((reference) => ({ ...reference, kind: 'image' as const }))
     if (isCompact) {
+      if (plan.results?.length) {
+        return (
+          <section key={plan.id} className="agent-plan-card agent-result-card is-completed">
+            <header><span><ImagePlus size={15} />{plan.status === 'completed' ? '图像已生成' : '已保留生成结果'}</span><em>{plan.results.length} 张</em></header>
+            <div className={`agent-result-grid ${plan.results.length === 1 ? 'is-single' : ''}`}>
+              {plan.results.map((result, index) => <figure key={result.id}>
+                <button type="button" className="agent-result-preview" onClick={(event) => { previewTriggerRef.current = event.currentTarget; setPreviewResult(result) }} aria-label={`放大查看生成图片 ${index + 1}`}>
+                  <img src={result.url} alt={`生成结果 ${index + 1}`} />
+                  <span><Maximize2 size={15} />放大</span>
+                </button>
+                <button type="button" className="agent-result-download" onClick={() => props.onDownloadImage(result.url, result.fileName)}><Download size={14} />保存</button>
+              </figure>)}
+            </div>
+            <footer className="agent-result-meta">
+              <span>{plan.aspectRatio} · {plan.resolution}</span>
+              {!props.agentOnly && plan.nodeId && <button type="button" onClick={() => props.onLocateCanvasNode(plan.nodeId!)}><Focus size={13} />定位画布</button>}
+            </footer>
+          </section>
+        )
+      }
       return (
         <button
           type="button"
           key={plan.id}
           className={`agent-plan-card is-${plan.status} is-collapsed`}
           disabled={!plan.nodeId}
-          onClick={() => plan.nodeId && props.onLocateCanvasNode(plan.nodeId)}
+          onClick={() => !props.agentOnly && plan.nodeId && props.onLocateCanvasNode(plan.nodeId)}
         >
           <span><ImagePlus size={15} /><strong>{plan.status === 'completed' ? '图像已生成' : '图像方案已取消'}</strong></span>
           <span className="agent-plan-collapsed-meta">{plan.aspectRatio} · {plan.resolution} · {plan.count} 张</span>
-          {plan.nodeId && <span className="agent-plan-locate"><Focus size={14} />定位画布</span>}
+          {!props.agentOnly && plan.nodeId && <span className="agent-plan-locate"><Focus size={14} />定位画布</span>}
         </button>
       )
     }
@@ -761,11 +811,14 @@ export function AgentPanel(props: Props) {
     </>
   )
   return (
-    <aside id="disy-agent-panel" className={`agent-panel ${panelResizing ? 'is-resizing' : ''}`} style={{ '--agent-panel-width': `${panelWidth}px` } as CSSProperties} aria-label="Disy 对话 Agent">
+    <aside id="disy-agent-panel" className={`agent-panel ${props.agentOnly ? 'is-agent-only' : ''} ${panelResizing ? 'is-resizing' : ''}`} style={{ '--agent-panel-width': `${panelWidth}px` } as CSSProperties} aria-label="Disy 对话 Agent">
       <div className="agent-panel-resize-handle" role="separator" aria-label="调整 Agent 面板宽度" aria-orientation="vertical" onPointerDown={startPanelResize} onPointerMove={resizePanel} onPointerUp={finishPanelResize} onPointerCancel={finishPanelResize}><span /></div>
       <header className="agent-panel-header">
         <div className="agent-panel-title"><img className="agent-panel-logo" src="/disy-logo.png" alt="" /><span><strong>Disy Agent</strong><small>和你一起构思，并在确认后生成</small></span></div>
-        <button className="agent-panel-close" onClick={props.onClose} title="关闭"><X size={17} /></button>
+        <div className="agent-panel-header-actions">
+          {props.agentOnly && <button className="agent-panel-api" onClick={props.onOpenApiSettings} title="配置 API"><KeyRound size={16} /><span>API 配置</span></button>}
+          {!props.agentOnly && <button className="agent-panel-close" onClick={props.onClose} title="关闭"><X size={17} /></button>}
+        </div>
       </header>
       <div className="agent-conversation-row">
         <AgentSelect
@@ -780,6 +833,13 @@ export function AgentPanel(props: Props) {
         <button type="button" className="agent-new-chat-button" onClick={props.onNewConversation} title="新建对话"><Plus size={15} /></button>
         <button type="button" className="agent-delete-chat-button" onClick={props.onDeleteConversation} title="删除当前对话"><Trash2 size={15} /></button>
       </div>
+      {previewResult && <div ref={previewDialogRef} className="agent-result-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreviewResult(null)}>
+        <header onClick={(event) => event.stopPropagation()}>
+          <button type="button" onClick={() => props.onDownloadImage(previewResult.url, previewResult.fileName)}><Download size={16} />保存图片</button>
+          <button ref={previewCloseRef} type="button" onClick={() => setPreviewResult(null)} aria-label="关闭预览"><X size={18} /></button>
+        </header>
+        <img src={previewResult.url} alt="生成图片大图预览" onClick={(event) => event.stopPropagation()} />
+      </div>}
       <div className="agent-panel-messages-wrap">
         <div className="agent-panel-messages" ref={messagesRef}>
           {!props.messages.length && <div className="agent-empty"><span><Sparkles size={19} /></span><strong>今天想创造什么？</strong><p>聊灵感、梳理画面，或让我准备一份可确认的图像方案。</p></div>}
@@ -923,7 +983,7 @@ export function AgentPanel(props: Props) {
           </div>
           <footer className="agent-composer-footer">
             <div className="agent-composer-reference-bar">
-              <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>
+              {!props.agentOnly && <button type="button" onMouseDown={rememberSelection} onClick={props.onPickFromCanvas} title="从画布选择参考图" aria-label="从画布选择参考图"><MousePointer2 size={15} /><span>画布选图</span></button>}
               <button type="button" onMouseDown={rememberSelection} onClick={() => uploadInputRef.current?.click()} title="从本地上传参考图" aria-label="从本地上传参考图"><ImageUp size={15} /><span>上传参考图</span></button>
               {mediaKind === 'image' && imageModelChosen && props.imageModelKey && <button type="button" className={`agent-image-settings-button ${imageSettingsOpen ? 'is-open' : ''}`} onClick={() => setImageSettingsOpen((open) => !open)} title={`图像设置：${imageSettingsSummary}`} aria-label={`图像设置，当前参数：${imageSettingsSummary}`} aria-expanded={imageSettingsOpen}><SlidersHorizontal size={15} /><span>图像设置</span><em>{imageSettingsSummary}</em></button>}
               <input ref={uploadInputRef} className="agent-reference-upload-input" type="file" accept="image/png,image/jpeg,image/webp" multiple aria-label="上传 Agent 参考图" onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) void uploadReferences(files); event.target.value = '' }} />

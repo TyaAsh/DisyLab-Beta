@@ -72,6 +72,12 @@ export type AgentImagePlan = {
   createdAt?: string
   collapsed?: boolean
   nodeId?: string
+  results?: Array<{
+    id: string
+    url: string
+    fileName: string
+    mediaId?: string
+  }>
   error?: string
 }
 

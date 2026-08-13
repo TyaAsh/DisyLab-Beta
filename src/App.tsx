@@ -115,7 +115,10 @@ import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSessio
 import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { PromptLibraryPanel, type PromptLibraryCase } from './PromptLibraryPanel'
+import type { WorkflowTemplate } from './WorkflowTemplatePanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
+
+const WorkflowTemplatePanel = lazy(() => import('./WorkflowTemplatePanel').then((module) => ({ default: module.WorkflowTemplatePanel })))
 
 gsap.registerPlugin(useGSAP)
 
@@ -282,6 +285,7 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => void>(() => undefined)
+const NodeImageUploadContext = createContext<(nodeId: string, file: File) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 type ImageToolMode = 'grid' | 'expand' | 'studio' | 'local-edit' | 'cutout'
@@ -1440,6 +1444,7 @@ const NodeCard = memo(function NodeCard({
   const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
   const updateNodeTitle = useContext(NodeTitleUpdateContext)
+  const uploadNodeImage = useContext(NodeImageUploadContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
   const openImageTool = useContext(ImageToolOpenContext)
@@ -1454,6 +1459,7 @@ const NodeCard = memo(function NodeCard({
   const inlineComposingRef = useRef(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(getNodeDisplayTitle(data))
+  const [uploadDragging, setUploadDragging] = useState(false)
   const groupCardRef = useRef<HTMLDivElement>(null)
 
   useGSAP(() => {
@@ -1627,7 +1633,7 @@ const NodeCard = memo(function NodeCard({
             <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
             <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
             <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
-            <button type="button" title="评论修改" aria-label="评论修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
+            <button type="button" title="局部修改" aria-label="局部修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
             <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
           </div>
           <img
@@ -1690,10 +1696,34 @@ const NodeCard = memo(function NodeCard({
       </div>
 
       {data.kind === 'upload' ? (
-        <div className="upload-placeholder">
+        <label
+          className={`upload-placeholder nowheel ${uploadDragging ? 'is-dragging' : ''}`}
+          onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setUploadDragging(true) }}
+          onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; setUploadDragging(true) }}
+          onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!(event.relatedTarget instanceof HTMLElement) || !event.currentTarget.contains(event.relatedTarget)) setUploadDragging(false) }}
+          onDrop={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setUploadDragging(false)
+            const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('image/'))
+            if (file) uploadNodeImage(id, file)
+          }}
+        >
           <ImagePlus size={20} />
-          <span>{data.body}</span>
-        </div>
+          <strong>{uploadDragging ? '松开即可上传' : '点击或拖拽上传'}</strong>
+          <span>{data.body || '支持 PNG、JPG、WebP'}</span>
+          <input
+            className="node-upload-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            aria-label={`为${getNodeDisplayTitle(data)}上传图片`}
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) uploadNodeImage(id, file)
+              event.target.value = ''
+            }}
+          />
+        </label>
       ) : data.kind === 'image' ? (
         <div className={`image-placeholder ${data.imageUrl || data.referenceImageUrl ? 'has-reference' : ''}`}>
           {data.imageUrl || data.referenceImageUrl ? (
@@ -1711,7 +1741,7 @@ const NodeCard = memo(function NodeCard({
                 <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
                 <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
                 <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
-                <button type="button" title="评论修改" aria-label="评论修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
+                <button type="button" title="局部修改" aria-label="局部修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
                 <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
               </div>
               {(data.imageVariants?.length ?? 0) > 1 && (
@@ -1839,6 +1869,7 @@ function App() {
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [assetLibraryOpen, setAssetLibraryOpen] = useState(false)
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
+  const [workflowTemplateOpen, setWorkflowTemplateOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
   const [assetScope, setAssetScope] = useState<'all' | 'current'>('all')
   const [assetThumbnailSize, setAssetThumbnailSize] = useState(132)
@@ -2114,7 +2145,7 @@ function App() {
   const currentHistorySnapshotRef = useRef<CanvasHistorySnapshot | null>(null)
   const historyCaptureTimerRef = useRef<number | null>(null)
   const historyReadyRef = useRef(false)
-  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo, getInternalNode, getNodes } = useReactFlow<CanvasNode>()
+  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo, getInternalNode, getNodes, updateNode } = useReactFlow<CanvasNode>()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
   const resetCanvasHistory = useCallback((nextNodes: CanvasNode[], nextEdges: Edge[]) => {
@@ -2417,6 +2448,27 @@ function App() {
       cancelled = true
     }
   }, [generationHistory])
+
+  useEffect(() => {
+    const urlByMediaId = new Map(generationHistory
+      .filter((record): record is GenerationRecord & { mediaId: string } => Boolean(record.mediaId && record.imageUrl))
+      .map((record) => [record.mediaId, record.imageUrl]))
+    if (!urlByMediaId.size) return
+    setAgentPlans((current) => {
+      let changed = false
+      const next = current.map((plan) => {
+        if (!plan.results?.some((result) => result.mediaId && urlByMediaId.has(result.mediaId) && result.url !== urlByMediaId.get(result.mediaId))) return plan
+        changed = true
+        return {
+        ...plan,
+        results: plan.results.map((result) => result.mediaId && urlByMediaId.has(result.mediaId)
+          ? { ...result, url: urlByMediaId.get(result.mediaId)! }
+          : result),
+        }
+      })
+      return changed ? next : current
+    })
+  }, [agentPlans, generationHistory])
 
   useEffect(() => () => {
     historyMediaObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
@@ -3373,6 +3425,26 @@ function App() {
     setNodes((current) => current.map((node) => node.id === nodeId
       ? { ...node, data: { ...node.data, title } }
       : node))
+  }, [setNodes])
+
+  const uploadImageToNode = useCallback((nodeId: string, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setToastMessage('请选择 PNG、JPG 或 WebP 图片')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const imageUrl = String(reader.result)
+      setNodes((current) => current.map((node) => node.id === nodeId
+        ? { ...node, data: { ...node.data, imageUrl, fileName: file.name, body: '' } }
+        : node))
+      setActiveImageNodeId(nodeId)
+      setActiveEditorNodeId(null)
+      setActiveGenerationNodeId(null)
+      setToastMessage(`已上传 ${file.name}`)
+    }
+    reader.onerror = () => setToastMessage('图片读取失败，请重新选择')
+    reader.readAsDataURL(file)
   }, [setNodes])
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -6398,13 +6470,6 @@ function App() {
           status: completedStatus,
         },
       } : node))
-      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? {
-        ...item,
-        status: wasInterrupted ? 'cancelled' : partialFailure ? 'failed' : 'completed',
-        nodeId,
-        collapsed: true,
-        error: partialFailure?.summary,
-      } : item))
       const historyRecords = await archiveGenerationRecords(variants.map((variant): GenerationRecord => ({
         id: `history-${variant.id}`,
         createdAt,
@@ -6414,6 +6479,14 @@ function App() {
         fileName: variant.fileName,
         projectId: origin.projectId,
       })))
+      await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? {
+        ...item,
+        status: wasInterrupted ? 'cancelled' : partialFailure ? 'failed' : 'completed',
+        nodeId,
+        collapsed: true,
+        results: historyRecords.map(({ id, imageUrl: url, fileName, mediaId }) => ({ id, url, fileName, mediaId })),
+        error: partialFailure?.summary,
+      } : item))
       setGenerationHistory((current) => [...current, ...historyRecords])
       appendOutputHistory({ kind: 'image', status: 'success', prompt: plan.prompt, modelId: model.model.id, modelName: model.model.name, connectionName: model.connection.name, requestedCount, outputCount: images.length, preview: `Agent 确认生成 · ${aspectRatio} · ${resolution} · ${IMAGE_DETAIL_LABELS[detail]} · 参考图 ${prepared.length} 张` }, origin.projectId)
       if (partialFailure) {
@@ -6674,7 +6747,11 @@ function App() {
 
   const multipleNodeToolbarAllowed = marqueeSelectionCommitted && selectedNodeIds.length > 1
   const selectionToolbarAllowed = multipleNodeToolbarAllowed || Boolean(selectedGroupNode)
-  const automaticPerformanceMode = nodes.length >= 28
+  const automaticPerformanceMode = nodes.length >= 20 || edges.length >= 36
+  const dragOverlapFrameRef = useRef<number | null>(null)
+  const draggingOverlapNodeRef = useRef<CanvasNode | null>(null)
+  const tiltedNodeIdsRef = useRef<Set<string>>(new Set())
+  const autoPlacementTweenRef = useRef<gsap.core.Tween | null>(null)
 
   useEffect(() => {
     if (!selectionToolbarAllowed || !selectedNodeIds.length || isNodeDragging) {
@@ -6711,6 +6788,170 @@ function App() {
       width: node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : node.data.kind === 'upload' ? 260 : 275),
       height: node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : node.data.kind === 'upload' ? 230 : 126),
     }
+  }
+
+  const getNodeCardElements = (nodeId: string) => Array.from(
+    shellRef.current?.querySelectorAll<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"] > .disy-node, .react-flow__node[data-id="${CSS.escape(nodeId)}"] > .canvas-group-node`) ?? [],
+  )
+
+  const clearLiveOverlapTilt = (exceptIds = new Set<string>()) => {
+    tiltedNodeIdsRef.current.forEach((nodeId) => {
+      if (exceptIds.has(nodeId)) return
+      const cards = getNodeCardElements(nodeId)
+      if (cards.length) gsap.to(cards, {
+        rotateX: 0,
+        rotateY: 0,
+        scale: 1,
+        y: 0,
+        duration: .2,
+        ease: 'power2.out',
+        overwrite: true,
+        clearProps: 'transform,transformPerspective,transformOrigin',
+      })
+    })
+    tiltedNodeIdsRef.current = exceptIds
+  }
+
+  const updateLiveOverlapTilt = (movingNode: CanvasNode) => {
+    if (movingNode.parentId) {
+      clearLiveOverlapTilt()
+      return
+    }
+    const movingSize = getNodeSize(movingNode)
+    const movingCenter = {
+      x: movingNode.position.x + movingSize.width / 2,
+      y: movingNode.position.y + movingSize.height / 2,
+    }
+    const nextTilted = new Set<string>()
+    getNodes().forEach((node) => {
+      if (node.id === movingNode.id || node.parentId) return
+      const size = getNodeSize(node)
+      const overlaps = !(
+        movingNode.position.x + movingSize.width <= node.position.x
+        || movingNode.position.x >= node.position.x + size.width
+        || movingNode.position.y + movingSize.height <= node.position.y
+        || movingNode.position.y >= node.position.y + size.height
+      )
+      if (!overlaps) return
+      nextTilted.add(node.id)
+      const nodeCenter = { x: node.position.x + size.width / 2, y: node.position.y + size.height / 2 }
+      const horizontal = Math.max(-1, Math.min(1, (movingCenter.x - nodeCenter.x) / Math.max(1, size.width / 2)))
+      const vertical = Math.max(-1, Math.min(1, (movingCenter.y - nodeCenter.y) / Math.max(1, size.height / 2)))
+      const cards = getNodeCardElements(node.id)
+      if (cards.length) gsap.to(cards, {
+        rotateX: -vertical * 7,
+        rotateY: horizontal * 10,
+        scale: .965,
+        y: 5,
+        transformPerspective: 620,
+        transformOrigin: '50% 50%',
+        duration: .14,
+        ease: 'power2.out',
+        overwrite: true,
+      })
+    })
+    clearLiveOverlapTilt(nextTilted)
+  }
+
+  const scheduleLiveOverlapTilt = (movingNode: CanvasNode) => {
+    draggingOverlapNodeRef.current = movingNode
+    if (dragOverlapFrameRef.current !== null) return
+    dragOverlapFrameRef.current = window.requestAnimationFrame(() => {
+      dragOverlapFrameRef.current = null
+      const latestNode = draggingOverlapNodeRef.current
+      if (latestNode) updateLiveOverlapTilt(latestNode)
+    })
+  }
+
+  const stopLiveOverlapTilt = () => {
+    if (dragOverlapFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragOverlapFrameRef.current)
+      dragOverlapFrameRef.current = null
+    }
+    draggingOverlapNodeRef.current = null
+    clearLiveOverlapTilt()
+  }
+
+  useEffect(() => () => {
+    if (dragOverlapFrameRef.current !== null) window.cancelAnimationFrame(dragOverlapFrameRef.current)
+    autoPlacementTweenRef.current?.kill()
+    tiltedNodeIdsRef.current.forEach((nodeId) => gsap.killTweensOf(getNodeCardElements(nodeId)))
+  }, [])
+
+  const resolveNodeOverlap = (nodeId: string) => {
+    const liveNodes = getNodes()
+    const movingNode = liveNodes.find((node) => node.id === nodeId)
+    if (!movingNode || movingNode.parentId) return false
+    const movingSize = getNodeSize(movingNode)
+    const gap = 28
+    const occupied = liveNodes
+      .filter((node) => node.id !== nodeId && !node.parentId)
+      .map((node) => {
+        const size = getNodeSize(node)
+        return {
+          id: node.id,
+          left: node.position.x,
+          top: node.position.y,
+          right: node.position.x + size.width,
+          bottom: node.position.y + size.height,
+        }
+      })
+    const collides = (position: { x: number; y: number }) => occupied.some((rect) => !(
+      position.x + movingSize.width + gap <= rect.left
+      || position.x - gap >= rect.right
+      || position.y + movingSize.height + gap <= rect.top
+      || position.y - gap >= rect.bottom
+    ))
+    if (!collides(movingNode.position)) return false
+
+    const origin = { ...movingNode.position }
+    const stepX = Math.max(220, movingSize.width + gap * 2)
+    const stepY = Math.max(180, movingSize.height + gap * 2)
+    const candidates: Array<{ x: number; y: number }> = []
+    for (let ring = 1; ring <= 12; ring += 1) {
+      for (let x = -ring; x <= ring; x += 1) {
+        candidates.push(
+          { x: origin.x + x * stepX, y: origin.y - ring * stepY },
+          { x: origin.x + x * stepX, y: origin.y + ring * stepY },
+        )
+      }
+      for (let y = -ring + 1; y < ring; y += 1) {
+        candidates.push(
+          { x: origin.x - ring * stepX, y: origin.y + y * stepY },
+          { x: origin.x + ring * stepX, y: origin.y + y * stepY },
+        )
+      }
+    }
+    const safePosition = candidates.find((candidate) => !collides(candidate)) ?? {
+      x: Math.max(origin.x, ...occupied.map((rect) => rect.right + gap * 2)),
+      y: origin.y,
+    }
+    setToastMessage('检测到节点重叠，正在自动寻找空位…')
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    autoPlacementTweenRef.current?.kill()
+    if (reducedMotion) {
+      updateNode(nodeId, { position: safePosition, dragging: false })
+      setToastMessage('已自动移动到最近空位')
+      return true
+    }
+    const animatedPosition = { ...origin }
+    autoPlacementTweenRef.current = gsap.to(animatedPosition, {
+      x: safePosition.x,
+      y: safePosition.y,
+      duration: .48,
+      ease: 'power3.inOut',
+      overwrite: true,
+      onUpdate: () => updateNode(nodeId, {
+        position: { x: animatedPosition.x, y: animatedPosition.y },
+        dragging: false,
+      }),
+      onComplete: () => {
+        updateNode(nodeId, { position: safePosition, dragging: false })
+        autoPlacementTweenRef.current = null
+        setToastMessage('已平滑移动到最近空位')
+      },
+    })
+    return true
   }
 
   const confirmAgentTextPlan = (planId: string) => {
@@ -7295,14 +7536,112 @@ function App() {
     setToastMessage('组合资产已放入画布')
   }
 
-  const deleteGenerationRecord = (recordId: string) => {
-    const deleted = generationHistory.find((record) => record.id === recordId)
-    if (deleted?.mediaId) {
-      const objectUrl = historyMediaObjectUrlsRef.current.get(deleted.mediaId)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
-      historyMediaObjectUrlsRef.current.delete(deleted.mediaId)
-      void deleteHistoryMedia(deleted.mediaId)
+  const applyWorkflowTemplate = (template: WorkflowTemplate) => {
+    if (!template.nodes.length) return
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const idMap = new Map(template.nodes.map((node, index) => [node.id, `workflow-${stamp}-${index}`]))
+    const minX = Math.min(...template.nodes.map((node) => node.position.x))
+    const minY = Math.min(...template.nodes.map((node) => node.position.y))
+    const origin = screenToFlowPosition({ x: Math.max(180, window.innerWidth * .25), y: Math.max(140, window.innerHeight * .22) })
+    const nodeSize = (node: CanvasNode | WorkflowTemplate['nodes'][number]) => ({
+      width: Number.parseFloat(String(node.style?.width ?? '')) || (node.data?.kind === 'text' ? 420 : 280),
+      height: Number.parseFloat(String(node.style?.height ?? '')) || (node.data?.kind === 'text' ? 240 : 300),
+    })
+    const templateWidth = Math.max(...template.nodes.map((node) => node.position.x - minX + nodeSize(node).width))
+    const templateHeight = Math.max(...template.nodes.map((node) => node.position.y - minY + nodeSize(node).height))
+    const existingRects = nodes.filter((node) => !node.parentId).map((node) => {
+      const size = nodeSize(node)
+      return { id: node.id, left: node.position.x, top: node.position.y, right: node.position.x + size.width, bottom: node.position.y + size.height }
+    })
+    const overlapsExisting = (candidate: { x: number; y: number }) => existingRects.some((rect) => !(
+      candidate.x + templateWidth + 54 < rect.left
+      || candidate.x - 54 > rect.right
+      || candidate.y + templateHeight + 54 < rect.top
+      || candidate.y - 54 > rect.bottom
+    ))
+    const placementCandidates = [{ x: origin.x, y: origin.y }]
+    for (let ring = 1; ring <= 8; ring += 1) {
+      placementCandidates.push(
+        { x: origin.x + ring * 380, y: origin.y },
+        { x: origin.x, y: origin.y + ring * 340 },
+        { x: origin.x - ring * 380, y: origin.y },
+        { x: origin.x, y: origin.y - ring * 340 },
+        { x: origin.x + ring * 380, y: origin.y + ring * 340 },
+        { x: origin.x - ring * 380, y: origin.y + ring * 340 },
+      )
     }
+    const safeOrigin = placementCandidates.find((candidate) => !overlapsExisting(candidate)) ?? {
+      x: origin.x,
+      y: Math.max(origin.y, ...existingRects.map((rect) => rect.bottom + 120)),
+    }
+    const placementWasAdjusted = safeOrigin.x !== origin.x || safeOrigin.y !== origin.y
+    const restoredNodes: CanvasNode[] = template.nodes.map((node) => ({
+      ...node,
+      id: idMap.get(node.id)!,
+      selected: false,
+      position: { x: origin.x + node.position.x - minX, y: origin.y + node.position.y - minY },
+      data: { ...node.data } as CanvasNode['data'],
+      style: node.style ? { ...node.style } : undefined,
+    }))
+    const restoredNodeIds = new Set(restoredNodes.map((node) => node.id))
+    const restoredEdges: Edge[] = template.edges.map((templateEdge, index) => ({
+      ...templateEdge,
+      id: `workflow-edge-${stamp}-${index}`,
+      source: idMap.get(templateEdge.source) ?? templateEdge.source,
+      target: idMap.get(templateEdge.target) ?? templateEdge.target,
+      selected: false,
+    }))
+    setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...restoredNodes])
+    setEdges((current) => [...current.map((item) => ({ ...item, selected: false })), ...restoredEdges])
+    setWorkflowTemplateOpen(false)
+    if (!placementWasAdjusted) {
+      setToastMessage(`已添加工作流：${template.title}`)
+      window.requestAnimationFrame(() => fitCanvas({ nodes: restoredNodes.map((node) => ({ id: node.id })), padding: .18, duration: 520 }))
+      return
+    }
+    setToastMessage('检测到画板重叠，正在自动寻找空位…')
+    window.requestAnimationFrame(() => {
+      const coveredIds = existingRects.filter((rect) => !(
+        origin.x + templateWidth <= rect.left
+        || origin.x >= rect.right
+        || origin.y + templateHeight <= rect.top
+        || origin.y >= rect.bottom
+      )).map((rect) => rect.id)
+      const coveredCards = coveredIds.flatMap((coveredId) => Array.from(
+        shellRef.current?.querySelectorAll<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(coveredId)}"] > .disy-node, .react-flow__node[data-id="${CSS.escape(coveredId)}"] > .canvas-group-node`) ?? [],
+      ))
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (!reducedMotion && coveredCards.length) {
+        gsap.fromTo(coveredCards, {
+          rotateX: 0,
+          rotateY: 0,
+          scale: 1,
+          transformPerspective: 700,
+        }, {
+          rotateX: -1.6,
+          rotateY: 2.4,
+          scale: .992,
+          duration: .14,
+          repeat: 1,
+          yoyo: true,
+          ease: 'power2.inOut',
+          stagger: .025,
+          clearProps: 'transform,transformPerspective',
+        })
+      }
+      window.setTimeout(() => {
+        const offsetX = safeOrigin.x - origin.x
+        const offsetY = safeOrigin.y - origin.y
+        setNodes((current) => current.map((node) => restoredNodeIds.has(node.id)
+          ? { ...node, position: { x: node.position.x + offsetX, y: node.position.y + offsetY } }
+          : node))
+        setToastMessage(`已避开重叠并添加：${template.title}`)
+        window.requestAnimationFrame(() => fitCanvas({ nodes: restoredNodes.map((node) => ({ id: node.id })), padding: .18, duration: 520 }))
+      }, reducedMotion ? 0 : 310)
+    })
+  }
+
+  const deleteGenerationRecord = (recordId: string) => {
     const nextHistory = generationHistory.filter((record) => record.id !== recordId)
     localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(nextHistory))
     setGenerationHistory(nextHistory)
@@ -7313,13 +7652,6 @@ function App() {
 
   const deleteHistoryBatch = (recordIds: string[]) => {
     const idSet = new Set(recordIds)
-    generationHistory.forEach((record) => {
-      if (!idSet.has(record.id) || !record.mediaId) return
-      const objectUrl = historyMediaObjectUrlsRef.current.get(record.mediaId)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
-      historyMediaObjectUrlsRef.current.delete(record.mediaId)
-      void deleteHistoryMedia(record.mediaId)
-    })
     const nextHistory = generationHistory.filter((record) => !idSet.has(record.id))
     localStorage.setItem(GENERATION_HISTORY_KEY, JSON.stringify(nextHistory))
     setGenerationHistory(nextHistory)
@@ -7461,7 +7793,7 @@ function App() {
                 }}><Check size={15} />{projectHomeSelectionMode ? '取消全选' : '全选'}</button>
                 {projectHomeSelectionMode && selectedProjectIds.length > 0 && <button className="project-home-batch-delete" onClick={() => void removeProjects(selectedProjectIds)}><Trash2 size={15} />批量删除 ({selectedProjectIds.length})</button>}
                 <button className={`project-home-icon ${projectHomeView === 'list' ? 'is-active' : ''}`} onClick={() => setProjectHomeView((view) => view === 'grid' ? 'list' : 'grid')} aria-label={projectHomeView === 'grid' ? '切换到列表视图' : '切换到宫格视图'} title={projectHomeView === 'grid' ? '列表视图' : '宫格视图'}>{projectHomeView === 'grid' ? <List size={18} /> : <Grid3X3 size={17} />}</button>
-                <button className="project-home-icon" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
+                <button className="project-home-icon project-home-transfer" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
                 <button
                   className={`project-home-api ${apiConfigured ? 'is-configured' : ''}`}
                   onClick={openApiSettings}
@@ -7571,6 +7903,7 @@ function App() {
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
               <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
+              <NodeImageUploadContext.Provider value={uploadImageToNode}>
               <GroupCollapseContext.Provider value={setGroupCollapsed}>
               <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
           <ReactFlow
@@ -7644,6 +7977,9 @@ function App() {
             window.requestAnimationFrame(() => measureNodeOverlay(node.id))
           }}
           onNodeDragStart={(event, node) => {
+            autoPlacementTweenRef.current?.kill()
+            autoPlacementTweenRef.current = null
+            stopLiveOverlapTilt()
             setIsNodeDragging(true)
             if (node.parentId && node.extent === 'parent') {
               setNodes((current) => current.map((item) => item.id === node.id ? { ...item, extent: undefined } : item))
@@ -7658,7 +7994,11 @@ function App() {
             const stationaryDuplicate = duplicateCanvasNode(node, duplicateId, { ...node.position }, false)
             setNodes((current) => [...current, stationaryDuplicate])
           }}
+          onNodeDrag={(_, node) => {
+            scheduleLiveOverlapTilt(node)
+          }}
           onNodeDragStop={(_, node) => {
+            stopLiveOverlapTilt()
             setIsNodeDragging(false)
             const altDuplicate = altDragDuplicateRef.current
             if (altDuplicate?.originalId === node.id) {
@@ -7678,11 +8018,13 @@ function App() {
               setExpandedEditorNodeId(null)
               altDragDuplicateRef.current = null
               window.requestAnimationFrame(() => measureNodeOverlay(altDuplicate.duplicateId))
+              window.requestAnimationFrame(() => resolveNodeOverlap(altDuplicate.duplicateId))
               setToastMessage('已通过 Alt 拖拽创建节点副本')
               return
             }
             altDragDuplicateRef.current = null
             if (reconcileNodeGroupMembership(node.id, node.position)) return
+            if (resolveNodeOverlap(node.id)) return
             if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId) measureNodeOverlay(node.id)
           }}
           onNodeContextMenu={openNodeContextMenu}
@@ -7791,6 +8133,7 @@ function App() {
           </ReactFlow>
               </NodeExtensionMenuContext.Provider>
               </GroupCollapseContext.Provider>
+              </NodeImageUploadContext.Provider>
               </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
@@ -7836,7 +8179,7 @@ function App() {
             }
             return <motion.div className="image-tool-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => { if (!cutoutBusy) setImageTool(null) }}>
               <motion.section className={`image-tool-dialog mode-${imageTool.mode}`} initial={{ opacity: 0, y: 18, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }} onMouseDown={(event) => event.stopPropagation()}>
-                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'local-edit' ? '评论修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'local-edit' ? '点击图片添加修改意见，最多 5 条' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
+                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'local-edit' ? '局部修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'local-edit' ? '点击图片标记需要调整的位置，最多 5 处' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
                 <div className="image-tool-content">
                   <div className={`image-tool-stage mode-${imageTool.mode}`}>
                     <div className="image-tool-image-plane" onPointerDown={addLocalEditMark} style={{ aspectRatio: imageTool.mode === 'expand' ? `${expandSize.width} / ${expandSize.height}` : `${imageToolSourceSize.width} / ${imageToolSourceSize.height}`, ...(imageTool.mode === 'local-edit' ? { width: `min(100%, ${Math.max(1, Math.round(500 * imageToolSourceSize.width / imageToolSourceSize.height))}px)` } : {}) }}>
@@ -7864,14 +8207,14 @@ function App() {
                     <section className="lighting-rim"><div><strong>轮廓光</strong><button type="button" className={studioLighting.rim ? 'is-on' : ''} onClick={() => setStudioLighting((current) => ({ ...current, rim: !current.rim }))}><i /></button></div>{studioLighting.rim && <label><span>强度</span><input type="range" min="5" max="80" value={studioLighting.rimStrength} onChange={(event) => setStudioLighting((current) => ({ ...current, rimStrength: Number(event.target.value) }))} /><b>{studioLighting.rimStrength}%</b></label>}</section>
                     <div className="lighting-prompt-preview"><small>打光提示</small><p>{`主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，轮廓光 ${studioLighting.rimStrength}%` : ''}`}</p></div>
                   </div> : imageTool.mode === 'local-edit' ? <div className="image-tool-controls local-edit-controls">
-                    <div className="local-edit-heading"><strong>评论列表</strong><span>{localEditMarks.length} / 5</span></div>
-                    <p>点击左侧图片需要修改的位置，再为对应编号填写修改要求。</p>
+                    <div className="local-edit-heading"><div><strong>修改点位</strong><small>仅调整标记区域，其余画面保持不变</small></div><span>{localEditMarks.length} / 5</span></div>
+                    <p>点击左侧图片添加点位，再描述希望如何修改。</p>
                     <div className="local-edit-comment-list">{localEditMarks.map((mark, index) => <label key={mark.id}><b>{index + 1}</b><textarea autoFocus={index === localEditMarks.length - 1} value={mark.prompt} placeholder="描述这个位置要怎么修改…" onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setLocalEditMarks((current) => current.map((item) => item.id === mark.id ? { ...item, prompt: event.target.value } : item))} /><button type="button" aria-label={`删除评论 ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setLocalEditMarks((current) => current.filter((item) => item.id !== mark.id))}><X size={14} /></button></label>)}</div>
-                    {!localEditMarks.length && <div className="local-edit-empty"><MessageCircle size={20} /><strong>在图片上添加评论</strong><span>点击任意位置，最多添加 5 条</span></div>}
-                    {localEditMarks.length >= 5 && <small className="local-edit-limit">已达到 5 条评论上限</small>}
+                    {!localEditMarks.length && <div className="local-edit-empty"><MessageCircle size={20} /><strong>在图片上添加修改点位</strong><span>点击任意位置，最多添加 5 处</span></div>}
+                    {localEditMarks.length >= 5 && <small className="local-edit-limit">已达到 5 个点位上限</small>}
                   </div> : <div className="image-tool-controls cutout-info"><p>本机后台运行 MIT 许可的通用主体模型；首次下载后会缓存，不消耗 API 积分，也不会上传原图。</p><small>适合人像、商品主体；复杂毛发建议生成后检查边缘。</small>{cutoutProgress && <div className="cutout-progress-panel" role="status" aria-live="polite"><div><LoaderCircle className="is-spinning" size={15} /><strong>{cutoutProgress.stage}</strong><b>{typeof cutoutProgress.progress === 'number' ? `${Math.round(cutoutProgress.progress)}%` : ''}</b></div><span><i style={{ width: `${cutoutProgress.progress ?? 8}%` }} /></span>{cutoutProgress.detail && <small>{cutoutProgress.detail}</small>}<em>处理完成前窗口会保持打开，随后自动生成并连接结果节点。</em></div>}</div>}
                 </div>
-                <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" onClick={() => { const direction = studioLighting.yaw > 135 || studioLighting.yaw < -135 ? '后方逆光' : studioLighting.yaw > 45 ? '右侧光' : studioLighting.yaw < -45 ? '左侧光' : studioLighting.pitch > 45 ? '顶部光' : studioLighting.pitch < -35 ? '底部光' : '前方光'; createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线：${direction}，主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，全局亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，增加 ${studioLighting.rimStrength}% 轮廓光` : ''}。光影自然、曝光准确，不改变产品形状、画面内容与视角。`) }}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('评论修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
+                <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" onClick={() => { const direction = studioLighting.yaw > 135 || studioLighting.yaw < -135 ? '后方逆光' : studioLighting.yaw > 45 ? '右侧光' : studioLighting.yaw < -45 ? '左侧光' : studioLighting.pitch > 45 ? '顶部光' : studioLighting.pitch < -35 ? '底部光' : '前方光'; createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线：${direction}，主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，全局亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，增加 ${studioLighting.rimStrength}% 轮廓光` : ''}。光影自然、曝光准确，不改变产品形状、画面内容与视角。`) }}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('局部修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
               </motion.section>
             </motion.div>
           })()}
@@ -8552,6 +8895,14 @@ function App() {
             <BookOpen size={18} />
           </button>
           <button
+            className={workflowTemplateOpen ? 'is-active' : ''}
+            aria-label="工作流模板库"
+            data-tooltip="工作流模板库"
+            onClick={() => setWorkflowTemplateOpen(true)}
+          >
+            <Shapes size={18} />
+          </button>
+          <button
             aria-label="资产库"
             data-tooltip={`资产库 · ${savedAssets.length}`}
             onClick={() => {
@@ -8683,8 +9034,11 @@ function App() {
                 imageModelKey={agentImageModelKey}
                 imageDefaults={agentImageDefaults}
                 busy={agentBusy}
+                agentOnly={false}
                 onStop={stopAgentThinking}
                 onClose={() => { setAgentOpen(false); setAgentCanvasPicking(false) }}
+                onOpenApiSettings={openApiSettings}
+                onDownloadImage={(url, fileName) => { void downloadImageUrl(url, fileName) }}
                 onNewConversation={beginNewAgentConversation}
                 onDeleteConversation={() => void deleteCurrentAgentConversation()}
                 onSelectConversation={(id) => void selectAgentConversation(id)}
@@ -8864,7 +9218,7 @@ function App() {
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
-              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'local-edit')} title="评论修改"><MessageCircle size={14} /><span>评论修改</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'local-edit')} title="局部修改"><MessageCircle size={14} /><span>局部修改</span></button>
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
               <span className="quick-toolbar-divider" />
               <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])}><Download size={14} /><span>下载</span></button>
@@ -8898,7 +9252,7 @@ function App() {
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
-                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'local-edit')} title="评论修改"><MessageCircle size={14} /><span>评论修改</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'local-edit')} title="局部修改"><MessageCircle size={14} /><span>局部修改</span></button>
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
                   <span className="quick-toolbar-divider" />
                   <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])}><Download size={14} /><span>下载</span></button>
@@ -10091,6 +10445,13 @@ function App() {
         onUsePrompt={addPromptCaseNode}
         onAddImage={addPromptCaseImage}
       />
+      {workflowTemplateOpen && <Suspense fallback={null}>
+        <WorkflowTemplatePanel
+          open
+          onClose={() => setWorkflowTemplateOpen(false)}
+          onApply={applyWorkflowTemplate}
+        />
+      </Suspense>}
 
       <AnimatePresence>
         {assetLibraryOpen && (

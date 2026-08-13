@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Settings2, Trash2, Upload, X } from 'lucide-react'
+import { useEffect, useId, useMemo, useState, type DragEvent } from 'react'
+import { ArrowUpRight, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, GripVertical, ImagePlus, Plus, Search, Settings2, Trash2, Upload, X } from 'lucide-react'
 
 export type PromptLibraryCase = {
   id: number | string
@@ -86,7 +86,9 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
   const [editingCategory, setEditingCategory] = useState<string | null>(null)
   const [categoryDraft, setCategoryDraft] = useState('')
   const [pendingDeleteCategory, setPendingDeleteCategory] = useState<string | null>(null)
-  const [draft, setDraft] = useState({ title: '', prompt: '', category: '视觉案例', image: '' })
+  const [draft, setDraft] = useState({ title: '', prompt: '', category: '', image: '' })
+  const [creatorCategoryOpen, setCreatorCategoryOpen] = useState(false)
+  const creatorCategoryMenuId = useId()
 
   useEffect(() => {
     if (!open || catalog) return
@@ -157,7 +159,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
       <section className="prompt-library-panel" role="dialog" aria-modal="true" aria-labelledby="prompt-library-title" onMouseDown={(event) => event.stopPropagation()} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy' }} onDrop={(event) => event.stopPropagation()}>
         <header className="prompt-library-header">
           <div className="prompt-library-heading"><span><BookOpen size={18} /></span><div><h2 id="prompt-library-title">提示库</h2><small>{catalog ? `${catalog.totalCases} 个灵感案例` : '正在加载案例'}</small></div></div>
-          <div className="prompt-header-actions"><button type="button" className="prompt-create-button" onClick={() => setCreatorOpen(true)}><Plus size={14} />添加我的案例</button><button type="button" aria-label="关闭提示库" onClick={onClose}><X size={18} /></button></div>
+          <div className="prompt-header-actions"><button type="button" className="prompt-create-button" onClick={() => { setCreatorCategoryOpen(false); setCreatorOpen(true) }}><Plus size={14} />添加我的案例</button><button type="button" aria-label="关闭提示库" onClick={onClose}><X size={18} /></button></div>
         </header>
 
           <div className="prompt-library-search-row">
@@ -194,7 +196,7 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
             <div className="prompt-detail-title"><div><small>{selected.industry ? '行业灵感' : selected.sourceLabel === '我的创作' ? '我的创作' : `CASE ${selected.id}`}</small><h3>{selected.title}</h3></div><div className="prompt-detail-title-actions">{selected.sourceUrl && <a href={selected.sourceUrl} target="_blank" rel="noreferrer" title="查看原始来源"><ArrowUpRight size={16} /></a>}<button type="button" title="从灵感案例移除" onClick={() => deleteCase(selected)}><Trash2 size={15} /></button></div></div>
             <div className="prompt-detail-tags"><span>{selected.category}</span></div>
             <div className="prompt-detail-prompt"><div><strong>Prompt</strong><button onClick={async () => { await navigator.clipboard.writeText(selected.prompt); setCopied(true); window.setTimeout(() => setCopied(false), 1400) }}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div><p>{selected.prompt}</p></div>
-            <div className="prompt-detail-actions"><button onClick={() => onUsePrompt(selected)}><BookOpen size={15} />写入提示词节点</button><button onClick={() => onAddImage(selected)}><ImagePlus size={15} />加入画布</button></div>
+            <div className="prompt-detail-actions"><button onClick={() => onUsePrompt(selected)}><BookOpen size={15} />一键复刻同款</button><button onClick={() => onAddImage(selected)}><ImagePlus size={15} />加入画布</button></div>
             <footer>案例来自 <a href={selected.sourceUrl || selected.githubUrl} target="_blank" rel="noreferrer">{selected.sourceLabel || '原项目收录来源'}</a>。使用前请自行确认原作者授权。</footer>
           </aside>}
         </div>
@@ -202,15 +204,15 @@ export function PromptLibraryPanel({ open, onClose, onUsePrompt, onAddImage }: P
       {creatorOpen && <div className="prompt-creator-backdrop" onMouseDown={() => setCreatorOpen(false)}><form className="prompt-creator-dialog" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => {
         event.preventDefault()
         if (!draft.title.trim() || !draft.prompt.trim() || !draft.image) return
-        const selectedCategory = draft.category.trim() || '视觉案例'
+        const selectedCategory = draft.category.trim() || '未分类'
         const item: PromptLibraryCase = { id: `custom-${crypto.randomUUID()}`, title: draft.title.trim(), prompt: draft.prompt.trim(), image: draft.image, category: selectedCategory, styles: [], scenes: [], featured: false, sourceLabel: '我的创作' }
         const next = [item, ...customCases]
         try {
           saveCustomCases(next); setCustomCases(next)
           if (!SYSTEM_CATEGORIES.includes(selectedCategory) && !customCategories.includes(selectedCategory)) { const nextCategories = [...customCategories, selectedCategory]; localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(nextCategories)); setCustomCategories(nextCategories) }
-          setSelected(item); setCreatorOpen(false); setDraft({ title: '', prompt: '', category: '视觉案例', image: '' })
+          setSelected(item); setCreatorOpen(false); setDraft({ title: '', prompt: '', category: '', image: '' })
         } catch { setError('本地空间不足，请减少自定义案例或使用更小的参考图') }
-      }}><header><div><small>MY PROMPT</small><h3>添加我的案例</h3></div><button type="button" onClick={() => setCreatorOpen(false)}><X size={17} /></button></header><label className="prompt-upload-field">{draft.image ? <img src={draft.image} alt="参考图预览" /> : <><Upload size={20} /><strong>上传参考图</strong><small>会自动压缩为最长边 640px WebP</small></>}<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void compressReference(file).then((image) => setDraft((current) => ({ ...current, image }))) }} /></label><label>案例名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Prompt<textarea value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} /></label><div className="prompt-creator-fields"><label>分类（支持自建）<input list="prompt-category-options" value={draft.category} placeholder="金融科技、视觉案例，或输入新分类" onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /><datalist id="prompt-category-options">{categories.map((value) => <option value={value} key={value} />)}</datalist></label></div><footer><button type="button" onClick={() => setCreatorOpen(false)}>取消</button><button type="submit" disabled={!draft.title.trim() || !draft.prompt.trim() || !draft.image}>保存到灵感案例</button></footer></form></div>}
+      }}><header><div><small>MY PROMPT</small><h3>添加我的案例</h3></div><button type="button" onClick={() => setCreatorOpen(false)}><X size={17} /></button></header><label className="prompt-upload-field">{draft.image ? <img src={draft.image} alt="参考图预览" /> : <><Upload size={20} /><strong>上传参考图</strong><small>会自动压缩为最长边 640px WebP</small></>}<input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void compressReference(file).then((image) => setDraft((current) => ({ ...current, image }))) }} /></label><label>案例名称<input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Prompt<textarea value={draft.prompt} onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))} /></label><div className="prompt-creator-fields"><label>分类（支持自建）<div className={`prompt-category-select ${creatorCategoryOpen ? 'is-open' : ''}`}><div><input role="combobox" aria-expanded={creatorCategoryOpen} aria-controls={creatorCategoryMenuId} aria-autocomplete="list" value={draft.category} placeholder="选择或输入新分类" onFocus={() => setCreatorCategoryOpen(true)} onKeyDown={(event) => { if (event.key === 'Escape') setCreatorCategoryOpen(false); if (event.key === 'ArrowDown') setCreatorCategoryOpen(true) }} onChange={(event) => { setDraft((current) => ({ ...current, category: event.target.value })); setCreatorCategoryOpen(true) }} /><button type="button" aria-label="展开分类" aria-expanded={creatorCategoryOpen} onClick={() => setCreatorCategoryOpen((value) => !value)}><ChevronDown size={14} /></button></div>{creatorCategoryOpen && <div id={creatorCategoryMenuId} className="prompt-category-select-menu" role="listbox">{categories.map((value) => <button type="button" role="option" aria-selected={draft.category === value} className={draft.category === value ? 'is-selected' : ''} key={value} onMouseDown={(event) => event.preventDefault()} onClick={() => { setDraft((current) => ({ ...current, category: value })); setCreatorCategoryOpen(false) }}><span>{categoryName(value)}</span>{draft.category === value && <Check size={13} />}</button>)}</div>}</div></label></div><footer><button type="button" onClick={() => setCreatorOpen(false)}>取消</button><button type="submit" disabled={!draft.title.trim() || !draft.prompt.trim() || !draft.image}>保存到灵感案例</button></footer></form></div>}
     </div>
   )
 }
