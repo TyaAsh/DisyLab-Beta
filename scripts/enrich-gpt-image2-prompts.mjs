@@ -8,7 +8,12 @@ const includesAny = (text, words) => words.some((word) => text.includes(word))
 const unique = (values) => [...new Set(values.filter(Boolean))]
 
 function extractScene(item) {
+  const nano = String(item.nanoPrompt || item.prompt || '')
+  const nanoMatch = nano.match(/^生成一张[^：]*：([\s\S]*?)。严格执行/)
+  if (nanoMatch?.[1]?.trim()) return nanoMatch[1].trim().replace(/[。；]+$/, '')
   const prompt = String(item.gptImage2Prompt || item.nanoPrompt || item.prompt || '')
+  const enrichedMatch = prompt.match(/核心画面：([\s\S]*?)。严格保持主体数量/)
+  if (enrichedMatch?.[1]?.trim()) return enrichedMatch[1].trim().replace(/[。；]+$/, '')
   const match = prompt.match(/画面复现：([\s\S]*?)(?:。\n\n|\n\n构图|\n\n环境|$)/)
   if (match?.[1]?.trim()) return match[1].trim().replace(/[。；]+$/, '')
   return prompt.replace(/^生成一张[^：]*：/, '').split('。严格执行')[0].trim().replace(/[。；]+$/, '')

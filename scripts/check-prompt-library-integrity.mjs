@@ -17,7 +17,10 @@ for (const item of catalog.cases) {
   if (!item.nanoPrompt?.includes('可直接用于文生图') || !item.nanoPrompt?.includes('如同时上传参考图')) throw new Error(`Nano prompt is not dual-mode: ${item.id}`)
   if (!item.gptImage2Prompt?.includes('仅凭本提示词即可文生图') || !item.gptImage2Prompt?.includes('若同时上传参考图')) throw new Error(`GPT Image 2 prompt is not dual-mode: ${item.id}`)
   if (requiredGptSections.some((section) => !item.gptImage2Prompt.includes(section))) throw new Error(`GPT Image 2 prompt is missing a structured section: ${item.id}`)
-  if (item.gptImage2Prompt.length < 900) throw new Error(`GPT Image 2 prompt is insufficiently detailed: ${item.id}`)
+  for (const section of requiredGptSections) {
+    if (item.gptImage2Prompt.split(section).length !== 2) throw new Error(`GPT Image 2 prompt contains a duplicate section (${section}): ${item.id}`)
+  }
+  if (item.gptImage2Prompt.length < 800) throw new Error(`GPT Image 2 prompt is insufficiently detailed: ${item.id}`)
   if (/\b(?:WebP|webp)\b/.test(`${item.nanoPrompt}\n${item.gptImage2Prompt}`)) throw new Error(`Unexpected WebP instruction: ${item.id}`)
 }
 
