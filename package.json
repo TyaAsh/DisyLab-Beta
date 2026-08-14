@@ -16,6 +16,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "check:prompt-library": "node scripts/check-prompt-library-integrity.mjs",
+    "import:local-library": "node scripts/import-local-reference-library.mjs && node scripts/rewrite-local-prompts.mjs",
     "build:render-library": "node scripts/extend-render-reference-library.mjs",
     "build:fintech-library": "node scripts/build-fintech-visual-library.mjs"
   },

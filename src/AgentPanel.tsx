@@ -230,6 +230,7 @@ type Props = {
   onPlanChange: (id: string, patch: Partial<Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count'>>) => void
   onSelectPlanOptions: (groupPlanIds: string[], selectedPlanIds: string[]) => void
   onConfirmPlan: (id: string) => void
+  getImagePlanCostLabel?: (plan: AgentImagePlan) => string | null
   onCancelPlan: (id: string) => void
   onRemovePlanContextReference: (planId: string, nodeId: string) => void
   onTextPlanChange: (id: string, patch: Partial<Pick<AgentTextPlan, 'title' | 'content'>>) => void
@@ -730,7 +731,7 @@ export function AgentPanel(props: Props) {
           </div>)}
         </div>}
         {plan.error && <p className="agent-plan-error">{plan.error}</p>}
-        {plan.status === 'ready' && <footer className="agent-plan-actions"><button type="button" className="agent-plan-cancel" onClick={() => props.onCancelPlan(plan.id)}>取消</button><button type="button" className="agent-plan-confirm" onClick={() => props.onConfirmPlan(plan.id)}><Check size={15} />确认生图</button></footer>}
+        {plan.status === 'ready' && <footer className="agent-plan-actions"><button type="button" className="agent-plan-cancel" onClick={() => props.onCancelPlan(plan.id)}>取消</button><button type="button" className="agent-plan-confirm" onClick={() => props.onConfirmPlan(plan.id)}><Check size={15} />确认生图{props.getImagePlanCostLabel?.(plan) ? ` · ${props.getImagePlanCostLabel(plan)}` : ''}</button></footer>}
       </section>
     )
   }

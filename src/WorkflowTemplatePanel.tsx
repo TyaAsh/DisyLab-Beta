@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react'
-import { ArrowRight, Check, Download, Pencil, Plus, Search, Shapes, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Download, Pencil, Plus, Search, Shapes, Sparkles, Trash2, Upload, X } from 'lucide-react'
 
 export type WorkflowTemplateNode = {
   id: string
   type: 'disy'
   position: { x: number; y: number }
   style?: { width?: number; height?: number }
-  data: Record<string, unknown> & { kind: 'text' | 'image' | 'upload'; title: string }
+  data: Record<string, unknown> & { kind: 'text' | 'image' | 'upload' | 'video'; title: string }
 }
 
 export type WorkflowTemplateEdge = {
@@ -42,6 +42,10 @@ const upload = (id: string, title: string, x: number, y: number): WorkflowTempla
 const image = (id: string, title: string, body: string, x: number, y: number, ratio = '1:1'): WorkflowTemplateNode => ({
   id, type: 'disy', position: { x, y }, style: { width: 280, height: 300 },
   data: { kind: 'image', title, body: `${body}\n\n${IMAGE_PRODUCTION_RULES}`, promptText: `${body}\n\n${IMAGE_PRODUCTION_RULES}`, status: '待生成', imageAspectRatio: ratio, imageResolution: '2K', imageDetail: 'high' },
+})
+const video = (id: string, title: string, body: string, x: number, y: number, duration = '6s'): WorkflowTemplateNode => ({
+  id, type: 'disy', position: { x, y }, style: { width: 300, height: 240 },
+  data: { kind: 'video', title, body, promptText: body, status: '视频生成即将开放', videoDuration: duration, videoPlaceholder: true },
 })
 const edge = (source: string, target: string): WorkflowTemplateEdge => ({ id: `edge-${source}-${target}`, source, target, type: 'luminous' })
 
@@ -293,10 +297,10 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   return (aIndex < 0 ? priority.length : aIndex) - (bIndex < 0 ? priority.length : bIndex)
 })
 
-const CATEGORIES = ['精选工业化', '角色与 IP', '商业电商', '影视分镜', '品牌与 KV', '场景与视觉'] as const
+const CATEGORIES = ['精选工业化', '角色与 IP', '商业电商', '影视 / TVC 广告', '品牌与 KV', '视觉场景'] as const
 const STORAGE_KEY = 'disylab.workflow-templates.v2'
 type StoredWorkflowTemplates = { custom: WorkflowTemplate[]; overrides: WorkflowTemplate[]; hidden: string[] }
-type EditorNode = { id: string; kind: 'text' | 'image' | 'upload'; title: string; prompt: string }
+type EditorNode = { id: string; kind: 'text' | 'image' | 'upload' | 'video'; title: string; prompt: string }
 type EditorDraft = { id?: string; sourceId?: string; title: string; description: string; category: string; tags: string; accent: string; nodes: EditorNode[] }
 
 const CATEGORY_BY_ID: Record<string, string> = {
@@ -575,18 +579,145 @@ C 红白分染双马尾“铃”：链式细框眼镜、黑色项圈、白色半
   ),
 ]
 
-const BUILT_IN_TEMPLATES = [...WORKFLOW_TEMPLATES, ...EXPANDED_TEMPLATES].map((template, index) => ({
-  ...template,
-  category: CATEGORY_BY_ID[template.id] ?? template.category,
-  accent: template.accent || ['#8f9cff', '#67d1b4', '#ef9b72'][index % 3],
-})).sort((a, b) => {
-  const featured = ['xinpianchang-sci-fi-western-world', 'trendy-ip-matrix', 'myriad-demons-chronicle', 'kpop-mv-production', 'sports-campaign', 'brand-film']
+const REMOVED_TEMPLATE_IDS = new Set([
+  'product-backgrounds', 'beauty-tvc', 'short-drama-dialogue', 'beauty-serum-tvc', 'new-energy-drink-tvc', 'milk-tea-tvc',
+])
+const CATEGORY_RENAMES: Record<string, string> = {
+  '影视分镜': '影视 / TVC 广告',
+  '场景与视觉': '视觉场景',
+}
+const VIDEO_WORKFLOW_BRIEF = `视频生成执行规范：
+1. 参考优先级：角色/产品/场景母版 > 当前镜头关键帧 > 风格参考 > 文字补充。上游母版是身份与结构的唯一事实来源。
+2. 一致性锁定：人物脸型、五官锚点、年龄、发型、体型、服装层级、配饰和标志道具不可变化；IP头身比、轮廓、配色、材质和表情器官不可变化；产品尺寸比例、孔位、按键、接口、Logo面、包装文字结构和材质不可变化；场景建筑、道路、门窗、家具、道具位置、主色和主光方向不可变化。
+3. 动态规则：只改变当前镜头明确要求的动作、表情、景别、机位、运镜和时间进度。动作必须有起始状态、运动过程和结束状态，重心、惯性、碰撞、液体、布料、毛发、烟雾、雨雪和反射符合真实物理。
+4. 摄影规则：严格执行指定景别、焦段、机位高度、轴线、运动方向和速度曲线；画面稳定，不随机摇晃，不突然变焦，不跳轴，不漂移构图，不改变光源方向。
+5. 输出要求：电影级商业成片，16:9，24fps，单镜默认5秒；主体清晰、运动自然、时间连续，可直接进入剪辑。无字幕、无水印、无新增Logo、无镜头编号。
+6. 禁止项：禁止换脸、年龄漂移、随机换装、多人串脸、多肢体、多手指、肢体穿插、主体复制、产品变形、Logo重绘、包装文字乱码、建筑漂移、背景闪烁、材质跳变、光线闪烁和无关物体突然出现。`
+const VIDEO_TEMPLATE_IDS = new Set([
+  'xinpianchang-sci-fi-western-world', 'myriad-demons-chronicle', 'zombie-scavenger', 'kpop-mv-production', 'short-drama-production', 'tvc-production',
+  'douyin-commerce', 'restaurant-launch', 'tourism-citywalk', 'virtual-human-host', 'virtual-influencer-matrix',
+  'education-course-launch', 'automotive-launch', 'fintech-brand-production', 'fintech-growth-operations',
+])
+const MOTION_NODE_PATTERN = /镜|分镜|故事|动作|交互|过程|演示|首尾帧|动态|口播|场景组|旅拍|发布|Campaign/i
+const STATIC_MASTER_PATTERN = /母版|三视图|设定板|资产|结构|界面母版|标准图|质检|清单/i
+const buildVideoPrompt = (template: WorkflowTemplate, source: WorkflowTemplateNode, shotIndex: number) => {
+  const sourcePrompt = String(source.data.promptText ?? source.data.body ?? '').trim()
+  return `【项目】${template.title}
+【项目目标】${template.description}
+【镜头编号】${shotIndex + 1}
+【镜头名称】${source.data.title}
+
+【本镜头必须完成的画面与动作】
+${sourcePrompt || `严格依据上游“${source.data.title}”关键帧生成动态镜头，保持画面主体、构图、场景和光线一致。`}
+
+【时间轴】
+- 0%–15%：从上游关键帧的稳定状态开始，主体身份、位置、朝向、服装/产品结构和环境布局必须与首帧一致。
+- 15%–80%：只执行本镜头指定的核心动作；动作路径清楚，速度有加速、匀速或减速过程，镜头运动与主体运动不得互相打架。
+- 80%–100%：自然收束到可剪辑的稳定尾帧，为下一镜头保留动作方向、视线、光线和构图匹配点。
+
+【连续性检查】
+- 继承全部上游连接节点；不得只参考最后一张图。
+- 保持人物/IP/产品/场景的全部视觉锚点，不补画未定义细节。
+- 若上游镜头存在动作、视线、道具状态或环境变化，必须从上一镜结束状态继续，不得重置。
+- 同一角色不得换脸、换发型、换服装或改变年龄；同一产品不得改变比例、接口、按键、Logo和包装结构。
+
+【摄影与声音】
+- 使用镜头描述中指定的景别、焦段、机位、轴线和运镜；未指定时采用克制稳定的电影摄影，不做无意义环绕。
+- 保持主光方向、色温、曝光、景深与上游关键帧一致，禁止闪烁。
+- 预留真实环境声、动作音效与转场声音点，不自动生成旁白、音乐和字幕。
+
+【输出与负面约束】
+${VIDEO_WORKFLOW_BRIEF}`
+}
+const enhanceTemplate = (template: WorkflowTemplate): WorkflowTemplate => {
+  const category = CATEGORY_RENAMES[CATEGORY_BY_ID[template.id] ?? template.category] ?? (CATEGORY_BY_ID[template.id] ?? template.category)
+  const nodes = [...template.nodes]
+  const edges = [...template.edges]
+  let latestId = nodes.at(-1)?.id
+  const append = (node: WorkflowTemplateNode, sourceId = latestId) => {
+    if (nodes.some((item) => item.id === node.id)) return
+    nodes.push(node)
+    if (sourceId) edges.push(edge(sourceId, node.id))
+    latestId = node.id
+  }
+  if (category === '角色与 IP') {
+    append(text('usage-matrix', '角色使用矩阵', '定义角色在头像、海报、短视频、直播、表情包、周边与多人同框中的尺寸、服装权限、表情强度、动作边界和品牌露出规则。', nodes.length * 340, 0))
+    append(text('continuity-check', '角色一致性质检', '逐项核对脸部锚点、头身比、发型、服装层级、标志道具、表情边界、动作重心与多角色区分；列出通过项、偏差项、返工节点和不可变更项。', nodes.length * 340, 0))
+  }
+  if (category === '商业电商') {
+    append(text('conversion-structure', '转化信息结构', '按“3秒识别商品—核心利益点—可视证据—规格/套装—场景代入—疑虑消除—行动入口”组织素材，并标明每个渠道的首屏优先级。', nodes.length * 340, 0))
+    append(text('channel-delivery', '渠道交付与合规检查', '核对商品结构、套装数量、尺寸单位、卖点证据、渠道安全区、主图规则、价格留白、字幕区和禁止绝对化承诺；输出淘宝、抖音、拼多多、Amazon的适配清单。', nodes.length * 340, 0))
+  }
+  if (category === '品牌与 KV' || category === '视觉场景') {
+    append(text('channel-system', '渠道视觉系统', '把核心画面拆为官网首屏、社媒方图、信息流竖版、线下大屏和活动页首屏；逐项规定裁切锚点、文字安全区、CTA区、品牌资产最小尺寸与深浅底适配。', nodes.length * 340, 0))
+    append(text('art-direction-qa', '艺术指导与终稿质检', '核对策略主张、资产一致性、构图层级、品牌色、材质、光线、可读性、渠道尺寸、合规脚注和无错误文字要求；输出可投放交付包。', nodes.length * 340, 0))
+  }
+  const needsVideo = category === '影视 / TVC 广告' || VIDEO_TEMPLATE_IDS.has(template.id)
+  if (needsVideo) {
+    append(text('motion-spec', '逐镜运动与声音设计', '为每个动态镜头写明首帧、尾帧、时长、景别、焦段、机位、运镜、主体动作、速度曲线、转场匹配点、环境声、音效点和字幕安全区。', nodes.length * 340, 0))
+    const motionSources = template.nodes.filter((node) => node.data.kind === 'image' && MOTION_NODE_PATTERN.test(node.data.title) && !STATIC_MASTER_PATTERN.test(node.data.title))
+    const sources = motionSources.length ? motionSources : template.nodes.filter((node) => node.data.kind === 'image').slice(-1)
+    const videoIds: string[] = []
+    sources.forEach((source, index) => {
+      const videoId = `video-shot-${index + 1}`
+      videoIds.push(videoId)
+      append(video(videoId, `视频占位 · ${source.data.title}`, buildVideoPrompt(template, source, index), nodes.length * 340, index % 2 ? 320 : 0), source.id)
+    })
+    append(video('video-edit-master', '视频占位 · 剪辑合成与多版输出', `【任务】将“${template.title}”的全部视频镜头按原始镜头编号顺序剪辑为完整成片。
+
+【剪辑连续性】
+- 逐镜检查人物/IP/产品/场景身份是否一致；发现换脸、换装、结构漂移、光线跳变或背景闪烁时标记返工，不用转场掩盖错误。
+- 动作方向、人物视线、道具状态、产品朝向、环境时间和主光方向必须前后衔接。
+- 优先使用动作匹配、视线匹配、构图匹配和声音桥；禁止滥用故障、闪白、旋转和无意义缩放转场。
+
+【节奏与声音】
+- 根据项目类型建立清晰的开场钩子、信息展开、情绪/功能高潮和品牌收束；保留呼吸点，不把所有镜头等长拼接。
+- 统一对白、环境声、动作音效和音乐响度；重要动作设置准确音效点，音乐不得覆盖对白和产品声音。
+
+【交付版本】
+- 主版：16:9、24fps，保持原始叙事与完整品牌尾帧。
+- 信息流版：9:16，重新构图而非直接裁掉主体；保留字幕、CTA和平台UI安全区。
+- 静音字幕版：无声音也能理解核心信息，字幕不遮挡脸、产品、操作手势和合规说明。
+- 输出前检查Logo出现时长、CTA、免责声明、字幕错字、黑场、爆音、重复帧和最后一帧稳定性。
+
+${VIDEO_WORKFLOW_BRIEF}`, nodes.length * 340, 0, '30s'))
+    videoIds.forEach((videoId) => {
+      if (!edges.some((item) => item.source === videoId && item.target === 'video-edit-master')) edges.push(edge(videoId, 'video-edit-master'))
+    })
+  }
+  return { ...template, category, nodes, edges }
+}
+
+const FINTECH_WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
+  productionTemplate('fintech-growth-operations', '金融科技 · 全周期视觉运营增长线', '精选工业化', '覆盖拉新、激活、留存、教育、活动与召回的高频金融科技视觉运营生产线。', ['金融科技', '视觉运营', '增长'], '虚构金融科技产品“NorthBridge”。以可信、清晰、克制为原则，围绕新用户开户、首个自选、市场事件、功能教育、会员权益、风险提醒和沉默召回建立周/月度运营体系；所有数据为演示数据，不承诺收益。', [['calendar', '月度运营日历与分层人群', '规划新客、活跃投资者、长期持有者和沉默用户四类人群；列出市场日历、功能发布、教育专题、权益活动、风险节点、渠道、频次与核心指标。'], ['designSystem', '运营视觉组件母版', '建立行情卡、权益卡、任务卡、风险提示、直播预告、课程封面、榜单、弹窗与推送缩略图组件；统一深绿、石墨、暖白与数据可视化规则。'], ['acquisition', '拉新开户 Campaign', '输出信息流9:16、落地页首屏16:9、应用商店截图和邀请海报；主张工具价值与透明体验，保留资格、地区、条款和风险披露区。'], ['activation', '新手激活任务视觉', '设计开户完成、添加首个自选、阅读公司资料、设置价格提醒、完成风险测评五步任务卡与进度反馈；避免游戏化诱导交易。'], ['market', '市场事件运营套图', '围绕财报季、利率决议和交易时段变化，输出日历卡、直播预告、盘前提示、盘后复盘与知识解释图；数据源、时间与时区位置明确。'], ['retention', '留存与召回内容矩阵', '输出周报、组合健康度、功能发现、风险教育和沉默召回五类模板；采用行为价值与知识价值，不用收益刺激和焦虑文案。'], ['measurement', '投放版本与复盘看板', '为每个素材记录人群、渠道、钩子、画幅、版本、曝光、点击、激活和留存指标；建立可替换演示数据的复盘看板。']], { accent: '#48bd91' }),
+  productionTemplate('fintech-payment-operations', '支付钱包 · 日常运营视觉系统', '品牌与 KV', '面向支付、数字钱包和生活金融的活动、权益与服务运营。', ['金融科技', '支付', '视觉运营'], '虚构支付钱包“LumaPay”。围绕扫码支付、账单管理、跨境支付、会员权益、安全提醒和节日活动，建立可信且生活化的视觉运营体系；不使用现金堆叠和夸张返利。', [['journey', '支付用户旅程与场景板', '定义通勤、餐饮、商超、线上订阅、旅行和家庭账单六类真实使用场景，固定用户、手机、商户终端和界面状态。'], ['benefit', '权益活动主视觉体系', '输出首页Banner、活动页首屏、权益卡、优惠券、Push缩略图和线下立牌；清楚区分门槛、期限、适用商户和规则区。'], ['trust', '安全与反诈教育视觉', '建立登录保护、异常支付确认、设备管理、反诈提示和客服入口五类信息图；使用清晰严重性层级，不制造恐慌。'], ['seasonal', '节日与跨境运营套图', '输出春节、开学季、旅行季和跨境消费四套可替换主题，保持钱包界面与品牌识别一致，预留汇率、地区与条款说明。']], { accent: '#4bb7d8' }),
+  productionTemplate('web3-community-operations', 'Web3 · 社区与产品视觉运营', '品牌与 KV', '覆盖钱包新手教育、协议更新、开发者活动、社区治理与安全提醒。', ['Web3', '视觉运营', '社区'], '虚构Web3产品“OrbitKey”。面向新用户、活跃钱包用户、开发者与社区贡献者，建立产品教育、版本发布、生态合作、黑客松、治理提案和安全预警视觉；不用币价、收益率和空投暴富叙事。', [['onboarding', '钱包新手教育卡组', '输出创建钱包、备份恢复、连接应用、签名确认、权限撤销和资产安全六步卡组；敏感信息使用占位符，风险动作明确高亮。'], ['release', '产品更新与生态合作套图', '为版本发布、协议集成和合作伙伴公告输出官网横幅、社媒方图、线程配图和开发者文档封面，品牌与合作方Logo安全区明确。'], ['community', '社区活动与治理视觉', '输出AMA、Space、黑客松、治理提案和投票提醒模板；时间、时区、主持人、议题、规则和链接位置清晰。'], ['security', '链上安全预警模板', '建立钓鱼提醒、合约授权、假冒账号、异常签名和事件进展五类模板；严重性、影响范围、官方链接与更新时间层级清楚。']], { accent: '#6f9ff4' }),
+  productionTemplate('fintech-web3-ecosystem', 'Web3 品牌 · 数字身份与链上生态 KV', '品牌与 KV', '面向钱包、协议与开发者生态。强调可信、透明、可验证，不使用币价上涨、暴富叙事或收益承诺。', ['金融科技', 'Web3', '数字身份'], '虚构品牌“OrbitKey”。建立数字身份、钱包界面、节点网络和开发者控制台视觉资产；采用石墨黑、雾银、可访问的电蓝，所有资产使用演示数据与可替换品牌标识。', [['identity', '数字身份资产母版', '建立匿名化数字身份卡、钱包连接状态、权限层级和抽象头像，信息层级清晰，无真实地址与资产金额。'], ['network', '链上生态主视觉', '以可信的节点网络、跨链路径和开发者工作台形成空间化KV，保留主张、免责声明和CTA安全区。'], ['kit', '多渠道生态交付', '输出16:9官网首屏、3:4活动海报和1:1社媒图；同一品牌色、节点语言、数据层级一致。']], { accent: '#63a8e9' }),
+  productionTemplate('fintech-brand-production', '金融科技 · 合规品牌资产生产线', '精选工业化', '从策略、信息架构、界面母版到多渠道物料的工业化金融科技生产线。', ['金融科技', '工业化', 'Campaign'], '虚构金融科技品牌“NorthBridge”。围绕全球市场、透明工具与理性决策，建立品牌规则、投资者场景、UI资产、风险教育和渠道终稿；所有指标均为演示数据。', [['strategy', '策略与合规信息架构', '输出受众、价值主张、信息优先级、禁用承诺、风险披露位置和渠道尺寸规范。'], ['ui', '金融产品界面母版', '建立行情、自选、风险提示、账户概览与教育内容五套统一界面；不展示夸张涨幅或保证收益。'], ['campaign', '品牌 Campaign 成片', '输出官网横幅、应用商店展示和风险教育竖版物料，人物、UI、石墨绿品牌资产持续一致。']], { accent: '#45b88c' }),
+  productionTemplate('fintech-tvc-storyboard', '金融科技 TVC · 理性决策产品片', '影视 / TVC 广告', '将可信产品体验转为可拍摄、可生成的视频镜头链路。', ['金融科技', 'TVC', '产品演示'], '30秒金融科技产品片：同一用户在通勤、办公与夜间复盘中使用虚构产品。六镜覆盖市场查看、研究、风险确认、预算、跨端同步和品牌收束；UI、人物、手机、桌面与演示数据严格连续。', [['frames', '六镜首尾帧与连续性板', '为每镜标注景别、焦段、机位、屏幕状态、手部动作、转场匹配点与风险披露安全区。'], ['end', '品牌收束关键帧', '人物和跨端界面处于克制的夜间工作台，石墨绿与柔和城市光，保留品牌主张与合规脚注区域。']], { accent: '#63c59e' }),
+]
+
+const BUILT_IN_TEMPLATES = [...WORKFLOW_TEMPLATES, ...EXPANDED_TEMPLATES, ...FINTECH_WORKFLOW_TEMPLATES]
+  .filter((template) => !REMOVED_TEMPLATE_IDS.has(template.id))
+  .map((template, index) => enhanceTemplate({
+    ...template,
+    category: CATEGORY_BY_ID[template.id] ?? template.category,
+    accent: template.accent || ['#8f9cff', '#67d1b4', '#ef9b72'][index % 3],
+  })).sort((a, b) => {
+  const marketPriority = [
+    'fintech-growth-operations', 'tvc-production', 'kpop-mv-production', 'short-drama-production', 'fintech-brand-production', 'xinpianchang-sci-fi-western-world', 'myriad-demons-chronicle',
+    'live-action-character-bible', 'trendy-ip-matrix', 'virtual-human-host', 'character-expression-action', 'character-ip-matrix', 'brand-mascot', 'studio-portrait-set',
+    'douyin-commerce', 'taobao-detail', 'amazon-listing', 'pdd-detail', 'restaurant-launch', 'ecommerce-set',
+    'product-launch-film', 'fintech-product-demo', 'app-tvc', 'phone-tvc', 'sports-campaign', 'brand-film', 'product-storyboard', 'action-storyboard',
+    'fintech-broker-campaign', 'fintech-payment-operations', 'fintech-web3-ecosystem', 'web3-community-operations', 'brand-kv-system', 'mobile-kv', 'campaign-poster-system',
+    'live-action-composite', 'environment-concept', 'live-action-vfx-video', 'style-transfer', 'three-directions', 'iterate-polish',
+  ]
   const categoryRank = (template: WorkflowTemplate) => template.category === '精选工业化' ? 0 : CATEGORIES.indexOf(template.category as typeof CATEGORIES[number]) + 1
   const categoryDifference = categoryRank(a) - categoryRank(b)
   if (categoryDifference) return categoryDifference
-  const aIndex = featured.indexOf(a.id)
-  const bIndex = featured.indexOf(b.id)
-  return (aIndex < 0 ? featured.length : aIndex) - (bIndex < 0 ? featured.length : bIndex)
+  const aIndex = marketPriority.indexOf(a.id)
+  const bIndex = marketPriority.indexOf(b.id)
+  return (aIndex < 0 ? marketPriority.length : aIndex) - (bIndex < 0 ? marketPriority.length : bIndex)
 })
 
 const EMPTY_DRAFT = (): EditorDraft => ({
@@ -620,6 +751,7 @@ const draftToTemplate = (draft: EditorDraft): WorkflowTemplate => {
   const nodes = draft.nodes.map((node, index) => {
     const x = index * 340
     if (node.kind === 'upload') return { ...upload(node.id, node.title, x, 0), data: { kind: 'upload' as const, title: node.title, body: node.prompt || '请上传参考图片' } }
+    if (node.kind === 'video') return video(node.id, node.title, node.prompt || VIDEO_WORKFLOW_BRIEF, x, 0)
     return node.kind === 'text' ? text(node.id, node.title, node.prompt, x, 0) : image(node.id, node.title, node.prompt, x, 0)
   })
   return {
@@ -635,6 +767,24 @@ type Props = {
   onApply: (template: WorkflowTemplate) => void
 }
 
+function WorkflowCategorySelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false) }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [])
+  return <div className="workflow-category-select" ref={rootRef}>
+    <button type="button" className={open ? 'is-open' : ''} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}>
+      <span>{value}</span><ChevronDown size={14} aria-hidden="true" />
+    </button>
+    {open && <div role="listbox" aria-label="模板分类">
+      {CATEGORIES.map((item) => <button type="button" role="option" aria-selected={item === value} className={item === value ? 'is-selected' : ''} key={item} onClick={() => { onChange(item); setOpen(false) }}>{item}</button>)}
+    </div>}
+  </div>
+}
+
 export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('全部')
@@ -647,7 +797,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
     const overrides = new Map(storage.overrides.map((item) => [item.id.replace(/^override:/, ''), item]))
     const builtIns = BUILT_IN_TEMPLATES
       .filter((item) => !storage.hidden.includes(item.id))
-      .map((item) => overrides.get(item.id) ?? item)
+      .map((item) => enhanceTemplate(overrides.get(item.id) ?? item))
     return [...builtIns, ...storage.custom]
   }, [storage])
   const selected = templates.find((item) => item.id === selectedId) ?? templates[0] ?? null
@@ -745,7 +895,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
             <div className="workflow-detail-heading"><span style={{ background: selected.accent }}><Sparkles size={18} /></span><div><small>{selected.category}</small><h3>{selected.title}</h3></div></div>
             <p>{selected.description}</p>
             <div className="workflow-detail-flow">
-              {selected.nodes.map((node, index) => <div key={node.id}><span className={`is-${node.data.kind}`}>{index + 1}</span><div><strong>{node.data.title}</strong><small>{node.data.kind === 'upload' ? '上传参考图' : node.data.kind === 'text' ? '文本节点' : '图像生成节点'}</small></div>{index < selected.nodes.length - 1 && <ArrowRight size={13} />}</div>)}
+              {selected.nodes.map((node, index) => <div key={node.id}><span className={`is-${node.data.kind}`}>{index + 1}</span><div><strong>{node.data.title}</strong><small>{node.data.kind === 'upload' ? '上传参考图' : node.data.kind === 'text' ? '文本节点' : node.data.kind === 'video' ? '视频生成占位节点' : '图像生成节点'}</small></div>{index < selected.nodes.length - 1 && <ArrowRight size={13} />}</div>)}
             </div>
             <div className="workflow-detail-tags">{selected.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
             <div className="workflow-detail-actions">
@@ -762,7 +912,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
           <header><div><small>TEMPLATE EDITOR</small><h3>{draft.sourceId || draft.id ? '编辑工作流模板' : '新建工作流模板'}</h3></div><button type="button" onClick={() => setDraft(null)}><X size={18} /></button></header>
           <div className="workflow-editor-fields">
             <label><span>标题</span><input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：新品发布 KV" /></label>
-            <label><span>分类</span><select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })}>{CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label><span>分类</span><WorkflowCategorySelect value={draft.category} onChange={(category) => setDraft({ ...draft, category })} /></label>
             <label className="is-wide"><span>描述</span><textarea required value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="说明此工作流解决什么生产任务" /></label>
             <label><span>标签（逗号分隔）</span><input value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} placeholder="KV, 产品, 商业" /></label>
             <label><span>强调色</span><input type="color" value={draft.accent} onChange={(event) => setDraft({ ...draft, accent: event.target.value })} /></label>
@@ -772,7 +922,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
             {draft.nodes.map((node, index) => <article key={node.id}>
               <span>{index + 1}</span>
               <div className="workflow-editor-node-fields">
-                <select value={node.kind} onChange={(event) => setDraft({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, kind: event.target.value as EditorNode['kind'] } : item) })}><option value="text">文本节点</option><option value="image">图像节点</option><option value="upload">上传节点</option></select>
+                <select value={node.kind} onChange={(event) => setDraft({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, kind: event.target.value as EditorNode['kind'] } : item) })}><option value="text">文本节点</option><option value="image">图像节点</option><option value="video">视频占位节点</option><option value="upload">上传节点</option></select>
                 <input required value={node.title} onChange={(event) => setDraft({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, title: event.target.value } : item) })} placeholder="节点标题" />
                 <textarea value={node.prompt} onChange={(event) => setDraft({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, prompt: event.target.value } : item) })} placeholder={node.kind === 'upload' ? '上传说明（可选）' : '输入具体、可执行的生产提示词'} />
               </div>

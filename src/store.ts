@@ -11,6 +11,7 @@ import { create } from 'zustand'
 
 const API_SETTINGS_KEY = 'disy-api-settings'
 const API_SECRETS_KEY = 'disy-api-secrets'
+const API_BALANCE_TOKENS_KEY = 'disy-api-balance-tokens'
 const LEGACY_API_SECRET_KEY = 'disy-api-secret'
 
 export type ActivePanel = 'canvas' | 'assets' | 'settings'
@@ -28,6 +29,7 @@ export type ApiConnection = {
   name: string
   baseUrl: string
   apiKey: string
+  balanceToken?: string
   models: ApiModelConfig[]
   modelsFetchedAt?: string
   /** Master switch for whether this connection's models participate in selection. Defaults to true. */
@@ -72,6 +74,12 @@ function readSecretMap() {
 
 function readApiSettings(): ApiSettings {
   const secrets = readSecretMap()
+  let balanceTokens: Record<string, string> = {}
+  try {
+    balanceTokens = JSON.parse(sessionStorage.getItem(API_BALANCE_TOKENS_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    balanceTokens = {}
+  }
   try {
     const value = JSON.parse(localStorage.getItem(API_SETTINGS_KEY) ?? '{}') as Record<string, unknown>
     if (Array.isArray(value.connections)) {
@@ -83,6 +91,7 @@ function readApiSettings(): ApiSettings {
           name: typeof connection.name === 'string' ? connection.name : 'API 连接',
           baseUrl: typeof connection.baseUrl === 'string' ? connection.baseUrl : '',
           apiKey: secrets[id] ?? '',
+          balanceToken: typeof balanceTokens[id] === 'string' ? balanceTokens[id] : '',
           models: Array.isArray(connection.models)
             ? connection.models.filter((model): model is ApiModelConfig => Boolean(model) && ['text', 'image', 'video'].includes((model as ApiModelConfig).capability))
             : [],
@@ -126,11 +135,13 @@ function readApiSettings(): ApiSettings {
 function persistApiSettings(settings: ApiSettings) {
   const publicSettings = {
     ...settings,
-    connections: settings.connections.map(({ apiKey: _apiKey, ...connection }) => connection),
+    connections: settings.connections.map(({ apiKey: _apiKey, balanceToken: _balanceToken, ...connection }) => connection),
   }
   const secretMap = Object.fromEntries(settings.connections.filter((connection) => connection.apiKey).map((connection) => [connection.id, connection.apiKey]))
+  const balanceTokenMap = Object.fromEntries(settings.connections.filter((connection) => connection.balanceToken).map((connection) => [connection.id, connection.balanceToken]))
   const previousSecrets = sessionStorage.getItem(API_SECRETS_KEY)
   sessionStorage.setItem(API_SECRETS_KEY, JSON.stringify(secretMap))
+  sessionStorage.setItem(API_BALANCE_TOKENS_KEY, JSON.stringify(balanceTokenMap))
   try {
     localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(publicSettings))
     sessionStorage.removeItem(LEGACY_API_SECRET_KEY)
@@ -167,6 +178,7 @@ export const useDisyStore = create<DisyStore>((set) => ({
   clearApiSettings: () => {
     localStorage.removeItem(API_SETTINGS_KEY)
     sessionStorage.removeItem(API_SECRETS_KEY)
+    sessionStorage.removeItem(API_BALANCE_TOKENS_KEY)
     sessionStorage.removeItem(LEGACY_API_SECRET_KEY)
     set({ apiSettings: { connections: [] }, apiConfigured: false })
   },

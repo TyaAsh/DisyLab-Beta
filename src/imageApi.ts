@@ -67,6 +67,7 @@ const REFERENCE_IMAGE_HARD_LIMIT_BYTES = 10_000_000
 // reference still exceeds 10MB (genuinely huge sources, e.g. the ~14MB case) or
 // breaches the 4K-class dimension cap. Anything at/under 4K stays at full res.
 const REFERENCE_IMAGE_MAX_DIMENSION = 4096
+const REFERENCE_IMAGE_REQUEST_MAX_DIMENSION = 1024
 const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
 const GRSAI_IMAGE_POLL_INTERVAL_MS = 2_500
 const GRSAI_IMAGE_POLL_TIMEOUT_MS = 15 * 60_000
@@ -121,13 +122,9 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
     throw new GenerationRequestError('platform', '参考图片格式无法识别', `收到的文件类型为 ${sourceBlob.type || 'unknown'}`)
   }
 
-  const isSupportedEditFormat = /^image\/(?:png|jpe?g|webp)$/i.test(sourceBlob.type)
+  const isPreferredEditFormat = /^image\/(?:png|jpe?g)$/i.test(sourceBlob.type)
   // Remote and blob URLs are converted to stable request data. Unsupported
   // formats are always re-encoded while preserving their exact pixel dimensions.
-  if (isSupportedEditFormat && sourceBlob.size <= REFERENCE_IMAGE_TARGET_BYTES) {
-    return /^data:image\//i.test(trimmedSource) ? trimmedSource : blobToDataUrl(sourceBlob)
-  }
-
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(sourceBlob)
@@ -141,16 +138,26 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
 
   try {
     if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
+    const maxSourceDimension = Math.max(bitmap.width, bitmap.height)
+    if (isPreferredEditFormat && maxSourceDimension <= REFERENCE_IMAGE_REQUEST_MAX_DIMENSION) {
+      return /^data:image\//i.test(trimmedSource) ? trimmedSource : blobToDataUrl(sourceBlob)
+    }
     const canvas = document.createElement('canvas')
-    // Default: preserve the exact pixel dimensions; only encoded file size is
-    // reduced via WebP quality. Resolution is dropped only as a last-resort
-    // fallback below when the hard byte/dimension ceiling is still exceeded.
-    canvas.width = bitmap.width
-    canvas.height = bitmap.height
+    // Requests cap their longest edge at 1K. This is large enough for image
+    // guidance while preventing an oversized local upload from bloating payloads.
+    const scale = Math.min(1, REFERENCE_IMAGE_REQUEST_MAX_DIMENSION / maxSourceDimension)
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
     const context = canvas.getContext('2d')
     if (!context) throw new Error('浏览器无法创建图片压缩画布')
-    context.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height)
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
 
+    // WebP and uncommon formats become PNG only for request compatibility.
+    // PNG remains lossless; JPEG retains JPEG encoding at high quality.
+    const outputType = /^image\/jpe?g$/i.test(sourceBlob.type) ? 'image/jpeg' : 'image/png'
+    return blobToDataUrl(await canvasToBlob(canvas, outputType, .92))
+
+    /* Legacy lossy fallback retained below for source-history context only.
     let compressed: Blob | null = isSupportedEditFormat ? sourceBlob : null
     for (const quality of [0.88, 0.78, 0.68, 0.58]) {
       if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
@@ -190,7 +197,7 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
       }
     }
     if (!compressed) throw new Error('参考图片转码失败')
-    return blobToDataUrl(compressed)
+    return blobToDataUrl(compressed) */
   } finally {
     bitmap.close()
   }
@@ -307,6 +314,7 @@ export function resolveProviderLabel(baseUrl: string) {
   const normalized = normalizedApiBaseUrl(baseUrl).toLowerCase()
   if (/grsaiapi\.com|grsai\.dakka\.com\.cn/.test(normalized)) return 'GRS AI'
   if (/api\.apiyi\.com|apiyi\.com/.test(normalized)) return 'APIYI'
+  if (/api\.apimart\.ai|apimart\.ai/.test(normalized)) return 'APIMart'
   if (/gptgod\.online|gptgod\.com/.test(normalized)) return 'GPTGod'
   if (/ark\.cn-beijing\.volces\.com/.test(normalized)) return '即梦'
   if (/api\.openai\.com/.test(normalized)) return 'OpenAI'
@@ -563,6 +571,102 @@ export async function fetchRemoteModels(settings: Pick<ApiRequestSettings, 'base
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 
+export type ProviderCredits = {
+  provider: string
+  amount: number
+  unit: string
+  updatedAt: string
+}
+
+export type ProviderModelPrice = {
+  modelId: string
+  credits: number
+  billing: 'fixed' | 'token'
+  priceExample?: string
+}
+
+export async function fetchProviderModelPrices(baseUrl: string): Promise<ProviderModelPrice[]> {
+  if (!isGrsaiBaseUrl(baseUrl)) return []
+  const origin = new URL(normalizedApiBaseUrl(baseUrl)).origin
+  const response = await fetch(`${origin}/client/serverGrsai/getModelList`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
+  const payload = await response.json() as { code?: unknown; data?: { list?: unknown[] }; msg?: unknown }
+  if (payload.code !== 0) throw new Error(typeof payload.msg === 'string' ? payload.msg : '未能读取 GRS AI 模型价格')
+  return (payload.data?.list ?? []).flatMap((row): ProviderModelPrice[] => {
+    if (!row || typeof row !== 'object') return []
+    const item = row as Record<string, unknown>
+    const modelId = String(item.name ?? item.model ?? '').trim()
+    const credits = Number(item.credits)
+    if (!modelId || !Number.isFinite(credits) || credits < 0) return []
+    return [{
+      modelId,
+      credits,
+      billing: Number(item.cost_type) === 0 ? 'fixed' : 'token',
+      priceExample: typeof item.priceExample === 'string' ? item.priceExample : undefined,
+    }]
+  })
+}
+
+/**
+ * Provider account adapters live here instead of the UI so adding a new vendor
+ * never requires changing the connection screen. OpenAI-compatible APIs do not
+ * have a standard balance endpoint, therefore only documented providers appear.
+ */
+export async function fetchProviderCredits(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'> & { balanceToken?: string }): Promise<ProviderCredits | null> {
+  const normalizedBase = normalizedApiBaseUrl(settings.baseUrl)
+  if (/api\.apimart\.ai|apimart\.ai/i.test(normalizedBase)) {
+    const response = await fetch('https://api.apimart.ai/v1/balance', {
+      headers: { Authorization: `Bearer ${settings.apiKey.trim()}`, Accept: 'application/json' },
+    })
+    if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
+    const payload = await response.json() as { success?: unknown; message?: unknown; remain_balance?: unknown; unlimited_quota?: unknown }
+    if (payload.success !== true) throw new Error(typeof payload.message === 'string' ? payload.message : '未能读取 APIMart 余额')
+    if (payload.unlimited_quota === true) return { provider: 'APIMart', amount: Number.POSITIVE_INFINITY, unit: '无限额度', updatedAt: new Date().toISOString() }
+    const amount = Number(payload.remain_balance)
+    if (!Number.isFinite(amount) || amount < 0) throw new Error('APIMart 返回了无效的余额')
+    return { provider: 'APIMart', amount, unit: '余额', updatedAt: new Date().toISOString() }
+  }
+  if (/api\.apiyi\.com|apiyi\.com/i.test(normalizedBase)) {
+    const token = settings.balanceToken?.trim()
+    if (!token) throw new Error('请填写 APIYI 个人中心生成的余额查询 AccessToken')
+    const response = await fetch('https://api.apiyi.com/api/user/self', {
+      headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
+    const payload = await response.json() as { success?: unknown; message?: unknown; data?: { quota?: unknown } }
+    if (payload.success !== true) throw new Error(typeof payload.message === 'string' ? payload.message : '未能读取 APIYI 余额')
+    const quota = Number(payload.data?.quota)
+    if (!Number.isFinite(quota) || quota < 0) throw new Error('APIYI 返回了无效的余额')
+    return { provider: 'APIYI', amount: quota / 500_000, unit: 'USD', updatedAt: new Date().toISOString() }
+  }
+  if (!isGrsaiBaseUrl(settings.baseUrl) || !settings.apiKey.trim()) return null
+  const apiKey = settings.apiKey.trim()
+  const nodeOrigin = new URL(normalizedApiBaseUrl(settings.baseUrl)).origin
+  const requestCredits = async () => {
+    // Official GRS documentation provides this API-key-authenticated endpoint.
+    // /client/openapi/getCredits is intentionally not used here: it requires the
+    // separate account token from the GRS user-info page, not a generation key.
+    const response = await fetch(`${nodeOrigin}/client/common/getCredits?apikey=${encodeURIComponent(apiKey)}`, {
+      method: 'GET',
+    })
+    if (!response.ok) throw new Error(await readError(response) || apiErrorSummary(response.status))
+    const payload = await response.json() as { code?: unknown; msg?: unknown; data?: unknown }
+    if (payload.code !== 0) throw new Error(typeof payload.msg === 'string' ? payload.msg : '未能读取 GRS AI 积分')
+    const credits = payload.data && typeof payload.data === 'object'
+      ? (payload.data as { credits?: unknown }).credits
+      : undefined
+    const amount = typeof credits === 'number' ? credits : typeof credits === 'string' ? Number(credits) : Number.NaN
+    if (!Number.isFinite(amount) || amount < 0) throw new Error('GRS AI 返回了无效的积分余额')
+    return amount
+  }
+  const amount = await requestCredits()
+  return { provider: 'GRS AI', amount, unit: '积分', updatedAt: new Date().toISOString() }
+}
+
 /** Validate credentials without performing a billable generation request. */
 export async function validateApiCredentials(settings: Pick<ApiRequestSettings, 'baseUrl' | 'apiKey'>): Promise<void> {
   const normalizedBase = normalizedApiBaseUrl(settings.baseUrl)
@@ -804,16 +908,21 @@ export async function generateRemoteImages(
   const referenceImages = options.referenceImages?.filter(Boolean) ?? []
   const useGrsaiUnifiedImage = isGrsaiBaseUrl(settings.baseUrl)
   const useStandardImageEdit = !useGrsaiUnifiedImage && referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
-  const grsaiRequestBody = {
+  const isGrsaiGptImage = /(?:gpt-image|chatgpt-image)/i.test(settings.model)
+  const grsaiRequestBody: Record<string, unknown> = {
     model: settings.model,
     prompt: options.prompt,
     images: referenceImages,
-    aspectRatio: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
-    imageSize: options.resolution ?? '1K',
+    // GRS uses two schemas on this unified endpoint: GPT Image expects pixel
+    // dimensions, while Nano Banana expects a ratio plus imageSize.
+    aspectRatio: isGrsaiGptImage
+      ? compatibleSize
+      : options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : '1:1',
     // Async mode returns a task ID immediately. Polling that ID avoids losing
     // successful images when a long-lived synchronous connection is interrupted.
     replyType: 'async',
   }
+  if (!isGrsaiGptImage) grsaiRequestBody.imageSize = options.resolution ?? '1K'
   const requestForLog: Record<string, unknown> = useGrsaiUnifiedImage
     ? grsaiRequestBody
     : useStandardImageEdit

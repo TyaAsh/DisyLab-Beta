@@ -81,6 +81,8 @@ import {
   Power,
   Unplug,
   PlugZap,
+  RefreshCw,
+  WalletCards,
 } from 'lucide-react'
 import {
   Background,
@@ -112,13 +114,12 @@ import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConf
 import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
-import { extractImageUrlsFromAdminResult, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory } from './imageApi'
+import { extractImageUrlsFromAdminResult, fetchProviderCredits, fetchProviderModelPrices, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory, type ProviderCredits, type ProviderModelPrice } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { PromptLibraryPanel, type PromptLibraryCase } from './PromptLibraryPanel'
 import type { WorkflowTemplate } from './WorkflowTemplatePanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
 
-const WorkflowTemplatePanel = lazy(() => import('./WorkflowTemplatePanel').then((module) => ({ default: module.WorkflowTemplatePanel })))
 
 gsap.registerPlugin(useGSAP)
 
@@ -142,7 +143,7 @@ function pickValidSelections(connections: ApiConnection[], previous: { selectedT
   return { selectedTextModel, selectedImageModel }
 }
 
-type NodeKind = 'text' | 'image' | 'upload' | 'group'
+type NodeKind = 'text' | 'image' | 'upload' | 'video' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
 type ImageAspectRatio = 'auto' | '1:1' | '2:1' | '4:3' | '3:4' | '5:4' | '4:5' | '3:2' | '2:3' | '16:9' | '9:16' | '21:9' | '9:21'
 type ImageResolution = '1K' | '2K' | '4K'
@@ -256,6 +257,44 @@ const IMAGE_ASPECT_OPTIONS: Array<{ value: ImageAspectRatio; label: string; widt
   { value: '21:9', label: '21:9', width: 21, height: 9 },
   { value: '9:21', label: '9:21', width: 9, height: 21 },
 ]
+
+function getClosestImageAspectRatio(width: number, height: number): ImageAspectRatio {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return '1:1'
+  const sourceRatio = width / height
+  const candidates = IMAGE_ASPECT_OPTIONS.filter((option) => option.value !== 'auto')
+  return candidates.reduce((closest, option) => {
+    const distance = Math.abs(Math.log(sourceRatio / (option.width / option.height)))
+    const closestDistance = Math.abs(Math.log(sourceRatio / (closest.width / closest.height)))
+    return distance < closestDistance ? option : closest
+  }, candidates[0]).value
+}
+
+function readImageAspectRatio(url: string): Promise<ImageAspectRatio> {
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(getClosestImageAspectRatio(image.naturalWidth, image.naturalHeight))
+    image.onerror = () => resolve('1:1')
+    image.src = url
+  })
+}
+
+function inferImageFileExtension(url: string, fallbackName = ''): 'png' | 'jpg' | 'webp' {
+  const dataMime = /^data:image\/(png|jpe?g|webp)[;,]/i.exec(url)?.[1]?.toLowerCase()
+  if (dataMime) return dataMime === 'jpeg' ? 'jpg' : dataMime as 'png' | 'jpg' | 'webp'
+  try {
+    const extension = new URL(url, window.location.href).pathname.match(/\.(png|jpe?g|webp)$/i)?.[1]?.toLowerCase()
+    if (extension) return extension === 'jpeg' ? 'jpg' : extension as 'png' | 'jpg' | 'webp'
+  } catch { /* Fall back to the supplied file name. */ }
+  const fallbackExtension = fallbackName.match(/\.(png|jpe?g|webp)$/i)?.[1]?.toLowerCase()
+  if (fallbackExtension) return fallbackExtension === 'jpeg' ? 'jpg' : fallbackExtension as 'png' | 'jpg' | 'webp'
+  return 'png'
+}
+
+function imageFileName(baseName: string, imageUrl: string) {
+  const extension = inferImageFileExtension(imageUrl, baseName)
+  const stem = baseName.replace(/\.(?:png|jpe?g|webp)$/i, '')
+  return `${stem}.${extension}`
+}
 
 const IMAGE_DETAIL_LABELS: Record<ImageDetail, string> = { low: '低画质', medium: '标准画质', high: '高画质' }
 
@@ -429,6 +468,7 @@ const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
 const API_PROVIDER_PRESETS = [
   { id: 'grsai', name: 'GRS AI', baseUrl: 'https://grsai.dakka.com.cn/v1', detail: '国内直连 · 图像与文本' },
   { id: 'apiyi', name: 'APIYI', baseUrl: 'https://api.apiyi.com/v1', detail: 'OpenAI 兼容聚合平台' },
+  { id: 'apimart', name: 'APIMart', baseUrl: 'https://api.apimart.ai/v1', detail: 'OpenAI 兼容 · 支持余额查询' },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: '官方 GPT 与图像模型' },
   { id: 'jimeng', name: '即梦', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', detail: '字节跳动 · 即梦 / Seedream' },
 ] as const
@@ -513,6 +553,7 @@ type FilePickerWindow = Window & {
 function getNodeDisplayTitle(data: CanvasNode['data']) {
   if (data.kind === 'text') return data.title || '文本'
   if (data.kind === 'image') return data.title || '图像'
+  if (data.kind === 'video') return data.title || '视频（暂未开放）'
   if (data.kind === 'group') return data.title || '分组'
   return data.title || data.fileName || '图像'
 }
@@ -1318,7 +1359,7 @@ function MarkdownToolbar({
   )
 }
 
-function LuminousEdge({
+const LuminousEdge = memo(function LuminousEdge({
   id,
   sourceX,
   sourceY,
@@ -1375,7 +1416,7 @@ function LuminousEdge({
       />
     </>
   )
-}
+})
 
 const edgeTypes = { luminous: LuminousEdge }
 const CURRENT_PROJECT_ID = 'default-project'
@@ -1441,7 +1482,7 @@ const NodeCard = memo(function NodeCard({
   width?: number
   height?: number
 }) {
-  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : WandSparkles
+  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : data.kind === 'video' ? Film : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
   const updateNodeTitle = useContext(NodeTitleUpdateContext)
   const uploadNodeImage = useContext(NodeImageUploadContext)
@@ -1452,7 +1493,12 @@ const NodeCard = memo(function NodeCard({
   const setGroupCollapsed = useContext(GroupCollapseContext)
   const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
   const isActivelyGenerating = activeGenerationNodeIds.has(id)
-  const hasGenerationFailed = data.kind === 'image' && data.status === '生成失败'
+  // Results take precedence over a stale failure status. A node can retain an old
+  // image while a retry completes, so never cover a usable result with an error.
+  const hasGenerationFailed = data.kind === 'image'
+    && data.status === '生成失败'
+    && !data.imageUrl
+    && !data.imageVariants?.some((variant) => Boolean(variant.url))
   const [inlineEditing, setInlineEditing] = useState(false)
   const [inlineDraft, setInlineDraft] = useState(data.body)
   const inlineTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1724,6 +1770,12 @@ const NodeCard = memo(function NodeCard({
             }}
           />
         </label>
+      ) : data.kind === 'video' ? (
+        <div className="video-placeholder" aria-label="视频生成占位节点">
+          <Film size={24} strokeWidth={1.6} />
+          <strong>视频生成 · 即将开放</strong>
+          <span>{data.body || '已保留首尾帧、时长与运镜说明；开放后可直接生成。'}</span>
+        </div>
       ) : data.kind === 'image' ? (
         <div className={`image-placeholder ${data.imageUrl || data.referenceImageUrl ? 'has-reference' : ''}`}>
           {data.imageUrl || data.referenceImageUrl ? (
@@ -1942,6 +1994,7 @@ function App() {
   const [imageReferenceDropTargetId, setImageReferenceDropTargetId] = useState<string | null>(null)
   const [isNodeDragging, setIsNodeDragging] = useState(false)
   const altDragDuplicateRef = useRef<{ originalId: string; duplicateId: string; originalPosition: { x: number; y: number } } | null>(null)
+  const dragStartPositionsRef = useRef(new Map<string, { x: number; y: number }>())
   const [nodeOverlayRect, setNodeOverlayRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [selectionToolbarRect, setSelectionToolbarRect] = useState<SelectionToolbarRect | null>(null)
@@ -2081,15 +2134,20 @@ function App() {
   }])
   const [projectPromptSuffix, setProjectPromptSuffix] = useState('')
   const [editingConnectionId, setEditingConnectionId] = useState<string>(apiSettings.connections[0]?.id ?? 'new')
-  const [apiDraft, setApiDraft] = useState({ name: '', baseUrl: '', apiKey: '' })
+  const [apiDraft, setApiDraft] = useState({ name: '', baseUrl: '', apiKey: '', balanceToken: '' })
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
   const [draftModels, setDraftModels] = useState<ApiModelConfig[]>([])
   const [apiModelTab, setApiModelTab] = useState<ModelCapability>('text')
   const [apiError, setApiError] = useState('')
   const [apiAlert, setApiAlert] = useState<string | null>(null)
+  const [providerCreditsByConnection, setProviderCreditsByConnection] = useState<Record<string, ProviderCredits>>({})
+  const [providerPricesByConnection, setProviderPricesByConnection] = useState<Record<string, Record<string, ProviderModelPrice>>>({})
+  const [creditsLoading, setCreditsLoading] = useState(false)
+  const [creditsError, setCreditsError] = useState('')
 
   const showApiAlert = useCallback((message: string) => {
     setApiError('')
+    setCreditsError('')
     setModelsError('')
     setApiAlert(message)
   }, [])
@@ -2100,6 +2158,8 @@ function App() {
   const firstApiInputRef = useRef<HTMLInputElement>(null)
   const apiKeyInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
+  const providerCreditsAttemptedRef = useRef(new Set<string>())
+  const providerPricesAttemptedRef = useRef(new Set<string>())
   const canvasNameInputRef = useRef<HTMLInputElement>(null)
   const styleReferenceInputRef = useRef<HTMLInputElement>(null)
   const styleReferenceUploadTargetRef = useRef<{ presetId: string; referenceId?: string } | null>(null)
@@ -2239,10 +2299,10 @@ function App() {
       return
     }
     if (connection) {
-      setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey })
+      setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey, balanceToken: connection.balanceToken ?? '' })
       setDraftModels(connection.models)
     } else {
-      setApiDraft({ name: '', baseUrl: '', apiKey: '' })
+      setApiDraft({ name: '', baseUrl: '', apiKey: '', balanceToken: '' })
       setDraftModels([])
     }
     setApiError('')
@@ -2578,6 +2638,72 @@ function App() {
       if (requestId === modelFetchRequestRef.current) setModelsLoading(false)
     }
   }, [apiDraft.apiKey, apiDraft.baseUrl, apiSettings, draftModels, editingConnectionId, saveApiSettings, showApiAlert])
+
+  const refreshProviderCredits = useCallback(async () => {
+    if (!apiDraft.baseUrl.trim() || !apiDraft.apiKey.trim()) {
+      setCreditsError('请先填写接口地址和 API Key')
+      return
+    }
+    const creditKey = editingConnectionId === 'new' ? apiDraft.baseUrl.trim() : editingConnectionId
+    providerCreditsAttemptedRef.current.add(creditKey)
+    setCreditsLoading(true)
+    setCreditsError('')
+    try {
+      const credits = await fetchProviderCredits({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim(), balanceToken: apiDraft.balanceToken.trim() })
+      if (!credits) {
+        setProviderCreditsByConnection((current) => {
+          const next = { ...current }
+          delete next[creditKey]
+          return next
+        })
+        setCreditsError('该厂商未配置可公开查询的余额接口')
+        return
+      }
+      setProviderCreditsByConnection((current) => ({ ...current, [creditKey]: credits }))
+      try {
+        const prices = await fetchProviderModelPrices(apiDraft.baseUrl.trim())
+        setProviderPricesByConnection((current) => ({
+          ...current,
+          [creditKey]: Object.fromEntries(prices.map((price) => [price.modelId, price])),
+        }))
+      } catch {
+        // Balance remains useful when a provider's public price list is temporarily unavailable.
+      }
+    } catch (error) {
+      setCreditsError(error instanceof Error ? error.message : '余额查询失败')
+    } finally {
+      setCreditsLoading(false)
+    }
+  }, [apiDraft.apiKey, apiDraft.balanceToken, apiDraft.baseUrl, editingConnectionId])
+
+  // GRS publishes a safe account-credit endpoint, so load it with the
+  // connection rather than making the user hunt for a separate balance page.
+  useEffect(() => {
+    const isGrsai = /(?:grsaiapi\.com|grsai\.dakka\.com\.cn)/i.test(apiDraft.baseUrl)
+    const isApiyi = /(?:api\.apiyi\.com|apiyi\.com)/i.test(apiDraft.baseUrl)
+    const isApimart = /(?:api\.apimart\.ai|apimart\.ai)/i.test(apiDraft.baseUrl)
+    const creditKey = editingConnectionId === 'new' ? apiDraft.baseUrl.trim() : editingConnectionId
+    const cached = providerCreditsByConnection[creditKey]
+    const savedConnection = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
+    if (isApiyi && apiDraft.balanceToken.trim() !== (savedConnection?.balanceToken ?? '').trim()) return
+    const hasCredential = isGrsai || isApimart ? Boolean(apiDraft.apiKey.trim()) : isApiyi ? Boolean(apiDraft.balanceToken.trim()) : false
+    if (!apiOpen || !hasCredential || (cached && cached.amount >= 0) || creditsLoading || providerCreditsAttemptedRef.current.has(creditKey)) return
+    void refreshProviderCredits()
+  }, [apiDraft.apiKey, apiDraft.balanceToken, apiDraft.baseUrl, apiOpen, apiSettings.connections, creditsLoading, editingConnectionId, providerCreditsByConnection, refreshProviderCredits])
+
+  useEffect(() => {
+    apiSettings.connections.forEach((connection) => {
+      if (providerPricesByConnection[connection.id] || providerPricesAttemptedRef.current.has(connection.id)) return
+      providerPricesAttemptedRef.current.add(connection.id)
+      void fetchProviderModelPrices(connection.baseUrl).then((prices) => {
+        if (!prices.length) return
+        setProviderPricesByConnection((current) => ({
+          ...current,
+          [connection.id]: Object.fromEntries(prices.map((price) => [price.modelId, price])),
+        }))
+      }).catch(() => undefined)
+    })
+  }, [apiSettings.connections, providerPricesByConnection])
 
   // Auto-fetch the model catalog (debounced ~600ms) when both baseUrl and apiKey are
   // filled and this connection has not fetched a catalog yet. Uses a ref key so it never
@@ -3066,8 +3192,8 @@ function App() {
       data: {
         kind: 'upload',
         title: item.title,
-        body: `提示库案例 · ${item.sourceLabel || '来源见案例详情'}`,
-        fileName: `prompt-case-${item.id}.webp`,
+        body: `灵感库案例 · ${item.sourceLabel || '来源见案例详情'}`,
+        fileName: imageFileName(`inspiration-${item.id}`, item.image),
         imageUrl: item.image,
       },
     }])
@@ -3076,22 +3202,26 @@ function App() {
     window.requestAnimationFrame(() => measureNodeOverlay(id))
   }, [measureNodeOverlay, screenToFlowPosition, setNodes])
 
-  const addPromptCaseNode = useCallback((item: PromptLibraryCase) => {
+  const addPromptCaseNode = useCallback(async (item: PromptLibraryCase) => {
+    const imageAspectRatio = await readImageAspectRatio(item.image)
+    const nodeSize = getImageGenerationNodeSize(imageAspectRatio)
     const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
     const id = `prompt-case-${item.id}-${Date.now()}`
     setNodes((current) => [...current, {
       id,
       type: 'disy',
-      position: { x: center.x - 150, y: center.y - 120 },
+      position: { x: center.x - nodeSize.width / 2, y: center.y - nodeSize.height / 2 },
+      style: nodeSize,
       data: {
         kind: 'image',
         title: item.title,
         body: item.prompt,
         promptText: item.prompt,
         imageUrl: item.image,
-        fileName: `prompt-${item.id}.webp`,
+        fileName: imageFileName(`inspiration-${item.id}`, item.image),
         referenceImageUrl: item.image,
         referenceImageName: `案例 ${item.id} · ${item.title}`,
+        imageAspectRatio,
       },
     }])
     setPromptLibraryOpen(false)
@@ -3153,6 +3283,10 @@ function App() {
       const source = nodes.find((node) => node.id === connection.source)
       const target = nodes.find((node) => node.id === connection.target)
       if (!source || !target || source.id === target.id) return
+      if (source.data.kind === 'group' || target.data.kind === 'group') {
+        setToastMessage('文件夹只用于整理节点，不能参与连线')
+        return
+      }
       if (connectionCreatesCycle(source.id, target.id)) {
         setToastMessage('该连接会形成循环引用')
         return
@@ -3183,6 +3317,12 @@ function App() {
 
       if (targetNodeId && targetNodeId !== connectionState.fromNode.id) {
         const sourceNodeId = connectionState.fromNode.id
+        const sourceNode = nodes.find((node) => node.id === sourceNodeId)
+        const targetNode = nodes.find((node) => node.id === targetNodeId)
+        if (sourceNode?.data.kind === 'group' || targetNode?.data.kind === 'group') {
+          setToastMessage('文件夹只用于整理节点，不能参与连线')
+          return
+        }
         if (connectionCreatesCycle(sourceNodeId, targetNodeId)) {
           setToastMessage('该连接会形成循环引用')
           return
@@ -3218,7 +3358,7 @@ function App() {
       })
       closeContextMenu()
     },
-    [closeAllMenus, closeContextMenu, connectionCreatesCycle, screenToFlowPosition, setEdges],
+    [closeAllMenus, closeContextMenu, connectionCreatesCycle, nodes, screenToFlowPosition, setEdges],
   )
 
   const createNode = (kind: CreatableNodeKind, positionOverride?: { x: number; y: number }) => {
@@ -3226,11 +3366,13 @@ function App() {
       text: '文本',
       image: '图像',
       upload: '新上传',
+      video: '视频（暂未开放）',
     }
     const bodies: Record<CreatableNodeKind, string> = {
       text: '',
       image: '',
       upload: '上传一张参考图。',
+      video: '保留首尾帧、时长、运镜与连续性说明；视频生成能力即将开放。',
     }
     const id = `${kind}-${Date.now()}`
     const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
@@ -3378,7 +3520,7 @@ function App() {
     setNodeMenu({ x, y, flowX: flowPosition.x, flowY: flowPosition.y })
   }
 
-  const openNodeExtensionMenu = (nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => {
+  const openNodeExtensionMenu = useCallback((nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => {
     closeContextMenu()
     const anchorRect = anchor.getBoundingClientRect()
     const nodeRect = anchor.closest<HTMLElement>('.react-flow__node')?.getBoundingClientRect() ?? anchorRect
@@ -3404,7 +3546,7 @@ function App() {
       connectionSourceId: nodeId,
       connectionDirection: direction,
     })
-  }
+  }, [closeContextMenu, screenToFlowPosition])
 
   const updateActiveTextNode = (promptText: string) => {
     if (!activeEditorNodeId) return
@@ -3794,6 +3936,7 @@ function App() {
       name: apiDraft.name.trim() || `连接 ${apiSettings.connections.length + 1}`,
       baseUrl: apiDraft.baseUrl.trim().replace(/\/$/, ''),
       apiKey: apiDraft.apiKey.trim(),
+      balanceToken: apiDraft.balanceToken.trim(),
       models: keepDisconnected ? [] : draftModels,
       modelsFetchedAt: keepDisconnected || !draftModels.length ? undefined : new Date().toISOString(),
       enabled: existingConnection?.enabled === false ? false : true,
@@ -3826,7 +3969,7 @@ function App() {
     modelFetchRequestRef.current += 1
     setModelsLoading(false)
     setEditingConnectionId('new')
-    setApiDraft({ name: '', baseUrl: '', apiKey: '' })
+    setApiDraft({ name: '', baseUrl: '', apiKey: '', balanceToken: '' })
     setApiKeyVisible(false)
     setDraftModels([])
     setModelsError('')
@@ -3839,7 +3982,7 @@ function App() {
     modelFetchRequestRef.current += 1
     setModelsLoading(false)
     setEditingConnectionId('new')
-    setApiDraft({ name: preset.name, baseUrl: preset.baseUrl, apiKey: '' })
+    setApiDraft({ name: preset.name, baseUrl: preset.baseUrl, apiKey: '', balanceToken: '' })
     setApiKeyVisible(false)
     setDraftModels([])
     setModelsError('')
@@ -3851,7 +3994,7 @@ function App() {
     modelFetchRequestRef.current += 1
     setModelsLoading(false)
     setEditingConnectionId(connection.id)
-    setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey })
+    setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey, balanceToken: connection.balanceToken ?? '' })
     setApiKeyVisible(false)
     setDraftModels(connection.models)
     setModelsError('')
@@ -4728,9 +4871,9 @@ function App() {
   const activeGenerationNode = nodes.find(
     (node) => node.id === activeGenerationNodeId && node.data.kind === 'image',
   )
-  const activeGeneratingNodeIds = new Set(Array.from(activeGenerationTaskKeys)
+  const activeGeneratingNodeIds = useMemo(() => new Set(Array.from(activeGenerationTaskKeys)
     .filter((taskKey) => taskKey.startsWith('image:'))
-    .map((taskKey) => taskKey.slice('image:'.length)))
+    .map((taskKey) => taskKey.slice('image:'.length))), [activeGenerationTaskKeys])
   const activeImageGenerationRunning = Boolean(activeGenerationNode && activeGeneratingNodeIds.has(activeGenerationNode.id))
   const activeTextGenerationRunning = Boolean(activeTextNode && activeGenerationTaskKeys.has(`text:${activeTextNode.id}`))
   const activeTextReferences = useMemo<ActiveNodeReference[]>(() => {
@@ -5854,7 +5997,7 @@ function App() {
     setImageModelMenuOpen(false)
     const generationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
     setNodes((current) => current.map((node) => node.id === generationNodeId
-      ? { ...node, data: { ...node.data, status: '生成中', imageModelConnectionId: activeNodeImageModel.connection.id, imageModelId: activeNodeImageModel.model.id, imageModelName: activeNodeImageModel.model.name } }
+      ? { ...node, data: { ...node.data, status: '生成中', generationError: undefined, imageModelConnectionId: activeNodeImageModel.connection.id, imageModelId: activeNodeImageModel.model.id, imageModelName: activeNodeImageModel.model.name } }
       : node))
     try {
       const referenceImages = await Promise.all(requestedReferenceUrls.map((url) => prepareReferenceImageForRequest(url, controller.signal)))
@@ -5931,10 +6074,14 @@ function App() {
             fileName: primaryVariant.fileName,
             imageVariants: [...previousVariants, ...newVariants],
             activeImageVariantId: primaryVariant.id,
+            // A retry that produced output must replace the previous failure state.
+            // Keep any request-level partial failure in output history/toast, but do
+            // not leave an obsolete error banner on a node with a valid result.
+            generationError: undefined,
             status: stoppedError
               ? (stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
                   ? (generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止')
-                  : '生成失败')
+                  : '已完成')
               : '已完成',
           },
         }
@@ -6453,7 +6600,7 @@ function App() {
       const partialFailure = stoppedError && !wasInterrupted ? toOutputHistoryError(stoppedError) : null
       const completedStatus = wasInterrupted
         ? (generationTaskStopReasonRef.current.get(taskKey) === 'paused' ? '已暂停' : '已停止')
-        : partialFailure ? '生成失败' : '已完成'
+        : '已完成'
       await patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId ? {
         ...node,
         style: { ...node.style, ...confirmedNodeSize },
@@ -6466,7 +6613,7 @@ function App() {
           imageAspectRatio: aspectRatio,
           imageResolution: resolution,
           imageDetail: detail,
-          generationError: partialFailure?.summary,
+          generationError: undefined,
           status: completedStatus,
         },
       } : node))
@@ -6627,94 +6774,38 @@ function App() {
     : undefined
 
   const renderedEdges = useMemo(() => {
-    const nodeById = new Map(nodes.map((node) => [node.id, node]))
-    const collapsedParentByNodeId = new Map<string, string>()
-    nodes.forEach((node) => {
-      if (!node.parentId) return
-      const parent = nodeById.get(node.parentId)
-      if (parent?.data.kind === 'group' && parent.data.groupCollapsed) {
-        collapsedParentByNodeId.set(node.id, parent.id)
-      }
-    })
-
-    const absolutePositionById = new Map<string, { x: number; y: number }>()
-    const getAbsolutePosition = (nodeId: string, visiting = new Set<string>()): { x: number; y: number } => {
-      const cached = absolutePositionById.get(nodeId)
-      if (cached) return cached
-      const node = nodeById.get(nodeId)
-      if (!node || visiting.has(nodeId)) return { x: 0, y: 0 }
-      visiting.add(nodeId)
-      const parentPosition = node.parentId ? getAbsolutePosition(node.parentId, visiting) : { x: 0, y: 0 }
-      const position = { x: parentPosition.x + node.position.x, y: parentPosition.y + node.position.y }
-      absolutePositionById.set(nodeId, position)
-      visiting.delete(nodeId)
-      return position
-    }
-    const getRenderedNodeSize = (nodeId: string) => {
-      const node = nodeById.get(nodeId)
-      if (!node) return { width: 1, height: 1 }
-      const styleWidth = typeof node.style?.width === 'number' ? node.style.width : Number.parseFloat(String(node.style?.width ?? ''))
-      const styleHeight = typeof node.style?.height === 'number' ? node.style.height : Number.parseFloat(String(node.style?.height ?? ''))
-      return {
-        width: node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : node.data.kind === 'group' && node.data.groupCollapsed ? 210 : 275),
-        height: node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : node.data.kind === 'group' && node.data.groupCollapsed ? 132 : 126),
-      }
-    }
-    const getNodeCenter = (nodeId: string) => {
-      const position = getAbsolutePosition(nodeId)
-      const size = getRenderedNodeSize(nodeId)
-      return { x: position.x + size.width / 2, y: position.y + size.height / 2 }
-    }
-    const getGroupProxyHandle = (groupId: string, facingNodeId: string, type: 'source' | 'target') => {
-      const groupCenter = getNodeCenter(groupId)
-      const facingCenter = getNodeCenter(facingNodeId)
-      const groupSize = getRenderedNodeSize(groupId)
-      const dx = facingCenter.x - groupCenter.x
-      const dy = facingCenter.y - groupCenter.y
-      const horizontalWeight = Math.abs(dx) / Math.max(groupSize.width, 1)
-      const verticalWeight = Math.abs(dy) / Math.max(groupSize.height, 1)
-      const side = horizontalWeight >= verticalWeight
-        ? (dx >= 0 ? 'right' : 'left')
-        : (dy >= 0 ? 'bottom' : 'top')
-      return `group-${type}-${side}`
-    }
-
-    const visiblePairs = new Set<string>()
-    return edges.flatMap((edge) => {
-      const sourceGroupId = collapsedParentByNodeId.get(edge.source)
-      const targetGroupId = collapsedParentByNodeId.get(edge.target)
-
-      // Connections completely contained by the same folded group add visual
-      // noise and have no useful destination while its children are hidden.
-      if (sourceGroupId && targetGroupId && sourceGroupId === targetGroupId) return []
-
-      const source = sourceGroupId ?? edge.source
-      const target = targetGroupId ?? edge.target
-      if (source === target) return []
-
-      const sourceHandle = sourceGroupId
-        ? getGroupProxyHandle(sourceGroupId, target, 'source')
-        : edge.sourceHandle
-      const targetHandle = targetGroupId
-        ? getGroupProxyHandle(targetGroupId, source, 'target')
-        : edge.targetHandle
-
-      const remapped = Boolean(sourceGroupId || targetGroupId)
-      if (remapped) {
-        const pairKey = `${source}:${sourceHandle ?? ''}->${target}:${targetHandle ?? ''}`
-        if (visiblePairs.has(pairKey)) return []
-        visiblePairs.add(pairKey)
-      }
-
-      return [{
-        ...edge,
-        source,
-        target,
-        sourceHandle,
-        targetHandle,
-      }]
-    })
+    const groupIds = new Set(nodes.filter((node) => node.data.kind === 'group').map((node) => node.id))
+    const collapsedGroupIds = new Set(nodes
+      .filter((node) => node.data.kind === 'group' && node.data.groupCollapsed)
+      .map((node) => node.id))
+    const hiddenChildIds = new Set(nodes
+      .filter((node) => node.parentId && collapsedGroupIds.has(node.parentId))
+      .map((node) => node.id))
+    if (!groupIds.size && !hiddenChildIds.size) return edges
+    // A folder is layout-only. Hide child relationships while it is collapsed;
+    // restore the exact original node-to-node edges when it expands.
+    return edges.filter((edge) => (
+      !groupIds.has(edge.source)
+      && !groupIds.has(edge.target)
+      && !hiddenChildIds.has(edge.source)
+      && !hiddenChildIds.has(edge.target)
+    ))
   }, [edges, nodes])
+
+  const groupNodeIdKey = useMemo(() => nodes
+    .filter((node) => node.data.kind === 'group')
+    .map((node) => node.id)
+    .sort()
+    .join('\n'), [nodes])
+
+  useEffect(() => {
+    if (!groupNodeIdKey) return
+    const groupIds = new Set(groupNodeIdKey.split('\n'))
+    setEdges((current) => {
+      const next = current.filter((edge) => !groupIds.has(edge.source) && !groupIds.has(edge.target))
+      return next.length === current.length ? current : next
+    })
+  }, [groupNodeIdKey, setEdges])
 
   const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: CanvasNode[]; edges: Edge[] }) => {
     const ids = selectedNodes.map((node) => node.id)
@@ -6752,6 +6843,7 @@ function App() {
   const draggingOverlapNodeRef = useRef<CanvasNode | null>(null)
   const tiltedNodeIdsRef = useRef<Set<string>>(new Set())
   const autoPlacementTweenRef = useRef<gsap.core.Tween | null>(null)
+  const nodeReturnTweensRef = useRef(new Map<string, gsap.core.Tween>())
 
   useEffect(() => {
     if (!selectionToolbarAllowed || !selectedNodeIds.length || isNodeDragging) {
@@ -6875,6 +6967,8 @@ function App() {
   useEffect(() => () => {
     if (dragOverlapFrameRef.current !== null) window.cancelAnimationFrame(dragOverlapFrameRef.current)
     autoPlacementTweenRef.current?.kill()
+    nodeReturnTweensRef.current.forEach((tween) => tween.kill())
+    nodeReturnTweensRef.current.clear()
     tiltedNodeIdsRef.current.forEach((nodeId) => gsap.killTweensOf(getNodeCardElements(nodeId)))
   }, [])
 
@@ -6902,55 +6996,42 @@ function App() {
       || position.y + movingSize.height + gap <= rect.top
       || position.y - gap >= rect.bottom
     ))
-    if (!collides(movingNode.position)) return false
+    if (!collides(movingNode!.position)) {
+      dragStartPositionsRef.current.delete(nodeId)
+      return false
+    }
 
-    const origin = { ...movingNode.position }
-    const stepX = Math.max(220, movingSize.width + gap * 2)
-    const stepY = Math.max(180, movingSize.height + gap * 2)
-    const candidates: Array<{ x: number; y: number }> = []
-    for (let ring = 1; ring <= 12; ring += 1) {
-      for (let x = -ring; x <= ring; x += 1) {
-        candidates.push(
-          { x: origin.x + x * stepX, y: origin.y - ring * stepY },
-          { x: origin.x + x * stepX, y: origin.y + ring * stepY },
-        )
-      }
-      for (let y = -ring + 1; y < ring; y += 1) {
-        candidates.push(
-          { x: origin.x - ring * stepX, y: origin.y + y * stepY },
-          { x: origin.x + ring * stepX, y: origin.y + y * stepY },
-        )
-      }
-    }
-    const safePosition = candidates.find((candidate) => !collides(candidate)) ?? {
-      x: Math.max(origin.x, ...occupied.map((rect) => rect.right + gap * 2)),
-      y: origin.y,
-    }
-    setToastMessage('检测到节点重叠，正在自动寻找空位…')
+    const originalPosition = dragStartPositionsRef.current.get(nodeId)
+    if (!originalPosition) return false
+    // Keep the canvas intentional: dropping onto another top-level node restores
+    // the dragged node to where the drag began instead of inventing a new slot.
+    dragStartPositionsRef.current.delete(nodeId)
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    autoPlacementTweenRef.current?.kill()
+    nodeReturnTweensRef.current.get(nodeId)?.kill()
     if (reducedMotion) {
-      updateNode(nodeId, { position: safePosition, dragging: false })
-      setToastMessage('已自动移动到最近空位')
+      updateNode(nodeId, { position: originalPosition, dragging: false })
+      setToastMessage('节点重叠，已回到原位置')
       return true
     }
-    const animatedPosition = { ...origin }
-    autoPlacementTweenRef.current = gsap.to(animatedPosition, {
-      x: safePosition.x,
-      y: safePosition.y,
-      duration: .48,
-      ease: 'power3.inOut',
-      overwrite: true,
+    const animatedPosition = { ...movingNode.position }
+    updateNode(nodeId, { dragging: false })
+    const returnTween = gsap.to(animatedPosition, {
+      x: originalPosition.x,
+      y: originalPosition.y,
+      duration: .5,
+      ease: 'back.out(1.12)',
+      overwrite: 'auto',
       onUpdate: () => updateNode(nodeId, {
         position: { x: animatedPosition.x, y: animatedPosition.y },
         dragging: false,
       }),
       onComplete: () => {
-        updateNode(nodeId, { position: safePosition, dragging: false })
-        autoPlacementTweenRef.current = null
-        setToastMessage('已平滑移动到最近空位')
+        updateNode(nodeId, { position: originalPosition, dragging: false })
+        nodeReturnTweensRef.current.delete(nodeId)
+        setToastMessage('节点重叠，已平滑回到原位置')
       },
     })
+    nodeReturnTweensRef.current.set(nodeId, returnTween)
     return true
   }
 
@@ -7303,7 +7384,7 @@ function App() {
     const safeFileName = (node: CanvasNode, index: number) => {
       const original = node.data.fileName || `${node.data.title || 'disy-image'}-${index + 1}.png`
       const cleaned = original.replace(/[\\/:*?"<>|]/g, '-').trim() || `disy-image-${index + 1}.png`
-      return /\.[a-z0-9]{2,5}$/i.test(cleaned) ? cleaned : `${cleaned}.png`
+      return imageFileName(cleaned, node.data.imageUrl || '')
     }
     const pickerWindow = window as FilePickerWindow
 
@@ -7775,6 +7856,37 @@ function App() {
     window.setTimeout(() => { galleryWheelLockRef.current = false }, 260)
   }
 
+  const currentCreditKey = editingConnectionId === 'new' ? apiDraft.baseUrl.trim() : editingConnectionId
+  const cachedCurrentProviderCredits = providerCreditsByConnection[currentCreditKey] ?? null
+  const currentProviderCredits = cachedCurrentProviderCredits && cachedCurrentProviderCredits.amount >= 0 ? cachedCurrentProviderCredits : null
+  const queriedProviderCredits = Object.values(providerCreditsByConnection).filter((credits) => credits.amount >= 0)
+  const totalProviderCredits = queriedProviderCredits.reduce((total, credits) => total + credits.amount, 0)
+  const creditUnits = new Set(queriedProviderCredits.map((credits) => credits.unit))
+  const creditsTooltip = queriedProviderCredits.map((credits) => `${credits.provider}：${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(credits.amount)} ${credits.unit}`).join('\n')
+  const activeImagePrice = displayedActiveNodeImageModel
+    ? providerPricesByConnection[displayedActiveNodeImageModel.connection.id]?.[displayedActiveNodeImageModel.model.id]
+    : undefined
+  const activeImageCostLabel = activeImagePrice
+    ? activeImagePrice.billing === 'fixed'
+      ? `${activeImagePrice.credits * generationCount} 积分`
+      : '按 Token'
+    : null
+  const activeTextPrice = selectedTextModel
+    ? providerPricesByConnection[selectedTextModel.connection.id]?.[selectedTextModel.model.id]
+    : undefined
+  const activeTextCostLabel = activeTextPrice
+    ? activeTextPrice.billing === 'fixed'
+      ? `${activeTextPrice.credits * generationCount} 积分`
+      : '按 Token'
+    : null
+  const [agentPriceConnectionId, agentPriceModelId] = agentImageModelKey.split('::')
+  const agentImagePrice = providerPricesByConnection[agentPriceConnectionId]?.[agentPriceModelId]
+  const getAgentImagePlanCostLabel = (plan: AgentImagePlan) => agentImagePrice
+    ? agentImagePrice.billing === 'fixed'
+      ? `${agentImagePrice.credits * normalizeImageGenerationOptions(plan).count} 积分`
+      : '按 Token'
+    : null
+
   return (
     <div ref={shellRef} className={`disy-shell ${agentOpen ? 'has-agent-open' : ''} ${automaticPerformanceMode ? 'is-performance-mode' : ''} ${isNodeDragging ? 'is-node-dragging' : ''}`}>
       <AnimatePresence>
@@ -7977,10 +8089,13 @@ function App() {
             window.requestAnimationFrame(() => measureNodeOverlay(node.id))
           }}
           onNodeDragStart={(event, node) => {
+            nodeReturnTweensRef.current.get(node.id)?.kill()
+            nodeReturnTweensRef.current.delete(node.id)
             autoPlacementTweenRef.current?.kill()
             autoPlacementTweenRef.current = null
             stopLiveOverlapTilt()
             setIsNodeDragging(true)
+            dragStartPositionsRef.current.set(node.id, { ...node.position })
             if (node.parentId && node.extent === 'parent') {
               setNodes((current) => current.map((item) => item.id === node.id ? { ...item, extent: undefined } : item))
             }
@@ -7995,7 +8110,7 @@ function App() {
             setNodes((current) => [...current, stationaryDuplicate])
           }}
           onNodeDrag={(_, node) => {
-            scheduleLiveOverlapTilt(node)
+            if (!automaticPerformanceMode) scheduleLiveOverlapTilt(node)
           }}
           onNodeDragStop={(_, node) => {
             stopLiveOverlapTilt()
@@ -8025,6 +8140,7 @@ function App() {
             altDragDuplicateRef.current = null
             if (reconcileNodeGroupMembership(node.id, node.position)) return
             if (resolveNodeOverlap(node.id)) return
+            dragStartPositionsRef.current.delete(node.id)
             if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId) measureNodeOverlay(node.id)
           }}
           onNodeContextMenu={openNodeContextMenu}
@@ -8850,6 +8966,16 @@ function App() {
           >
             <Download size={16} />
           </button>
+          {queriedProviderCredits.length > 0 && <button
+            type="button"
+            className="credits-chip"
+            onClick={openApiSettings}
+            aria-label="查看各厂商余额"
+            title={creditsTooltip}
+          >
+            <WalletCards size={15} />
+            <span>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(totalProviderCredits)} {creditUnits.size === 1 ? queriedProviderCredits[0].unit : '总余额'}</span>
+          </button>}
           <button
             ref={apiButtonRef}
             className={`api-chip ${apiConfigured ? 'configured' : ''}`}
@@ -8888,19 +9014,11 @@ function App() {
           </button>
           <button
             className={promptLibraryOpen ? 'is-active' : ''}
-            aria-label="提示库"
-            data-tooltip="提示库"
+            aria-label="灵感库"
+            data-tooltip="灵感库"
             onClick={() => setPromptLibraryOpen(true)}
           >
             <BookOpen size={18} />
-          </button>
-          <button
-            className={workflowTemplateOpen ? 'is-active' : ''}
-            aria-label="工作流模板库"
-            data-tooltip="工作流模板库"
-            onClick={() => setWorkflowTemplateOpen(true)}
-          >
-            <Shapes size={18} />
           </button>
           <button
             aria-label="资产库"
@@ -9070,6 +9188,7 @@ function App() {
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
                 onSelectPlanOptions={selectAgentPlanOptions}
                 onConfirmPlan={(id) => void confirmAgentPlan(id)}
+                getImagePlanCostLabel={getAgentImagePlanCostLabel}
                 onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'proposed' } : plan))}
                 onRemovePlanContextReference={(id, nodeId) => setAgentPlans((current) => current.map((plan) => plan.id === id ? {
                   ...plan,
@@ -9864,6 +9983,7 @@ function App() {
                       </button>
                     </div>
                     <div className="generation-run-control">
+                      {activeImageCostLabel && <span className="generation-cost-chip" title={activeImagePrice?.priceExample || '厂商实时积分价格'}>{activeImageCostLabel}</span>}
                       <AnimatePresence>
                         {activeImageGenerationRunning && generationControlMenuNodeId === activeGenerationNode.id && (
                           <motion.div className="generation-control-menu" initial={{ opacity: 0, y: 5, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .96 }}>
@@ -10125,6 +10245,7 @@ function App() {
                         {generationCount}×
                       </button>
                     </div>
+                    {activeTextCostLabel && <span className="generation-cost-chip" title={activeTextPrice?.priceExample || '厂商实时积分价格'}>{activeTextCostLabel}</span>}
                     <button
                       className="editor-generate-button"
                       aria-label="生成"
@@ -10445,14 +10566,6 @@ function App() {
         onUsePrompt={addPromptCaseNode}
         onAddImage={addPromptCaseImage}
       />
-      {workflowTemplateOpen && <Suspense fallback={null}>
-        <WorkflowTemplatePanel
-          open
-          onClose={() => setWorkflowTemplateOpen(false)}
-          onApply={applyWorkflowTemplate}
-        />
-      </Suspense>}
-
       <AnimatePresence>
         {assetLibraryOpen && (
           <motion.div
@@ -11252,11 +11365,33 @@ function App() {
                         </button>
                       </span>
                     </label>
+                    {/(?:api\.apiyi\.com|apiyi\.com)/i.test(apiDraft.baseUrl) && <label className="api-field-wide">
+                      余额查询 AccessToken
+                      <span className="api-key-input-wrap">
+                        <input value={apiDraft.balanceToken} onChange={(event) => setApiDraft((draft) => ({ ...draft, balanceToken: event.target.value }))} type={apiKeyVisible ? 'text' : 'password'} placeholder="从 APIYI 个人中心 → 系统令牌获取" autoComplete="off" />
+                        <button type="button" className="api-key-visibility" aria-label={apiKeyVisible ? '隐藏余额令牌' : '显示余额令牌'} onClick={() => setApiKeyVisible((visible) => !visible)}>
+                          {apiKeyVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </span>
+                      <small className="api-field-hint">此令牌仅用于查询余额，与模型调用 API Key 分开，并只保留在当前标签页会话。</small>
+                    </label>}
                     <button type="button" className="api-fetch-models" disabled={modelsLoading} onClick={() => void refreshRemoteModels()}>
                       {modelsLoading ? <LoaderCircle size={15} className="is-spinning" /> : <History size={15} />}
                       {modelsLoading ? '正在获取模型' : '获取当前连接模型'}
                     </button>
                   </div>
+
+                  <section className="provider-credits-card" aria-live="polite">
+                    <div className="provider-credits-heading">
+                      <span><WalletCards size={16} /><strong>账户积分</strong><small>仅显示厂商提供余额接口的连接</small></span>
+                      <button type="button" onClick={() => void refreshProviderCredits()} disabled={creditsLoading}>
+                        {creditsLoading ? <LoaderCircle size={14} className="is-spinning" /> : <RefreshCw size={14} />}
+                        {creditsLoading ? '查询中' : '刷新余额'}
+                      </button>
+                    </div>
+                    {currentProviderCredits ? <div className="provider-credits-value"><strong>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)}</strong><span>{currentProviderCredits.unit}</span><small>{currentProviderCredits.provider} · 刚刚更新</small></div>
+                      : <p>{creditsError || '点击“刷新余额”查询当前 API Key 的可用积分。'}</p>}
+                  </section>
 
                   <div className="api-model-catalog">
                     <div className="api-model-tabs">

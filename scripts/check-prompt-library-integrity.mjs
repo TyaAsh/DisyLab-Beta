@@ -1,43 +1,24 @@
-import sharp from 'sharp'
-import { createHash } from 'node:crypto'
-import { access, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const catalog = JSON.parse(await readFile(join(root, 'public/prompt-library/catalog.json'), 'utf8'))
-const cases = catalog.cases || []
-const urls = new Map()
-const images = new Map()
-const chinesePattern = /[\u3400-\u9fff]/
+const expectedCategories = ['金融科技', '人物海报', '角色设计', '3D视觉']
+const requiredGptSections = ['核心画面：', '环境与空间：', '材质与表面：', '灯光与阴影：', '镜头与景深：', '色彩与后期：', '排版与文字：', '禁止项：']
 
-if ((catalog.industryCases || []).length) throw new Error('Industry cases must be merged into the inspiration collection')
-if ((catalog.templates || []).length) throw new Error('Prompt templates must not be published')
-if (JSON.stringify(catalog.categories) !== JSON.stringify(['金融科技', '视觉案例'])) throw new Error('Unexpected public categories')
-if ((catalog.styles || []).length) throw new Error('Style filters must not be published')
+if (catalog.totalCases !== (catalog.cases || []).length || catalog.totalCases === 0) throw new Error('The local inspiration library case count is invalid')
+if (JSON.stringify(catalog.categories) !== JSON.stringify(expectedCategories)) throw new Error('Unexpected public categories')
+if ((catalog.styles || []).length || (catalog.scenes || []).length || (catalog.templates || []).length || (catalog.industryCases || []).length) throw new Error('The inspiration library contains unexpected filters or collections')
 
-const ids = new Set()
-for (const item of cases) {
-  if (ids.has(item.id)) throw new Error(`Duplicate inspiration id: ${item.id}`)
-  ids.add(item.id)
-  if (!item.image) throw new Error(`Inspiration case has no image: ${item.id}`)
-  const imagePath = join(root, 'public', item.image.replace(/^\//, ''))
-  await access(imagePath)
-  if (!item.sourceUrl) throw new Error(`Inspiration case has no source URL: ${item.id}`)
-  if (!item.prompt || !chinesePattern.test(item.prompt)) throw new Error(`Inspiration case needs an editable Chinese prompt: ${item.id}`)
-  if (urls.has(item.sourceUrl)) throw new Error(`Duplicate source URL: ${item.id} / ${urls.get(item.sourceUrl)}`)
-  urls.set(item.sourceUrl, item.id)
-  const pixels = await sharp(imagePath).resize(64, 64, { fit: 'contain', background: '#000' }).removeAlpha().raw().toBuffer()
-  const digest = createHash('sha256').update(pixels).digest('hex')
-  if (images.has(digest)) throw new Error(`Duplicate reference image: ${item.id} / ${images.get(digest)}`)
-  images.set(digest, item.id)
+for (const item of catalog.cases) {
+  if (!expectedCategories.includes(item.category)) throw new Error(`Unsupported category: ${item.category}`)
+  if (!/^\/prompt-library\/local\/local-\d+\.(?:jpg|png)$/.test(item.image)) throw new Error(`Unexpected local image path: ${item.image}`)
+  if (!item.nanoPrompt?.includes('可直接用于文生图') || !item.nanoPrompt?.includes('如同时上传参考图')) throw new Error(`Nano prompt is not dual-mode: ${item.id}`)
+  if (!item.gptImage2Prompt?.includes('仅凭本提示词即可文生图') || !item.gptImage2Prompt?.includes('若同时上传参考图')) throw new Error(`GPT Image 2 prompt is not dual-mode: ${item.id}`)
+  if (requiredGptSections.some((section) => !item.gptImage2Prompt.includes(section))) throw new Error(`GPT Image 2 prompt is missing a structured section: ${item.id}`)
+  if (item.gptImage2Prompt.length < 900) throw new Error(`GPT Image 2 prompt is insufficiently detailed: ${item.id}`)
+  if (/\b(?:WebP|webp)\b/.test(`${item.nanoPrompt}\n${item.gptImage2Prompt}`)) throw new Error(`Unexpected WebP instruction: ${item.id}`)
 }
 
-const fintechCount = cases.filter((item) => item.category === '金融科技').length
-const visualCount = cases.filter((item) => item.category === '视觉案例').length
-if (fintechCount < 19) throw new Error(`Fintech inspiration below quality floor: ${fintechCount}/19`)
-if (visualCount < 155) throw new Error(`Visual inspiration below quality floor: ${visualCount}/155`)
-if (cases.length !== fintechCount + visualCount) throw new Error('Inspiration cases use an unsupported category')
-
-console.log(`Prompt library OK: ${cases.length} inspiration cases, no templates or separate industry collection`)
-console.log(`Coverage: ${fintechCount} fintech, ${visualCount} visual cases`)
+console.log(`Inspiration library OK: ${catalog.totalCases} local references · ${catalog.totalCases * 2} model prompts · ${expectedCategories.join(' / ')}`)
