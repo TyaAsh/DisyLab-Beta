@@ -5611,6 +5611,40 @@ function App() {
     connection.id === apiSettings.selectedTextModel?.connectionId
     && model.id === apiSettings.selectedTextModel?.modelId
   )) ?? enabledTextModels[0]
+  const reverseInspirationPrompts = async (image: string, textModelKey: string) => {
+    const [connectionId, modelId] = textModelKey.split('::')
+    const reverseTextModel = enabledTextModels.find(({ connection, model }) => connection.id === connectionId && model.id === modelId)
+    if (!reverseTextModel) throw new Error('请选择一个已启用的文本模型，再进行图片反推')
+    const preparedImage = await prepareReferenceImageForRequest(image)
+    const instruction = `你是一名资深视觉导演和图像生成提示词工程师。请仔细分析附带的唯一一张参考图，目标是仅凭文字尽可能复现这张图，而不是泛泛描述主题。
+
+必须识别并写清：画幅比例、视觉风格与具体3D渲染体系（例如软陶定格动画、软胶吉祥物、Octane产品CG、Unreal电影角色、微缩模型、织物雕塑或真实摄影合成）、主体数量、物种或人物特征、夸张比例、动作姿态、镜头焦段与机位、前中后景、环境、全部关键道具及相对位置、材质与粗糙度、灯光方向和软硬、主辅色、景深、后期质感、版式和文字区域。不得把风格化3D角色自动改成真人，也不得用“高级感、电影感、质感好”等空话代替可执行描述。
+
+分别输出两份完整中文提示词：
+1. nanoPrompt：适合 Nano Banana 的完整中文执行指令，既可文生图也可作为图生图约束。不能只写风格词或概述；必须按自然语言明确交代画幅、主体数量及外观、姿势/表情、画面分层、每个关键物件和相对位置、环境、具体材质和表面状态、主辅光及方向、镜头/景别/景深、色彩与后期、版式和文字留白、禁止项。若是3D，必须说出确切渲染风格和建模/材质语言；若是真实摄影或平面合成，必须明确禁止生成通用3D人物。不要用“高级感、电影感、质感好”等无法执行的空话。
+2. gptImage2Prompt：适合 GPT Image 2，按“核心画面、造型语言、渲染风格、环境与空间、材质与表面、灯光与阴影、镜头与景深、色彩与后期、排版与文字、禁止项”完整展开，既可文生图也可图生图。
+
+只返回合法 JSON，不要 Markdown、代码围栏或解释：{"title":"12字以内中文案例名","nanoPrompt":"完整提示词","gptImage2Prompt":"完整提示词"}`
+    const raw = await generateRemoteText({
+      baseUrl: reverseTextModel.connection.baseUrl,
+      apiKey: reverseTextModel.connection.apiKey,
+      model: reverseTextModel.model.id,
+    }, instruction, { referenceImages: [preparedImage] })
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start < 0 || end <= start) throw new Error('文本模型没有返回可识别的双提示词 JSON，请换一个支持图片理解的文本模型')
+    let parsed: { title?: unknown; nanoPrompt?: unknown; gptImage2Prompt?: unknown }
+    try { parsed = JSON.parse(cleaned.slice(start, end + 1)) as typeof parsed } catch { throw new Error('文本模型返回格式不完整，请点击重新反推') }
+    if (typeof parsed.nanoPrompt !== 'string' || parsed.nanoPrompt.trim().length < 80 || typeof parsed.gptImage2Prompt !== 'string' || parsed.gptImage2Prompt.trim().length < 160) {
+      throw new Error('文本模型返回的提示词过短或缺少 Nano / GPT Image 2 字段，请重新反推')
+    }
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title.trim() : undefined,
+      nanoPrompt: parsed.nanoPrompt.trim(),
+      gptImage2Prompt: parsed.gptImage2Prompt.trim(),
+    }
+  }
   const enabledImageModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'image')
     .map((model) => ({ connection, model })))
@@ -10565,6 +10599,9 @@ function App() {
         onClose={() => setPromptLibraryOpen(false)}
         onUsePrompt={addPromptCaseNode}
         onAddImage={addPromptCaseImage}
+        textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+        defaultTextModelKey={selectedTextModel ? `${selectedTextModel.connection.id}::${selectedTextModel.model.id}` : undefined}
+        onReversePrompts={reverseInspirationPrompts}
       />
       <AnimatePresence>
         {assetLibraryOpen && (

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const catalog = JSON.parse(await readFile(join(root, 'public/prompt-library/catalog.json'), 'utf8'))
 const expectedCategories = ['金融科技', '人物海报', '角色设计', '3D视觉']
-const requiredGptSections = ['核心画面：', '环境与空间：', '材质与表面：', '灯光与阴影：', '镜头与景深：', '色彩与后期：', '排版与文字：', '禁止项：']
+const requiredGptSections = ['核心画面：', '造型语言：', '渲染风格：', '环境与空间：', '材质与表面：', '灯光与阴影：', '镜头与景深：', '色彩与后期：', '排版与文字：', '禁止项：']
 
 if (catalog.totalCases !== (catalog.cases || []).length || catalog.totalCases === 0) throw new Error('The local inspiration library case count is invalid')
 if (JSON.stringify(catalog.categories) !== JSON.stringify(expectedCategories)) throw new Error('Unexpected public categories')

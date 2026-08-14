@@ -95,7 +95,9 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) 
 export async function prepareReferenceImageForRequest(source: string, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw new DOMException('Generation interrupted', 'AbortError')
   const trimmedSource = source.trim()
-  if (!trimmedSource || !/^(?:https?:|blob:|data:image\/)/i.test(trimmedSource)) return trimmedSource
+  const isBrowserRelativeImage = /^(?:\/|\.\/|\.\.\/)/.test(trimmedSource)
+  if (!trimmedSource || (!isBrowserRelativeImage && !/^(?:https?:|blob:|data:image\/)/i.test(trimmedSource))) return trimmedSource
+  const readableSource = isBrowserRelativeImage ? new URL(trimmedSource, window.location.href).href : trimmedSource
 
   let sourceBlob: Blob
   const referenceController = new AbortController()
@@ -103,7 +105,7 @@ export async function prepareReferenceImageForRequest(source: string, signal?: A
   signal?.addEventListener('abort', abortReferenceRead, { once: true })
   const referenceTimeout = window.setTimeout(() => referenceController.abort(), REFERENCE_IMAGE_READ_TIMEOUT_MS)
   try {
-    const response = await fetch(trimmedSource, { signal: referenceController.signal })
+    const response = await fetch(readableSource, { signal: referenceController.signal })
     if (!response.ok) throw new Error(`图片读取失败（${response.status}）`)
     sourceBlob = await response.blob()
   } catch (error) {
@@ -908,11 +910,17 @@ export async function generateRemoteImages(
   const referenceImages = options.referenceImages?.filter(Boolean) ?? []
   const useGrsaiUnifiedImage = isGrsaiBaseUrl(settings.baseUrl)
   const useStandardImageEdit = !useGrsaiUnifiedImage && referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
+  // GRS documents `images` as raw Base64 or URL values. A browser Data URL
+  // includes a MIME header that its upload worker does not decode reliably.
+  const grsaiReferenceImages = referenceImages.map((source) => {
+    const dataUrl = /^data:image\/(?:png|jpe?g);base64,([\s\S]+)$/i.exec(source)
+    return dataUrl ? dataUrl[1].replace(/\s/g, '') : source
+  })
   const isGrsaiGptImage = /(?:gpt-image|chatgpt-image)/i.test(settings.model)
   const grsaiRequestBody: Record<string, unknown> = {
     model: settings.model,
     prompt: options.prompt,
-    images: referenceImages,
+    images: grsaiReferenceImages,
     // GRS uses two schemas on this unified endpoint: GPT Image expects pixel
     // dimensions, while Nano Banana expects a ratio plus imageSize.
     aspectRatio: isGrsaiGptImage
