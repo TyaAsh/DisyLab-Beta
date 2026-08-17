@@ -10,7 +10,7 @@ Third-party packages, fonts, sample media, and other third-party materials remai
 
 The canonical project repository is:
 
-https://github.com/TyaAsh/DisyLab
+https://github.com/TyaAsh/DisyLab-Canvas
 
 Official v1.0.3 builds and exported `.disy` workspace packages may contain the
 non-secret provenance identifiers `ashhaveaniceday::disylab::origin` and

@@ -3,7 +3,7 @@
  * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
  * Unauthorized commercial use, redistribution, white-labeling, relicensing,
  * or removal of this copyright notice is prohibited.
- * Repository: https://github.com/TyaAsh/DisyLab
+ * Repository: https://github.com/TyaAsh/DisyLab-Canvas
  * SPDX-FileCopyrightText: 2026 DisyLab
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
@@ -12,7 +12,7 @@ const DISYLAB_RIGHTS_NOTICE = Object.freeze({
   version: '1.0.3',
   copyright: 'Copyright (c) 2026 DisyLab. All rights reserved.',
   license: 'LicenseRef-DisyLab-Proprietary',
-  repository: 'https://github.com/TyaAsh/DisyLab',
+  repository: 'https://github.com/TyaAsh/DisyLab-Canvas',
   ashOrigin: 'ashhaveaniceday::disylab::origin',
   tyaCanvas: 'tya::infinite-canvas::2026',
 })

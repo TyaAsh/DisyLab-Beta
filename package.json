@@ -4,10 +4,10 @@
   "version": "1.0.3",
   "license": "UNLICENSED",
   "author": "DisyLab",
-  "homepage": "https://github.com/TyaAsh/DisyLab",
+  "homepage": "https://disylab.pages.dev/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TyaAsh/DisyLab.git"
+    "url": "https://github.com/TyaAsh/DisyLab-Canvas.git"
   },
   "type": "module",
   "scripts": {

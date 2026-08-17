@@ -3,14 +3,14 @@
  * Proprietary source-available software under LicenseRef-DisyLab-Proprietary.
  * Unauthorized commercial use, redistribution, white-labeling, relicensing,
  * or removal of this copyright notice is prohibited.
- * Repository: https://github.com/TyaAsh/DisyLab
+ * Repository: https://github.com/TyaAsh/DisyLab-Canvas
  * SPDX-FileCopyrightText: 2026 DisyLab
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const rightsBanner = '/*! DisyLab v1.0.3 | Copyright (c) 2026 DisyLab. All rights reserved. | LicenseRef-DisyLab-Proprietary | ash::tya origin build | Unauthorized commercial use, redistribution, white-labeling, relicensing, or removal of this notice is prohibited. | Repository: https://github.com/TyaAsh/DisyLab */'
+const rightsBanner = '/*! DisyLab v1.0.3 | Copyright (c) 2026 DisyLab. All rights reserved. | LicenseRef-DisyLab-Proprietary | ash::tya origin build | Unauthorized commercial use, redistribution, white-labeling, relicensing, or removal of this notice is prohibited. | Repository: https://github.com/TyaAsh/DisyLab-Canvas */'
 const disyLabRightsBannerPlugin: Plugin = {
   name: 'disylab-rights-banner',
   enforce: 'post',
