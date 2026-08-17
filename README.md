@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://disylab.pages.dev">在线体验</a>
   ·
-  <a href="https://disylab.pages.dev/">项目官网</a>
+  <a href="https://tyaash.github.io/DisyLab-Canvas/">项目官网</a>
   ·
   <a href="#核心能力">核心能力</a>
   ·
