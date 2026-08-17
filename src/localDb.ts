@@ -870,6 +870,11 @@ function prepareImportedProjectData(snapshotValue: unknown, historyMediaRecords?
   const canvasIdMap = new Map(snapshot.canvases.map((canvas) => [canvas.id, crypto.randomUUID()]))
   const mediaIdMap = new Map((historyMediaRecords ?? []).map((record) => [record.id, `history-media-${crypto.randomUUID()}`]))
   remapImportedMediaIds(snapshot, mediaIdMap)
+  const scopeIdMap = new Map<string, string>([...projectIdMap, ...canvasIdMap])
+  remapImportedMediaIds(snapshot.assets, scopeIdMap)
+  remapImportedMediaIds(snapshot.folders, scopeIdMap)
+  remapImportedMediaIds(snapshot.generationHistory, scopeIdMap)
+  remapImportedMediaIds(snapshot.outputHistory, scopeIdMap)
 
   const projects = snapshot.projects.map((project) => ({
     ...project,
@@ -900,7 +905,16 @@ function prepareImportedProjectData(snapshotValue: unknown, historyMediaRecords?
     ...record,
     id: mediaIdMap.get(record.id)!,
   }))
-  return { projects, canvases, sessions, historyMedia }
+  return {
+    projects,
+    canvases,
+    sessions,
+    historyMedia,
+    assets: snapshot.assets,
+    folders: snapshot.folders,
+    generationHistory: snapshot.generationHistory,
+    outputHistory: snapshot.outputHistory,
+  }
 }
 
 /** Append imported packages as independent projects without touching existing workspace data. */
@@ -923,6 +937,64 @@ export async function appendWorkspaceProjects(snapshotValue: unknown, historyMed
     imported.historyMedia.forEach((record) => historyMedia.put(record))
   })
   return imported.projects
+}
+
+/** Merge every imported canvas into one existing project without replacing its current content. */
+export async function mergeWorkspaceIntoProject(targetProjectId: string, snapshotValue: unknown, historyMediaRecords?: HistoryMediaRecord[]) {
+  const target = await loadWorkspaceProject(targetProjectId)
+  if (!target) throw new Error('当前项目不存在')
+  const imported = prepareImportedProjectData(snapshotValue, historyMediaRecords)
+  if (!imported.canvases.length) throw new Error('导入包没有可合并的画布')
+
+  const existingCanvases = await listWorkspaceCanvases(targetProjectId)
+  const usedCanvasNames = existingCanvases.map((canvas) => canvas.name)
+  const projectIdMap = new Map(imported.projects.map((project) => [project.id, targetProjectId]))
+  const canvases = imported.canvases.map((canvas) => {
+    const name = makeUniqueWorkspaceName(canvas.name, usedCanvasNames, '导入画布')
+    usedCanvasNames.push(name)
+    return { ...canvas, name, projectId: targetProjectId }
+  })
+  const canvasIds = new Set(canvases.map((canvas) => canvas.id))
+  const sessions = imported.sessions
+    .filter((session) => canvasIds.has(session.canvasId))
+    .map((session) => ({ ...session, projectId: targetProjectId }))
+  remapImportedMediaIds(imported.generationHistory, projectIdMap)
+  remapImportedMediaIds(imported.outputHistory, projectIdMap)
+
+  const existingAssets = await loadLocalAssets<Record<string, unknown>>() ?? []
+  const existingAssetIds = new Set(existingAssets.flatMap((asset) => typeof asset?.id === 'string' ? [asset.id] : []))
+  const assetIdMap = new Map<string, string>()
+  imported.assets.forEach((asset) => {
+    if (!asset || typeof asset !== 'object') return
+    const id = (asset as Record<string, unknown>).id
+    if (typeof id === 'string' && existingAssetIds.has(id)) assetIdMap.set(id, crypto.randomUUID())
+  })
+  if (assetIdMap.size) {
+    remapImportedMediaIds(imported.assets, assetIdMap)
+    remapImportedMediaIds(canvases, assetIdMap)
+    remapImportedMediaIds(sessions, assetIdMap)
+    remapImportedMediaIds(imported.generationHistory, assetIdMap)
+    remapImportedMediaIds(imported.outputHistory, assetIdMap)
+  }
+
+  const auxiliary = await loadWorkspaceAuxiliaryData()
+  const nextProject = { ...target, canvasIds: [...target.canvasIds, ...canvases.map((canvas) => canvas.id)], updatedAt: now() }
+  await runTransaction<void>([WORKSPACE_PROJECT_STORE, CANVAS_STORE, AGENT_SESSION_STORE, HISTORY_MEDIA_STORE, ASSET_STORE, WORKSPACE_DATA_STORE], 'readwrite', (transaction) => {
+    transaction.objectStore(WORKSPACE_PROJECT_STORE).put(nextProject)
+    canvases.forEach((canvas) => transaction.objectStore(CANVAS_STORE).put(canvas))
+    sessions.forEach((session) => transaction.objectStore(AGENT_SESSION_STORE).put(session))
+    imported.historyMedia.forEach((record) => transaction.objectStore(HISTORY_MEDIA_STORE).put(record))
+    transaction.objectStore(ASSET_STORE).put({ id: ASSET_LIBRARY_ID, assets: [...existingAssets, ...imported.assets], updatedAt: now() })
+    transaction.objectStore(WORKSPACE_DATA_STORE).put({
+      ...auxiliary,
+      id: WORKSPACE_DATA_ID,
+      folders: [...auxiliary.folders, ...imported.folders],
+      generationHistory: [...auxiliary.generationHistory, ...imported.generationHistory],
+      outputHistory: [...auxiliary.outputHistory, ...imported.outputHistory],
+      updatedAt: now(),
+    })
+  })
+  return { project: nextProject, canvases }
 }
 
 /** Replace only one open project; every other project and global workspace data is preserved. */

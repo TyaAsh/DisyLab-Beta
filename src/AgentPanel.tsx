@@ -244,6 +244,9 @@ export function AgentPanel(props: Props) {
   const [mentionOpen, setMentionOpen] = useState(false)
   const [activeReadyPlanId, setActiveReadyPlanId] = useState<string | null>(null)
   const [imageSettingsOpen, setImageSettingsOpen] = useState(false)
+  const [customAspectRatioOpen, setCustomAspectRatioOpen] = useState(false)
+  const [customAspectWidth, setCustomAspectWidth] = useState('1')
+  const [customAspectHeight, setCustomAspectHeight] = useState('1')
   const [mediaKind, setMediaKind] = useState<'choose' | 'image'>('choose')
   const [imageModelChosen, setImageModelChosen] = useState(false)
   const [panelWidth, setPanelWidth] = useState(getInitialAgentPanelWidth)
@@ -270,6 +273,13 @@ export function AgentPanel(props: Props) {
     imageSettingLabel(props.detailOptions, props.imageDefaults.detail),
     `${props.imageDefaults.count}张`,
   ].join(' · ')
+  const applyCustomAspectRatio = () => {
+    const width = Number(customAspectWidth)
+    const height = Number(customAspectHeight)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
+    props.onImageDefaultsChange({ aspectRatio: `${Math.round(width * 100) / 100}:${Math.round(height * 100) / 100}` })
+    setCustomAspectRatioOpen(false)
+  }
 
   useEffect(() => {
     if (!previewResult) return
@@ -998,7 +1008,19 @@ export function AgentPanel(props: Props) {
             <header><strong>图像参数</strong><button type="button" className="agent-parameter-close" onClick={() => setImageSettingsOpen(false)} title="关闭图像参数" aria-label="关闭图像参数"><X size={16} strokeWidth={1.8} /></button></header>
             <div className="agent-image-parameter-section"><span>画质</span><div>{props.detailOptions.map((option) => <button type="button" className={props.imageDefaults.detail === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ detail: option.value })}>{option.label}</button>)}</div></div>
             <div className="agent-image-parameter-section"><span>清晰度</span><div>{props.resolutionOptions.map((option) => <button type="button" className={props.imageDefaults.resolution === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ resolution: option.value })}>{option.label}</button>)}</div></div>
-            <div className="agent-image-parameter-section is-aspect"><span>比例</span><div>{props.aspectOptions.map((option) => <button type="button" data-aspect={option.value} className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" />{option.label}</button>)}</div></div>
+            <div className="agent-image-parameter-section is-aspect">
+              <span>比例</span>
+              <div>
+                {props.aspectOptions.map((option) => <button type="button" data-aspect={option.value} className={props.imageDefaults.aspectRatio === option.value ? 'is-selected' : ''} key={option.value} onClick={() => props.onImageDefaultsChange({ aspectRatio: option.value })}><i aria-hidden="true" /><span>{option.label}</span></button>)}
+                <button type="button" className={`is-custom ${customAspectRatioOpen ? 'is-selected' : ''}`} onClick={() => setCustomAspectRatioOpen((open) => !open)}><i aria-hidden="true">+</i><span>自定义</span></button>
+              </div>
+              {customAspectRatioOpen && <form className="agent-custom-aspect-ratio" onSubmit={(event) => { event.preventDefault(); applyCustomAspectRatio() }}>
+                <label>宽<input aria-label="自定义比例宽度" inputMode="decimal" min="0.01" step="0.01" type="number" value={customAspectWidth} onChange={(event) => setCustomAspectWidth(event.target.value)} /></label>
+                <span>:</span>
+                <label>高<input aria-label="自定义比例高度" inputMode="decimal" min="0.01" step="0.01" type="number" value={customAspectHeight} onChange={(event) => setCustomAspectHeight(event.target.value)} /></label>
+                <button type="submit">应用</button>
+              </form>}
+            </div>
             <div className="agent-image-parameter-section"><span>数量</span><div>{[1, 2, 3, 4].map((count) => <button type="button" className={props.imageDefaults.count === count ? 'is-selected' : ''} key={count} onClick={() => props.onImageDefaultsChange({ count })}>{count} 张</button>)}</div></div>
           </div>}
         </div>

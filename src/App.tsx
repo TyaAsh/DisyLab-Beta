@@ -12,6 +12,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 const LightingSpherePreview = lazy(() => import('./LightingSpherePreview'))
+const SvgMotionNode = lazy(() => import('./SvgMotionNode'))
+const WorkflowTemplatePanel = lazy(() => import('./WorkflowTemplatePanel').then((module) => ({ default: module.WorkflowTemplatePanel })))
 import {
   ArrowUp,
   ArrowUpRight,
@@ -50,10 +52,12 @@ import {
   Library,
   Lightbulb,
   List,
+  ListChecks,
   ListOrdered,
   Lock,
   LoaderCircle,
   Maximize2,
+  MoreHorizontal,
   Minus,
   MessageCircle,
   Music2,
@@ -83,6 +87,7 @@ import {
   PlugZap,
   RefreshCw,
   WalletCards,
+  Activity,
 } from 'lucide-react'
 import {
   Background,
@@ -111,14 +116,18 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability, type ModelSelection } from './store'
-import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, mergeWorkspaceIntoProject, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchProviderCredits, fetchProviderModelPrices, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory, type ProviderCredits, type ProviderModelPrice } from './imageApi'
 import { AgentPanel } from './AgentPanel'
-import { PromptLibraryPanel, type PromptLibraryCase } from './PromptLibraryPanel'
+import { useProjectDialog } from './ProjectDialog'
+import type { PromptLibraryCase } from './PromptLibraryPanel'
 import type { WorkflowTemplate } from './WorkflowTemplatePanel'
 import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
+import { DEFAULT_SVG_MOTION, type SvgMotionSettings } from './svgMotion'
+
+const PromptLibraryPanel = lazy(() => import('./PromptLibraryPanel').then((module) => ({ default: module.PromptLibraryPanel })))
 
 
 gsap.registerPlugin(useGSAP)
@@ -143,11 +152,13 @@ function pickValidSelections(connections: ApiConnection[], previous: { selectedT
   return { selectedTextModel, selectedImageModel }
 }
 
-type NodeKind = 'text' | 'image' | 'upload' | 'video' | 'group'
+type NodeKind = 'text' | 'image' | 'upload' | 'video' | 'svg-motion' | 'group'
 type CreatableNodeKind = Exclude<NodeKind, 'group'>
-type ImageAspectRatio = 'auto' | '1:1' | '2:1' | '4:3' | '3:4' | '5:4' | '4:5' | '3:2' | '2:3' | '16:9' | '9:16' | '21:9' | '9:21'
+type ImageAspectRatio = 'auto' | `${number}:${number}`
 type ImageResolution = '1K' | '2K' | '4K'
 type ImageDetail = 'low' | 'medium' | 'high'
+type StudioLight = { id: string; name: string; yaw: number; pitch: number; intensity: number; temperatureK: number; enabled: boolean }
+type StudioLighting = { exposure: number; lights: StudioLight[] }
 type GroupIconKey = 'folder' | 'hash' | 'palette' | 'camera' | 'heart' | 'star' | 'crown' | 'film' | 'music' | 'briefcase' | 'idea' | 'rocket' | 'shapes' | 'aperture'
 type TransferScope = 'workspace-append' | 'project-replace'
 type ImageReference = {
@@ -219,6 +230,15 @@ type CanvasNode = Node<{
   groupPreviewUrls?: string[]
   groupExpandedWidth?: number
   groupExpandedHeight?: number
+  gridSlices?: Array<{ id: string; url: string; title: string }>
+  gridColumns?: number
+  gridRows?: number
+  gridAspectRatio?: number
+  imageEditorHeight?: number
+  textEditorHeight?: number
+  svgSource?: string
+  svgSourceName?: string
+  svgMotion?: SvgMotionSettings
 }>
 
 type ActiveImageReference = Omit<ImageReference, 'url'> & {
@@ -299,8 +319,13 @@ function imageFileName(baseName: string, imageUrl: string) {
 const IMAGE_DETAIL_LABELS: Record<ImageDetail, string> = { low: '低画质', medium: '标准画质', high: '高画质' }
 
 function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
-  const option = IMAGE_ASPECT_OPTIONS.find((item) => item.value === aspectRatio) ?? IMAGE_ASPECT_OPTIONS[1]
-  const ratio = option.width / option.height
+  const option = IMAGE_ASPECT_OPTIONS.find((item) => item.value === aspectRatio)
+  const [customWidth, customHeight] = String(aspectRatio).split(':').map(Number)
+  const ratio = option
+    ? option.width / option.height
+    : Number.isFinite(customWidth) && Number.isFinite(customHeight) && customWidth > 0 && customHeight > 0
+      ? customWidth / customHeight
+      : 1
   const baseArea = 260 * 260
   let contentWidth = Math.sqrt(baseArea * ratio)
   let contentHeight = contentWidth / ratio
@@ -324,10 +349,11 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
 
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => void>(() => undefined)
+const NodeDataUpdateContext = createContext<(nodeId: string, patch: Partial<CanvasNode['data']>) => void>(() => undefined)
 const NodeImageUploadContext = createContext<(nodeId: string, file: File) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
-type ImageToolMode = 'grid' | 'expand' | 'studio' | 'local-edit' | 'cutout'
+type ImageToolMode = 'grid' | 'crop' | 'expand' | 'studio' | 'color' | 'local-edit' | 'cutout'
 const ImageToolOpenContext = createContext<(nodeId: string, mode: ImageToolMode) => void>(() => undefined)
 const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
 const GroupCollapseContext = createContext<(nodeId: string, collapsed: boolean) => void>(() => undefined)
@@ -1017,6 +1043,37 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         event.currentTarget.classList.toggle('is-empty', !nextValue.trim())
         onChange(nextValue, cursor)
       }}
+      onPaste={(event) => {
+        event.preventDefault()
+        const root = event.currentTarget
+        const plainText = event.clipboardData.getData('text/plain')
+        if (!plainText) return
+        const selection = window.getSelection()
+        if (!selection?.rangeCount) return
+        const range = selection.getRangeAt(0)
+        if (!root.contains(range.commonAncestorContainer)) return
+        range.deleteContents()
+        const textNode = document.createTextNode(plainText)
+        range.insertNode(textNode)
+        range.setStartAfter(textNode)
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
+        const nextValue = readAtomicPrompt(root)
+        const cursor = getAtomicPromptCaret(root)
+        lastCaretRef.current = cursor
+        lastEmittedValueRef.current = nextValue
+        root.classList.toggle('is-empty', !nextValue.trim())
+        onChange(nextValue, cursor)
+      }}
+      onDragOver={(event) => {
+        if (event.dataTransfer.files.length || event.dataTransfer.types.includes('text/html')) event.preventDefault()
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.files.length && !event.dataTransfer.types.includes('text/html')) return
+        event.preventDefault()
+        event.stopPropagation()
+      }}
       onClick={(event) => {
         lastCaretRef.current = getAtomicPromptCaret(event.currentTarget)
         const removeButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-remove-token-start]')
@@ -1482,9 +1539,10 @@ const NodeCard = memo(function NodeCard({
   width?: number
   height?: number
 }) {
-  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : data.kind === 'video' ? Film : WandSparkles
+  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : data.kind === 'video' ? Film : data.kind === 'svg-motion' ? Activity : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
   const updateNodeTitle = useContext(NodeTitleUpdateContext)
+  const updateNodeData = useContext(NodeDataUpdateContext)
   const uploadNodeImage = useContext(NodeImageUploadContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
@@ -1666,6 +1724,19 @@ const NodeCard = memo(function NodeCard({
     </>
   )
 
+  if (data.gridSlices?.length) {
+    return (
+      <div className={`disy-node grid-slice-node ${selected ? 'is-selected' : ''}`}>
+        <b className="grid-slice-count"><Grid3X3 size={11} />{data.gridSlices.length}</b>
+        <div className="grid-slice-board" style={{ gridTemplateColumns: `repeat(${data.gridColumns || 3}, minmax(0,1fr))`, gridTemplateRows: `repeat(${data.gridRows || 3}, minmax(0,1fr))` }}>
+          {data.gridSlices.map((slice, sliceIndex) => <div key={slice.id} className="grid-slice-tile nowheel" title="长按拖动整个节点；拖动“拖出”可拆出单张图片"><img src={slice.url} alt={slice.title} draggable={false} onLoad={(event) => { if (sliceIndex || data.gridAspectRatio) return; const image = event.currentTarget; const aspect = image.naturalWidth * (data.gridColumns || 1) / Math.max(1, image.naturalHeight * (data.gridRows || 1)); if (Number.isFinite(aspect) && aspect > 0) updateNodeData(id, { gridAspectRatio: aspect }) }} /><span className="grid-slice-drag-out nodrag nowheel" draggable onPointerDown={(event) => event.stopPropagation()} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('application/x-disy-grid-slice', JSON.stringify({ sliceId: slice.id, sourceNodeId: id })); }}><Upload size={12} />拖出</span></div>)}
+        </div>
+        <small>从任意格子拖到画布，即可创建独立图片</small>
+        {nodeHandles}
+      </div>
+    )
+  }
+
   if (data.kind === 'upload' && data.imageUrl) {
     const variantCount = data.imageVariants?.length ?? 0
     return (
@@ -1679,6 +1750,7 @@ const NodeCard = memo(function NodeCard({
             <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
             <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
             <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
+            <button type="button" title="调色" aria-label="调色" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'color') }}><Palette size={14} /></button>
             <button type="button" title="局部修改" aria-label="局部修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
             <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
           </div>
@@ -1715,7 +1787,7 @@ const NodeCard = memo(function NodeCard({
 
   return (
     <div
-      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'image' ? 'image-generation-node' : ''} ${data.kind === 'image' && isActivelyGenerating ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
+      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'svg-motion' ? 'svg-motion-node' : ''} ${data.kind === 'image' ? 'image-generation-node' : ''} ${data.kind === 'image' && isActivelyGenerating ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
       style={data.kind === 'text'
         ? { width: width || 275, height: height || 126 }
         : data.kind === 'image'
@@ -1741,7 +1813,11 @@ const NodeCard = memo(function NodeCard({
         {nodeTitle}
       </div>
 
-      {data.kind === 'upload' ? (
+      {data.kind === 'svg-motion' ? (
+        <Suspense fallback={<div className="svg-motion-loading"><LoaderCircle className="is-spinning" size={20} />加载动效编辑器…</div>}>
+          <SvgMotionNode title={getNodeDisplayTitle(data)} sourceSvg={data.svgSource} sourceName={data.svgSourceName} settings={data.svgMotion ?? DEFAULT_SVG_MOTION} onChange={(patch) => updateNodeData(id, { ...(patch.sourceSvg ? { svgSource: patch.sourceSvg } : {}), ...(patch.sourceName ? { svgSourceName: patch.sourceName } : {}), ...(patch.settings ? { svgMotion: patch.settings } : {}) })} onNotice={(message) => window.dispatchEvent(new CustomEvent('disy-motion-notice', { detail: message }))} />
+        </Suspense>
+      ) : data.kind === 'upload' ? (
         <label
           className={`upload-placeholder nowheel ${uploadDragging ? 'is-dragging' : ''}`}
           onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setUploadDragging(true) }}
@@ -1793,6 +1869,7 @@ const NodeCard = memo(function NodeCard({
                 <button type="button" title="自由宫格切分" aria-label="自由宫格切分" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'grid') }}><Grid3X3 size={14} /></button>
                 <button type="button" title="自由区域扩图" aria-label="自由区域扩图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'expand') }}><Expand size={14} /></button>
                 <button type="button" title="打光" aria-label="打光" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'studio') }}><Lightbulb size={14} /></button>
+                <button type="button" title="调色" aria-label="调色" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'color') }}><Palette size={14} /></button>
                 <button type="button" title="局部修改" aria-label="局部修改" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'local-edit') }}><MessageCircle size={14} /></button>
                 <button type="button" title="免费本地抠图" aria-label="免费本地抠图" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); openImageTool(id, 'cutout') }}><Scissors size={14} /></button>
               </div>
@@ -1888,6 +1965,7 @@ const nodeTypes = {
 }
 
 function App() {
+  const { confirm: projectConfirm, dialogNode: projectDialogNode } = useProjectDialog()
   const {
     apiConfigured,
     apiSettings,
@@ -1906,7 +1984,12 @@ function App() {
   const [expandSize, setExpandSize] = useState({ width: 1024, height: 1024 })
   const [expandRatio, setExpandRatio] = useState<'original' | ImageAspectRatio | 'custom'>('original')
   const [expandPrompt, setExpandPrompt] = useState('延展画面，保持主体、光线、材质与透视自然连续。')
-  const [studioLighting, setStudioLighting] = useState({ yaw: 0, pitch: 0, intensity: 50, temperatureK: 5600, fill: true, rim: false, rimStrength: 20 })
+  const [studioLighting, setStudioLighting] = useState<StudioLighting>({ exposure: 50, lights: [{ id: 'key', name: '主光源', yaw: -40, pitch: 8, intensity: 70, temperatureK: 5600, enabled: true }] })
+  const [activeStudioLightId, setActiveStudioLightId] = useState('key')
+  const [colorAdjustments, setColorAdjustments] = useState({ exposure: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, highlights: 0, shadows: 0 })
+  const [cropRect, setCropRect] = useState({ x: 10, y: 10, width: 80, height: 80 })
+  const [imageMoreMenuNodeId, setImageMoreMenuNodeId] = useState<string | null>(null)
+  const [quickSplitGrid, setQuickSplitGrid] = useState({ columns: 3, rows: 3 })
   const [lightingView, setLightingView] = useState<'perspective' | 'front'>('front')
   const [localEditMarks, setLocalEditMarks] = useState<Array<{ id: string; x: number; y: number; prompt: string }>>([])
   const [cutoutProgress, setCutoutProgress] = useState<{ stage: string; progress?: number; detail?: string; failed?: boolean } | null>(null)
@@ -1956,6 +2039,9 @@ function App() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const [imageModelMenuOpen, setImageModelMenuOpen] = useState(false)
   const [imageParameterMenuOpen, setImageParameterMenuOpen] = useState(false)
+  const [customAspectRatioOpen, setCustomAspectRatioOpen] = useState(false)
+  const [customAspectWidth, setCustomAspectWidth] = useState('1')
+  const [customAspectHeight, setCustomAspectHeight] = useState('1')
   const [imageMentionOpen, setImageMentionOpen] = useState(false)
   const [imageMentionQuery, setImageMentionQuery] = useState('')
   const [imageMentionIndex, setImageMentionIndex] = useState(0)
@@ -1974,6 +2060,11 @@ function App() {
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferScope, setTransferScope] = useState<TransferScope>('project-replace')
   const [transferDropActive, setTransferDropActive] = useState(false)
+  const [projectExportPickerOpen, setProjectExportPickerOpen] = useState(false)
+  const [exportProjectIds, setExportProjectIds] = useState<string[]>([])
+  const [canvasExportPickerOpen, setCanvasExportPickerOpen] = useState(false)
+  const [exportCanvasIds, setExportCanvasIds] = useState<string[]>([])
+  const [projectImportMode, setProjectImportMode] = useState<'replace' | 'merge'>('merge')
   const [hasImportBackup, setHasImportBackup] = useState(false)
   const transferBusy = Boolean(transferProgress)
   const [showGrid, setShowGrid] = useState(true)
@@ -2141,6 +2232,7 @@ function App() {
   const [apiError, setApiError] = useState('')
   const [apiAlert, setApiAlert] = useState<string | null>(null)
   const [providerCreditsByConnection, setProviderCreditsByConnection] = useState<Record<string, ProviderCredits>>({})
+  const [connectionHealthByConnection, setConnectionHealthByConnection] = useState<Record<string, 'checking' | 'online' | 'offline'>>({})
   const [providerPricesByConnection, setProviderPricesByConnection] = useState<Record<string, Record<string, ProviderModelPrice>>>({})
   const [creditsLoading, setCreditsLoading] = useState(false)
   const [creditsError, setCreditsError] = useState('')
@@ -2159,6 +2251,7 @@ function App() {
   const apiKeyInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
   const providerCreditsAttemptedRef = useRef(new Set<string>())
+  const providerCreditsSyncingRef = useRef(false)
   const providerPricesAttemptedRef = useRef(new Set<string>())
   const canvasNameInputRef = useRef<HTMLInputElement>(null)
   const styleReferenceInputRef = useRef<HTMLInputElement>(null)
@@ -2237,7 +2330,7 @@ function App() {
     generationTaskStopReasonRef.current.delete(taskKey)
     setActiveGenerationTaskKeys(new Set(generationTaskControllersRef.current.keys()))
   }
-  const interruptGenerationTask = (nodeId: string, mode: 'paused' | 'stopped') => {
+  const interruptGenerationTask = async (nodeId: string, mode: 'paused' | 'stopped') => {
     const taskKey = `image:${nodeId}`
     const controller = generationTaskControllersRef.current.get(taskKey)
     if (!controller) {
@@ -2246,7 +2339,7 @@ function App() {
       return
     }
     const action = mode === 'paused' ? '暂停' : '停止'
-    if (!window.confirm(`${action}只能终止 Disy 当前的等待和尚未发送的后续请求。\n\n已经提交给服务商的图片仍可能继续生成并扣除积分，无法保证退款或不扣费。确认${action}吗？`)) return
+    if (!await projectConfirm({ title: `确认${action}生成任务？`, message: `${action}只能终止 Disy 当前的等待和尚未发送的后续请求。\n\n已经提交给服务商的图片仍可能继续生成并扣除积分，无法保证退款或不扣费。`, confirmLabel: `确认${action}`, danger: mode === 'stopped' })) return
     generationTaskStopReasonRef.current.set(taskKey, mode)
     controller.abort()
     setNodes((current) => current.map((node) => node.id === nodeId
@@ -2260,33 +2353,11 @@ function App() {
 
   useEffect(() => {
     if (reduceMotion || !shellRef.current) return
-
-    let animationContext: { revert: () => void } | undefined
-    let disposed = false
-
-    void import('gsap').then(({ default: gsap }) => {
-      if (disposed || !shellRef.current) return
-      animationContext = gsap.context(() => {
-        gsap.from('.floating-chrome', {
-          y: -8,
-          autoAlpha: 0,
-          duration: 0.42,
-          stagger: 0.05,
-          ease: 'power2.out',
-        })
-        gsap.from('.tool-rail', {
-          x: -10,
-          autoAlpha: 0,
-          duration: 0.46,
-          ease: 'power2.out',
-        })
-      }, shellRef)
-    })
-
-    return () => {
-      disposed = true
-      animationContext?.revert()
-    }
+    const animationContext = gsap.context(() => {
+      gsap.from('.floating-chrome', { y: -8, autoAlpha: 0, duration: .42, stagger: .05, ease: 'power2.out' })
+      gsap.from('.tool-rail', { x: -10, autoAlpha: 0, duration: .46, ease: 'power2.out' })
+    }, shellRef)
+    return () => animationContext.revert()
   }, [reduceMotion])
 
   useEffect(() => {
@@ -2317,6 +2388,27 @@ function App() {
       window.removeEventListener('keydown', onKeyDown)
       apiButtonRef.current?.focus()
     }
+  }, [apiOpen, apiSettings.connections, editingConnectionId])
+
+  useEffect(() => {
+    if (!apiOpen || editingConnectionId === 'new') return
+    const connection = apiSettings.connections.find((item) => item.id === editingConnectionId)
+    if (!connection) return
+    if (!connection.apiKey.trim() || !connection.baseUrl.trim()) {
+      setConnectionHealthByConnection((current) => ({ ...current, [connection.id]: 'offline' }))
+      return
+    }
+    if (connection.disconnected) return
+    let cancelled = false
+    setConnectionHealthByConnection((current) => ({ ...current, [connection.id]: 'checking' }))
+    void validateApiCredentials({ baseUrl: connection.baseUrl, apiKey: connection.apiKey })
+      .then(() => {
+        if (!cancelled) setConnectionHealthByConnection((current) => ({ ...current, [connection.id]: 'online' }))
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionHealthByConnection((current) => ({ ...current, [connection.id]: 'offline' }))
+      })
+    return () => { cancelled = true }
   }, [apiOpen, apiSettings.connections, editingConnectionId])
 
   useEffect(() => {
@@ -2690,6 +2782,56 @@ function App() {
     if (!apiOpen || !hasCredential || (cached && cached.amount >= 0) || creditsLoading || providerCreditsAttemptedRef.current.has(creditKey)) return
     void refreshProviderCredits()
   }, [apiDraft.apiKey, apiDraft.balanceToken, apiDraft.baseUrl, apiOpen, apiSettings.connections, creditsLoading, editingConnectionId, providerCreditsByConnection, refreshProviderCredits])
+
+  useEffect(() => {
+    let disposed = false
+    let lastSyncAt = 0
+    const syncSavedProviderCredits = async () => {
+      const now = Date.now()
+      if (providerCreditsSyncingRef.current || document.visibilityState === 'hidden' || now - lastSyncAt < 2_000) return
+      const supportedConnections = apiSettings.connections.filter((connection) => {
+        const supportsBalance = /(?:grsaiapi\.com|grsai\.dakka\.com\.cn|api\.apiyi\.com|apiyi\.com|api\.apimart\.ai|apimart\.ai)/i.test(connection.baseUrl)
+        const hasCredential = /(?:api\.apiyi\.com|apiyi\.com)/i.test(connection.baseUrl)
+          ? Boolean(connection.balanceToken?.trim())
+          : Boolean(connection.apiKey.trim())
+        return supportsBalance && hasCredential
+      })
+      if (!supportedConnections.length) return
+      lastSyncAt = now
+      providerCreditsSyncingRef.current = true
+      try {
+        const results = await Promise.allSettled(supportedConnections.map(async (connection) => ({
+          id: connection.id,
+          credits: await fetchProviderCredits({
+            baseUrl: connection.baseUrl,
+            apiKey: connection.apiKey,
+            balanceToken: connection.balanceToken,
+          }),
+        })))
+        if (disposed) return
+        setProviderCreditsByConnection((current) => {
+          const next = { ...current }
+          results.forEach((result) => {
+            if (result.status === 'fulfilled' && result.value.credits) next[result.value.id] = result.value.credits
+          })
+          return next
+        })
+      } finally {
+        providerCreditsSyncingRef.current = false
+      }
+    }
+    void syncSavedProviderCredits()
+    const timer = window.setInterval(() => void syncSavedProviderCredits(), 15_000)
+    const handleFocus = () => void syncSavedProviderCredits()
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleFocus)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleFocus)
+    }
+  }, [apiSettings.connections])
 
   useEffect(() => {
     apiSettings.connections.forEach((connection) => {
@@ -3367,12 +3509,14 @@ function App() {
       image: '图像',
       upload: '新上传',
       video: '视频（暂未开放）',
+      'svg-motion': 'SVG 动效',
     }
     const bodies: Record<CreatableNodeKind, string> = {
       text: '',
       image: '',
       upload: '上传一张参考图。',
       video: '保留首尾帧、时长、运镜与连续性说明；视频生成能力即将开放。',
+      'svg-motion': '上传 SVG 或使用示例图形创建轻量动效。',
     }
     const id = `${kind}-${Date.now()}`
     const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
@@ -3399,7 +3543,9 @@ function App() {
       ? { x: menuAnchor.x - 137.5, y: menuAnchor.y - 63 }
       : kind === 'image'
         ? { x: menuAnchor.x - imageSize.width / 2, y: menuAnchor.y - imageSize.height / 2 }
-        : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
+        : kind === 'svg-motion'
+          ? { x: menuAnchor.x - 170, y: menuAnchor.y - 235 }
+          : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
 
     const focusConnectedImage = Boolean(connectionSourceId && kind === 'image')
     setNodes((current) => [
@@ -3413,6 +3559,8 @@ function App() {
           ? { style: { width: 275, height: 126 } }
           : kind === 'image'
             ? { style: imageSize }
+            : kind === 'svg-motion'
+              ? { style: { width: 360, height: 660 } }
             : {}),
         data: {
           kind,
@@ -3423,6 +3571,7 @@ function App() {
             status: '待生成',
             ...inheritedImageOptions,
           } : {}),
+          ...(kind === 'svg-motion' ? { svgMotion: DEFAULT_SVG_MOTION } : {}),
         },
       },
     ])
@@ -3460,6 +3609,11 @@ function App() {
     createNode(kind, { x: center.x - 138, y: center.y - 72 })
   }
 
+  const showVideoGenerationUnavailable = () => {
+    closeNodeMenu()
+    setToastMessage('视频生成功能暂未开放，敬请期待')
+  }
+
   const createAgentTextNode = (content: string, title = 'Agent 文本') => {
     const body = content.trim()
     if (!body) return null
@@ -3486,20 +3640,13 @@ function App() {
     return id
   }
 
-  const openCenteredNodeMenu = () => {
-    const x = window.innerWidth / 2
-    const y = window.innerHeight / 2 + 28
-    const flowPosition = screenToFlowPosition({ x, y })
-    setNodeMenu({ x: x - 119, y, flowX: flowPosition.x, flowY: flowPosition.y })
-  }
-
   const openNodeMenu = (event: React.MouseEvent | MouseEvent) => {
     event.preventDefault()
     closeContextMenu()
     const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
     setNodeMenu({
       x: Math.max(12, Math.min(event.clientX, window.innerWidth - 250)),
-      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 238)),
+      y: Math.max(12, Math.min(event.clientY, window.innerHeight - 292)),
       flowX: flowPosition.x,
       flowY: flowPosition.y,
     })
@@ -3510,7 +3657,7 @@ function App() {
     const rect = nodeMenuButtonRef.current?.getBoundingClientRect()
     if (!rect) return
     const menuWidth = 238
-    const menuHeight = 226
+    const menuHeight = 280
     const x = Math.min(rect.right + 12, window.innerWidth - menuWidth - 12)
     const y = Math.max(12, Math.min(rect.top - 6, window.innerHeight - menuHeight - 12))
     const flowPosition = screenToFlowPosition({
@@ -3568,6 +3715,28 @@ function App() {
       ? { ...node, data: { ...node.data, title } }
       : node))
   }, [setNodes])
+
+  const updateNodeData = useCallback((nodeId: string, patch: Partial<CanvasNode['data']>) => {
+    setNodes((current) => current.map((node) => node.id === nodeId
+      ? {
+          ...node,
+          ...(patch.gridAspectRatio ? {
+            style: {
+              ...node.style,
+              width: node.measured?.width || Number(node.style?.width) || 280,
+              height: (node.measured?.width || Number(node.style?.width) || 280) / patch.gridAspectRatio + 36,
+            },
+          } : {}),
+          data: { ...node.data, ...patch },
+        }
+      : node))
+  }, [setNodes])
+
+  useEffect(() => {
+    const showMotionNotice = (event: Event) => setToastMessage((event as CustomEvent<string>).detail)
+    window.addEventListener('disy-motion-notice', showMotionNotice)
+    return () => window.removeEventListener('disy-motion-notice', showMotionNotice)
+  }, [])
 
   const uploadImageToNode = useCallback((nodeId: string, file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -4001,11 +4170,11 @@ function App() {
     setApiError('')
   }
 
-  const removeCurrentApiConnection = () => {
+  const removeCurrentApiConnection = async () => {
     if (editingConnectionId === 'new') return
     const target = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
     if (!target) return
-    const confirmed = window.confirm(`确认删除连接“${target.name}”？\n\n此操作会同时移除该连接下已获取的模型列表，且不可撤销。`)
+    const confirmed = await projectConfirm({ title: '删除 API 连接？', message: `将删除连接“${target.name}”及该连接下已获取的模型列表，此操作不可撤销。`, confirmLabel: '确认删除', danger: true })
     if (!confirmed) return
     const connections = apiSettings.connections.filter((connection) => connection.id !== editingConnectionId)
     const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
@@ -4030,13 +4199,11 @@ function App() {
     setToastMessage(turningOn ? '已启用该连接，其模型可参与选择' : '已停用该连接，其模型不再参与选择')
   }
 
-  const disconnectCurrentApiConnection = () => {
+  const disconnectCurrentApiConnection = async () => {
     if (editingConnectionId === 'new') return
     const target = apiSettings.connections.find((connection) => connection.id === editingConnectionId)
     if (!target) return
-    const confirmed = window.confirm(
-      `确认断开连接“${target.name}”？\n\n断开后，该连接的所有模型会立即从节点选择器中隐藏。API Key 和已获取的模型目录仍会保留，之后可以重新连接。`,
-    )
+    const confirmed = await projectConfirm({ title: '断开 API 连接？', message: `断开“${target.name}”后，该连接的所有模型会立即从节点选择器中隐藏。API Key 和已获取的模型目录仍会保留，之后可以重新连接。`, confirmLabel: '确认断开' })
     if (!confirmed) return
     const connections = apiSettings.connections.map((connection) =>
       connection.id === editingConnectionId
@@ -4051,16 +4218,28 @@ function App() {
     setToastMessage('连接已断开，相关模型已从节点中隐藏')
   }
 
-  const reconnectCurrentApiConnection = () => {
+  const reconnectCurrentApiConnection = async () => {
     if (editingConnectionId === 'new') return
-    const connections = apiSettings.connections.map((connection) =>
-      connection.id === editingConnectionId
-        ? { ...connection, disconnected: false }
-        : connection,
-    )
-    const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
-    saveApiSettings({ connections, selectedTextModel, selectedImageModel })
-    setToastMessage('连接已恢复，相关模型可重新使用')
+    if (!apiDraft.baseUrl.trim() || !apiDraft.apiKey.trim()) {
+      showApiAlert('API Key 已缺失，请重新填写后再连接')
+      return
+    }
+    setConnectionHealthByConnection((current) => ({ ...current, [editingConnectionId]: 'checking' }))
+    try {
+      await validateApiCredentials({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
+      const connections = apiSettings.connections.map((connection) =>
+        connection.id === editingConnectionId
+          ? { ...connection, baseUrl: apiDraft.baseUrl.trim().replace(/\/$/, ''), apiKey: apiDraft.apiKey.trim(), disconnected: false }
+          : connection,
+      )
+      const { selectedTextModel, selectedImageModel } = pickValidSelections(connections, apiSettings)
+      saveApiSettings({ connections, selectedTextModel, selectedImageModel })
+      setConnectionHealthByConnection((current) => ({ ...current, [editingConnectionId]: 'online' }))
+      setToastMessage('凭据验证成功，连接已恢复')
+    } catch (error) {
+      setConnectionHealthByConnection((current) => ({ ...current, [editingConnectionId]: 'offline' }))
+      showApiAlert(error instanceof Error ? error.message : '连接验证失败，请检查 API Key')
+    }
   }
 
   const changeCanvasZoom = (value: number) => {
@@ -4340,7 +4519,7 @@ function App() {
       setToastMessage('Agent 正在处理，完成后再删除对话')
       return
     }
-    if (!window.confirm('确认删除当前对话？')) return
+    if (!await projectConfirm({ title: '删除当前对话？', message: '删除后将无法恢复这段对话及其中尚未保存的计划。', confirmLabel: '确认删除', danger: true })) return
     if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
     agentSaveTimerRef.current = null
     await deleteAgentSession(agentConversationId)
@@ -4376,7 +4555,7 @@ function App() {
     }
     const canvas = workspaceCanvases.find((item) => item.id === canvasId)
     if (!canvas || workspaceCanvases.length <= 1) return
-    if (!window.confirm(`确认删除画布“${canvas.name}”？此操作不可撤销。`)) return
+    if (!await projectConfirm({ title: '删除画布？', message: `画布“${canvas.name}”及其中的节点和连接将被永久删除。`, confirmLabel: '确认删除', danger: true })) return
     const nextProject = await deleteWorkspaceCanvas(activeProjectId, canvasId)
     const nextCanvases = workspaceCanvases.filter((item) => item.id !== canvasId)
     setWorkspaceCanvases(nextCanvases)
@@ -4531,7 +4710,7 @@ function App() {
       return
     }
     const project = workspaceProjects.find((item) => item.id === projectId)
-    if (!project || !window.confirm(`确认删除项目“${project.name}”及其全部画布？此操作不可撤销。`)) return
+    if (!project || !await projectConfirm({ title: '删除项目？', message: `项目“${project.name}”及其全部画布将被永久删除。`, confirmLabel: '确认删除', danger: true })) return
     const fallback = workspaceProjects.find((item) => item.id !== projectId)
     await deleteWorkspaceProject(projectId)
     const projects = await listWorkspaceProjects()
@@ -4555,7 +4734,7 @@ function App() {
     const message = deletingAll
       ? `确认删除全部 ${ids.length} 个项目及其所有画布吗？此操作不可撤销。`
       : `确认删除选中的 ${ids.length} 个项目及其所有画布吗？此操作不可撤销。`
-    if (!window.confirm(message)) return
+    if (!await projectConfirm({ title: deletingAll ? '删除全部项目？' : '删除所选项目？', message, confirmLabel: '确认删除', danger: true })) return
     await Promise.all(ids.map((id) => deleteWorkspaceProject(id)))
     const deleted = new Set(ids)
     const projects = await listWorkspaceProjects()
@@ -4576,15 +4755,25 @@ function App() {
     setToastMessage(deletingAll ? '全部项目已删除' : `已删除 ${ids.length} 个项目`)
   }
 
-  const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean; scope?: 'workspace' | 'project' }) => {
+  const exportWholeWorkspace = async (options?: { asBackup?: boolean; manageProgress?: boolean; scope?: 'workspace' | 'projects' | 'canvases'; projectIds?: string[]; canvasIds?: string[] }) => {
     const asBackup = Boolean(options?.asBackup)
     const manageProgress = options?.manageProgress ?? true
-    const scope = asBackup ? 'workspace' : options?.scope ?? 'workspace'
-    const exportingProject = scope === 'project'
+    const scope = options?.scope ?? 'workspace'
+    const exportingProjects = scope === 'projects'
+    const exportingCanvases = scope === 'canvases'
+    const selectedProjectIds = exportingProjects ? [...new Set(options?.projectIds ?? [activeProjectId])] : exportingCanvases ? [activeProjectId] : []
+    const selectedCanvasIds = exportingCanvases ? [...new Set(options?.canvasIds ?? [])] : []
     const date = new Date().toISOString().slice(0, 10)
-    const safeProjectName = projectName.trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || '当前项目'
-    const fileName = exportingProject
-      ? `DisyLab-${safeProjectName}-${date}.disy`
+    const selectedProjectName = selectedProjectIds.length === 1
+      ? workspaceProjects.find((project) => project.id === selectedProjectIds[0])?.name ?? projectName
+      : projectName
+    const safeProjectName = selectedProjectName.trim().replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || '当前项目'
+    const fileName = exportingCanvases
+      ? `DisyLab-${safeProjectName}-${selectedCanvasIds.length}张画布-${date}.disy`
+      : exportingProjects
+      ? selectedProjectIds.length === 1
+        ? `DisyLab-${safeProjectName}-${date}.disy`
+        : `DisyLab-${selectedProjectIds.length}个项目-${date}.disy`
       : `DisyLab-完整工作区-${date}.disy`
     type SaveFileHandle = { createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> }
     const savePicker = (window as Window & {
@@ -4636,21 +4825,42 @@ function App() {
       // media refs before JSON.stringify — never clone the fat graph first.
       setTransferProgress(asBackup ? '正在写入备份包…' : '正在打包项目数据…')
       const snapshot = await exportWorkspaceSnapshot()
-      if (exportingProject) {
-        const project = snapshot.projects.find((item) => item.id === activeProjectId)
-        if (!project) throw new Error('当前项目不存在，无法导出')
-        snapshot.projects = [project]
-        snapshot.canvases = snapshot.canvases.filter((canvas) => canvas.projectId === activeProjectId)
-        snapshot.agentSessions = snapshot.agentSessions.filter((session) => session.projectId === activeProjectId)
-        const belongsToCurrentProject = (value: unknown) => {
+      if (exportingProjects) {
+        if (!selectedProjectIds.length) throw new Error('请至少选择一个项目')
+        const selected = new Set(selectedProjectIds)
+        snapshot.projects = snapshot.projects.filter((item) => selected.has(item.id))
+        if (snapshot.projects.length !== selected.size) throw new Error('部分所选项目不存在，请刷新工作空间后重试')
+        snapshot.canvases = snapshot.canvases.filter((canvas) => selected.has(canvas.projectId))
+        snapshot.agentSessions = snapshot.agentSessions.filter((session) => selected.has(session.projectId))
+        const belongsToSelectedProjects = (value: unknown) => {
           if (!value || typeof value !== 'object') return false
           const projectId = (value as Record<string, unknown>).projectId
-          return projectId === activeProjectId || (!projectId && activeProjectId === CURRENT_PROJECT_ID)
+          return (typeof projectId === 'string' && selected.has(projectId))
+            || (!projectId && selected.has(activeProjectId) && activeProjectId === CURRENT_PROJECT_ID)
         }
-        snapshot.generationHistory = snapshot.generationHistory.filter(belongsToCurrentProject)
-        snapshot.outputHistory = snapshot.outputHistory.filter(belongsToCurrentProject)
+        snapshot.generationHistory = snapshot.generationHistory.filter(belongsToSelectedProjects)
+        snapshot.outputHistory = snapshot.outputHistory.filter(belongsToSelectedProjects)
         // Assets and folders are currently shared across projects and have no
         // projectId. Keep them so a scoped export never drops source material.
+      }
+      if (exportingCanvases) {
+        if (!selectedCanvasIds.length) throw new Error('请至少选择一张画布')
+        const selected = new Set(selectedCanvasIds)
+        const project = snapshot.projects.find((item) => item.id === activeProjectId)
+        if (!project) throw new Error('当前项目不存在，无法导出')
+        const canvases = snapshot.canvases.filter((canvas) => canvas.projectId === activeProjectId && selected.has(canvas.id))
+        if (canvases.length !== selected.size) throw new Error('部分所选画布不存在，请刷新项目后重试')
+        const exportedCanvasIds = new Set(canvases.map((canvas) => canvas.id))
+        snapshot.projects = [{ ...project, canvasIds: [...exportedCanvasIds], activeCanvasId: exportedCanvasIds.has(project.activeCanvasId) ? project.activeCanvasId : canvases[0].id }]
+        snapshot.canvases = canvases
+        snapshot.agentSessions = snapshot.agentSessions.filter((session) => session.projectId === activeProjectId && exportedCanvasIds.has(session.canvasId))
+        const belongsToSelectedCanvases = (value: unknown) => {
+          if (!value || typeof value !== 'object') return false
+          const record = value as Record<string, unknown>
+          return record.projectId === activeProjectId && (typeof record.canvasId !== 'string' || exportedCanvasIds.has(record.canvasId))
+        }
+        snapshot.generationHistory = snapshot.generationHistory.filter(belongsToSelectedCanvases)
+        snapshot.outputHistory = snapshot.outputHistory.filter(belongsToSelectedCanvases)
       }
       const manifest = snapshot as unknown as Record<string, unknown>
       delete manifest.historyMedia
@@ -4802,14 +5012,14 @@ function App() {
       let recoverySnapshot: Awaited<ReturnType<typeof exportWorkspaceSnapshot>> | undefined
       let recoveryHistoryMedia: Awaited<ReturnType<typeof listHistoryMedia>> | undefined
       if (currentProjectHasCanvasContent) {
-        const shouldCreateBackup = window.confirm('检测到当前项目已有内容。是否先导出当前项目备份再覆盖？\n\n选择“确定”备份；选择“取消”表示不备份。')
+        const shouldCreateBackup = await projectConfirm({ title: '替换前备份当前项目？', message: '检测到当前项目已有内容。建议先导出一份当前项目备份，再继续覆盖。', confirmLabel: '备份并继续', cancelLabel: '不备份' })
         if (shouldCreateBackup) {
           setTransferProgress('正在备份当前项目…')
-          await exportWholeWorkspace({ scope: 'project', asBackup: true, manageProgress: false })
+          await exportWholeWorkspace({ scope: 'projects', projectIds: [activeProjectId], asBackup: true, manageProgress: false })
           recoverySnapshot = await exportWorkspaceSnapshot()
           recoveryHistoryMedia = await listHistoryMedia()
         } else {
-          const confirmedOverwrite = window.confirm('你选择了不备份。继续导入只会覆盖当前项目，当前项目中的画布、节点和对话将无法恢复。\n\n请再次确认：确定覆盖当前项目吗？')
+          const confirmedOverwrite = await projectConfirm({ title: '不备份并覆盖当前项目？', message: '当前项目中的画布、节点和对话将被导入内容替换，并且无法恢复。其他项目不会受到影响。', confirmLabel: '确认覆盖', cancelLabel: '返回', danger: true })
           if (!confirmedOverwrite) {
             // `replaceWorkspace` is intentionally below both confirmation
             // gates, so cancelling here leaves IndexedDB and the canvas intact.
@@ -4841,7 +5051,7 @@ function App() {
 
   const restoreLastImportBackup = async () => {
     if (transferBusy || !hasImportBackup) return
-    if (!window.confirm('确认恢复最近一次导入前的完整工作区？当前内容会被替换。')) return
+    if (!await projectConfirm({ title: '恢复导入前版本？', message: '当前工作区内容将被最近一次导入前的恢复点替换。', confirmLabel: '确认恢复', danger: true })) return
     setTransferProgress('正在恢复导入前版本…')
     try {
       await restoreWorkspaceImportBackup()
@@ -5086,6 +5296,17 @@ function App() {
   const activeImageAspectRatio = activeGenerationNode?.data.imageAspectRatio ?? '1:1'
   const activeImageResolution = activeGenerationNode?.data.imageResolution ?? '1K'
   const activeImageDetail = activeGenerationNode?.data.imageDetail ?? 'medium'
+  const applyCustomImageAspectRatio = () => {
+    const width = Number(customAspectWidth)
+    const height = Number(customAspectHeight)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      setToastMessage('请输入大于 0 的宽高数值')
+      return
+    }
+    const ratio = `${Math.round(width * 100) / 100}:${Math.round(height * 100) / 100}` as ImageAspectRatio
+    updateActiveImageOptions({ imageAspectRatio: ratio })
+    setCustomAspectRatioOpen(false)
+  }
   const updateActiveImageOptions = (patch: Partial<Pick<CanvasNode['data'], 'imageAspectRatio' | 'imageResolution' | 'imageDetail'>>) => {
     if (!activeGenerationNode) return
     const nextAspectRatio = patch.imageAspectRatio ?? activeImageAspectRatio
@@ -5105,9 +5326,8 @@ function App() {
           window.requestAnimationFrame(() => measureNodeOverlay(nodeId))
           return
         }
-        void import('gsap').then(({ default: gsap }) => {
-          aspectTweenRef.current?.kill()
-          aspectTweenRef.current = gsap.fromTo(
+        aspectTweenRef.current?.kill()
+        aspectTweenRef.current = gsap.fromTo(
             content,
             { scale: 0.975, opacity: 0.72 },
             {
@@ -5124,7 +5344,6 @@ function App() {
               },
             },
           )
-        })
       })
     }
   }
@@ -5399,6 +5618,9 @@ function App() {
     }
     image.src = node.data.imageUrl
     if (mode === 'local-edit') setLocalEditMarks([])
+    if (mode === 'color') setColorAdjustments({ exposure: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, highlights: 0, shadows: 0 })
+    if (mode === 'crop') setCropRect({ x: 10, y: 10, width: 80, height: 80 })
+    setImageMoreMenuNodeId(null)
     setImageTool({ nodeId, mode })
   }, [nodes])
 
@@ -5437,14 +5659,82 @@ function App() {
     try {
       const image = new Image(); image.crossOrigin = 'anonymous'
       await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source.data.imageUrl! })
+      const slices: NonNullable<CanvasNode['data']['gridSlices']> = []
       let index = 0
       for (let row = 0; row < y.length - 1; row += 1) for (let column = 0; column < x.length - 1; column += 1) {
         const result = await cropImageToDataUrl(source.data.imageUrl, x[column] * image.naturalWidth, y[row] * image.naturalHeight, (x[column + 1] - x[column]) * image.naturalWidth, (y[row + 1] - y[row]) * image.naturalHeight)
-        createDerivedImage(source.id, result, `${getNodeDisplayTitle(source.data)} · 宫格 ${row + 1}-${column + 1}`, `grid-${++index}`)
+        slices.push({ id: `slice-${crypto.randomUUID()}`, url: result, title: `${getNodeDisplayTitle(source.data)} · ${row + 1}-${column + 1}` })
+        index += 1
       }
-      setImageTool(null); setToastMessage(`已切分为 ${index} 张图片`)
+      const id = `grid-slice-${crypto.randomUUID()}`
+      const columns = x.length - 1, rows = y.length - 1
+      const aspect = image.naturalWidth / image.naturalHeight
+      const previewWidth = Math.max(280, columns * 92)
+      setNodes((current) => [...current, { id, type: 'disy', position: { x: source.position.x + 340, y: source.position.y }, style: { width: previewWidth, height: previewWidth / aspect + 36 }, data: { kind: 'upload', title: '开场分镜', body: '', status: `${index} 张切片`, gridSlices: slices, gridColumns: columns, gridRows: rows, gridAspectRatio: aspect, generationSourceNodeId: source.id } }])
+      setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }])
+      setImageTool(null); setToastMessage(`已生成 ${index} 格切分节点，可从格子拖出图片`)
     } catch { setToastMessage('当前图片不允许浏览器读取像素，请先下载后重新上传再切分') }
-  }, [createDerivedImage, cropImageToDataUrl, gridGuides, imageTool, nodes])
+  }, [cropImageToDataUrl, gridGuides, imageTool, nodes, setEdges, setNodes])
+
+  const applyQuickGridCut = useCallback(async (nodeId: string, columns: number, rows = columns, storyboard = false) => {
+    const source = nodes.find((node) => node.id === nodeId)
+    if (!source?.data.imageUrl) return
+    try {
+      const image = new Image(); image.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source.data.imageUrl! })
+      const slices: NonNullable<CanvasNode['data']['gridSlices']> = []
+      for (let row = 0; row < rows; row += 1) for (let column = 0; column < columns; column += 1) {
+        const url = await cropImageToDataUrl(source.data.imageUrl, column / columns * image.naturalWidth, row / rows * image.naturalHeight, image.naturalWidth / columns, image.naturalHeight / rows)
+        slices.push({ id: `slice-${crypto.randomUUID()}`, url, title: storyboard ? `镜头 ${row * columns + column + 1} · ${getNodeDisplayTitle(source.data)}` : `${getNodeDisplayTitle(source.data)} · ${row + 1}-${column + 1}` })
+      }
+      const id = `grid-slice-${crypto.randomUUID()}`
+      const aspect = image.naturalWidth / image.naturalHeight
+      const previewWidth = Math.max(280, columns * 92)
+      setNodes((current) => [...current, { id, type: 'disy', position: { x: source.position.x + 340, y: source.position.y }, style: { width: previewWidth, height: previewWidth / aspect + 36 }, data: { kind: 'upload', title: storyboard ? '分镜拆帧 · 连续镜头' : `${columns}×${rows} 快速切分`, body: storyboard ? '按阅读顺序拖出镜头；首帧、动作与光线连续性请继承上一镜。' : '', status: storyboard ? `${columns * rows} 个镜头 · 连续性已标记` : `${columns * rows} 张切片`, gridSlices: slices, gridColumns: columns, gridRows: rows, gridAspectRatio: aspect, generationSourceNodeId: source.id } }])
+      setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }])
+      setImageMoreMenuNodeId(null); setToastMessage(storyboard ? `已创建 ${columns * rows} 镜的分镜拆帧，可依次拖到画布继续制作` : `已完成 ${columns}×${rows} 本地快速切分`)
+    } catch { setToastMessage('当前图片不允许浏览器读取像素，请下载后重新上传再切分') }
+  }, [cropImageToDataUrl, nodes, setEdges, setNodes])
+
+  const applyLocalCrop = useCallback(async () => {
+    if (!imageTool) return
+    const source = nodes.find((node) => node.id === imageTool.nodeId)
+    if (!source?.data.imageUrl) return
+    try {
+      const image = new Image(); image.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source.data.imageUrl! })
+      const result = await cropImageToDataUrl(source.data.imageUrl, cropRect.x / 100 * image.naturalWidth, cropRect.y / 100 * image.naturalHeight, cropRect.width / 100 * image.naturalWidth, cropRect.height / 100 * image.naturalHeight)
+      createDerivedImage(source.id, result, `${getNodeDisplayTitle(source.data)} · 裁剪`, 'crop-local')
+      setImageTool(null); setToastMessage('裁剪已在本地完成，未消耗积分')
+    } catch { setToastMessage('当前图片不允许浏览器读取像素，请下载后重新上传再裁剪') }
+  }, [createDerivedImage, cropImageToDataUrl, cropRect, imageTool, nodes])
+
+  const applyLocalColor = useCallback(async () => {
+    if (!imageTool) return
+    const source = nodes.find((node) => node.id === imageTool.nodeId)
+    if (!source?.data.imageUrl) return
+    try {
+      const image = new Image(); image.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('图片无法读取')); image.src = source.data.imageUrl! })
+      const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d', { willReadFrequently: true })
+      if (!context) throw new Error('浏览器不支持图片处理')
+      context.filter = `brightness(${100 + colorAdjustments.exposure}%) contrast(${100 + colorAdjustments.contrast}%) saturate(${100 + colorAdjustments.saturation}%)`
+      context.drawImage(image, 0, 0)
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height)
+      const warm = colorAdjustments.temperature / 50, tint = colorAdjustments.tint / 50, highlights = colorAdjustments.highlights / 50, shadows = colorAdjustments.shadows / 50
+      for (let offset = 0; offset < pixels.data.length; offset += 4) {
+        const r = pixels.data[offset], g = pixels.data[offset + 1], b = pixels.data[offset + 2], luminance = (r + g + b) / 765
+        const shadowWeight = (1 - luminance) * shadows * 42, highlightWeight = luminance * highlights * 34
+        pixels.data[offset] = Math.max(0, Math.min(255, r + warm * 24 + tint * 12 + shadowWeight + highlightWeight))
+        pixels.data[offset + 1] = Math.max(0, Math.min(255, g - Math.abs(tint) * 4 + (tint < 0 ? -tint * 18 : 0) + shadowWeight + highlightWeight))
+        pixels.data[offset + 2] = Math.max(0, Math.min(255, b - warm * 24 + (tint > 0 ? tint * 12 : 0) + shadowWeight + highlightWeight))
+      }
+      context.filter = 'none'; context.putImageData(pixels, 0, 0)
+      createDerivedImage(source.id, canvas.toDataURL('image/png'), `${getNodeDisplayTitle(source.data)} · 调色`, 'color-local')
+      setImageTool(null); setToastMessage('调色已在本地完成，未消耗积分')
+    } catch { setToastMessage('当前图片不允许浏览器读取像素，请先下载后重新上传再调色') }
+  }, [colorAdjustments, createDerivedImage, imageTool, nodes])
 
   const applyLocalCutout = useCallback(() => {
     if (!imageTool) return
@@ -5643,6 +5933,41 @@ function App() {
       title: typeof parsed.title === 'string' ? parsed.title.trim() : undefined,
       nanoPrompt: parsed.nanoPrompt.trim(),
       gptImage2Prompt: parsed.gptImage2Prompt.trim(),
+    }
+  }
+
+  const mergeIntoCurrentProject = async (file: File) => {
+    if (destructiveWorkspaceMutationBlocked()) {
+      setToastMessage('正在生成内容，完成后才能合并项目')
+      return
+    }
+    if (transferBusy) {
+      setToastMessage('正在导入或导出，请稍候')
+      return
+    }
+    setTransferProgress('正在读取待合并项目包…')
+    try {
+      await saveCanvasState(canvasName, true)
+      const parsed = await parseWorkspaceImportFile(file)
+      setTransferProgress('正在合并画布、资产与历史…')
+      const merged = await mergeWorkspaceIntoProject(activeProjectId, parsed.snapshot, parsed.historyMediaRecords)
+      const [projects, canvases, assets, auxiliary] = await Promise.all([
+        listWorkspaceProjects(),
+        listWorkspaceCanvases(activeProjectId),
+        loadLocalAssets<SavedAsset>(),
+        loadWorkspaceAuxiliaryData(),
+      ])
+      setWorkspaceProjects(projects)
+      setWorkspaceCanvases(canvases)
+      if (assets) setSavedAssets(assets)
+      setAssetFolders(auxiliary.folders as AssetFolder[])
+      setGenerationHistory(auxiliary.generationHistory as GenerationRecord[])
+      setOutputHistory(auxiliary.outputHistory as OutputHistoryRecord[])
+      setTransferProgress(null)
+      setToastMessage(`已合并 ${merged.canvases.length} 张画布，当前项目原有内容未被替换`)
+    } catch (error) {
+      setTransferProgress(null)
+      throw error
     }
   }
   const enabledImageModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
@@ -6478,11 +6803,20 @@ function App() {
 
   const openTransferDialog = (scope: TransferScope) => {
     setTransferScope(scope)
+    setProjectExportPickerOpen(false)
+    setExportProjectIds([activeProjectId])
+    setCanvasExportPickerOpen(false)
+    setExportCanvasIds([activeCanvasId])
+    setProjectImportMode('merge')
     setTransferOpen(true)
   }
 
   const importWorkspaceFile = (file: File) => (
-    transferScope === 'workspace-append' ? appendImportedProjects(file) : importIntoCurrentProject(file)
+    transferScope === 'workspace-append'
+      ? appendImportedProjects(file)
+      : projectImportMode === 'merge'
+        ? mergeIntoCurrentProject(file)
+        : importIntoCurrentProject(file)
   )
 
   const stopAgentThinking = () => {
@@ -6739,40 +7073,38 @@ function App() {
   // canvas pans. They may leave the viewport with the node, but never flip or
   // clamp to a browser edge and become visually detached.
   const nodeEditorTop = nodeOverlayRect ? nodeOverlayRect.top + nodeOverlayRect.height + 14 : 16
-  const filteredWorkspaceProjects = workspaceProjects.filter((project) => !projectSearch.trim()
-    || project.name.toLowerCase().includes(projectSearch.trim().toLowerCase()))
-  const normalizedNodeSearch = nodeSearchQuery.trim().toLocaleLowerCase()
-  const nodeSearchResults = nodes.filter((node) => {
-    if (!normalizedNodeSearch) return true
-    const searchable = [node.data.title, node.data.body, node.data.promptText, node.data.fileName, node.data.status]
-      .filter((value): value is string => typeof value === 'string')
-      .join(' ')
-      .toLocaleLowerCase()
-    return searchable.includes(normalizedNodeSearch)
-  })
-  const sortedHomeProjects = [...filteredWorkspaceProjects].sort((left, right) => {
+  const filteredWorkspaceProjects = useMemo(() => {
+    const query = projectSearch.trim().toLocaleLowerCase()
+    return workspaceProjects.filter((project) => !query || project.name.toLocaleLowerCase().includes(query))
+  }, [projectSearch, workspaceProjects])
+  const nodeSearchResults = useMemo(() => {
+    const query = nodeSearchQuery.trim().toLocaleLowerCase()
+    if (!query) return nodes
+    return nodes.filter((node) => [node.data.title, node.data.body, node.data.promptText, node.data.fileName, node.data.status]
+      .filter((value): value is string => typeof value === 'string').join(' ').toLocaleLowerCase().includes(query))
+  }, [nodeSearchQuery, nodes])
+  const sortedHomeProjects = useMemo(() => [...filteredWorkspaceProjects].sort((left, right) => {
     const { key, direction } = projectHomeSort
     const result = key === 'name'
       ? left.name.localeCompare(right.name, 'zh-CN')
       : left[key].localeCompare(right[key])
     return direction === 'asc' ? result : -result
-  })
+  }), [filteredWorkspaceProjects, projectHomeSort])
   const toggleProjectHomeSort = (key: 'name' | 'createdAt' | 'updatedAt') => {
     setProjectHomeSort((current) => current.key === key
       ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
       : { key, direction: key === 'name' ? 'asc' : 'desc' })
   }
-  const latestProjectCoverById = new Map<string, GenerationRecord>()
-  generationHistory.forEach((record) => {
-    const projectId = record.projectId ?? CURRENT_PROJECT_ID
-    const current = latestProjectCoverById.get(projectId)
-    if (!current || record.createdAt > current.createdAt) latestProjectCoverById.set(projectId, record)
-  })
-  const activeTaskCountByProjectId = new Map<string, number>()
-  activeGenerationTaskKeys.forEach((taskKey) => {
-    const projectId = generationTaskProjectIdsRef.current.get(taskKey)
-    if (projectId) activeTaskCountByProjectId.set(projectId, (activeTaskCountByProjectId.get(projectId) ?? 0) + 1)
-  })
+  const latestProjectCoverById = useMemo(() => {
+    const result = new Map<string, GenerationRecord>()
+    generationHistory.forEach((record) => { const projectId = record.projectId ?? CURRENT_PROJECT_ID; const current = result.get(projectId); if (!current || record.createdAt > current.createdAt) result.set(projectId, record) })
+    return result
+  }, [generationHistory])
+  const activeTaskCountByProjectId = useMemo(() => {
+    const result = new Map<string, number>()
+    activeGenerationTaskKeys.forEach((taskKey) => { const projectId = generationTaskProjectIdsRef.current.get(taskKey); if (projectId) result.set(projectId, (result.get(projectId) ?? 0) + 1) })
+    return result
+  }, [activeGenerationTaskKeys])
   const getProjectNodeCount = (projectId: string) => {
     const persisted = persistedProjectContent[projectId]
     if (projectId !== activeProjectId) return persisted?.nodeCount ?? 0
@@ -7420,36 +7752,11 @@ function App() {
       const cleaned = original.replace(/[\\/:*?"<>|]/g, '-').trim() || `disy-image-${index + 1}.png`
       return imageFileName(cleaned, node.data.imageUrl || '')
     }
-    const pickerWindow = window as FilePickerWindow
-
     try {
-      if (imageNodes.length === 1 && pickerWindow.showSaveFilePicker) {
-        const fileName = safeFileName(imageNodes[0], 0)
-        const handle = await pickerWindow.showSaveFilePicker({
-          suggestedName: fileName,
-          types: [{ description: '图片文件', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp'] } }],
-        })
-        const blob = await fetch(imageNodes[0].data.imageUrl!).then((response) => response.blob())
-        const writable = await handle.createWritable()
-        await writable.write(blob)
-        await writable.close()
-      } else if (imageNodes.length > 1 && pickerWindow.showDirectoryPicker) {
-        const directory = await pickerWindow.showDirectoryPicker()
-        for (let index = 0; index < imageNodes.length; index += 1) {
-          const node = imageNodes[index]
-          const handle = await directory.getFileHandle(safeFileName(node, index), { create: true })
-          const blob = await fetch(node.data.imageUrl!).then((response) => response.blob())
-          const writable = await handle.createWritable()
-          await writable.write(blob)
-          await writable.close()
-        }
-      } else {
-        imageNodes.forEach((node, index) => {
-          const anchor = document.createElement('a')
-          anchor.href = node.data.imageUrl!
-          anchor.download = safeFileName(node, index)
-          anchor.click()
-        })
+      for (let index = 0; index < imageNodes.length; index += 1) {
+        const node = imageNodes[index]
+        const blob = await fetch(node.data.imageUrl!).then((response) => response.blob())
+        await triggerBlobDownload(blob, safeFileName(node, index))
       }
       setToastMessage(`已下载 ${imageNodes.length} 张图片`)
     } catch (error) {
@@ -7891,12 +8198,25 @@ function App() {
   }
 
   const currentCreditKey = editingConnectionId === 'new' ? apiDraft.baseUrl.trim() : editingConnectionId
+  const editingConnection = editingConnectionId === 'new' ? undefined : apiSettings.connections.find((connection) => connection.id === editingConnectionId)
+  const editingConnectionHasCredentials = Boolean(editingConnection?.baseUrl.trim() && editingConnection?.apiKey.trim())
+  const editingConnectionHealth = editingConnection ? connectionHealthByConnection[editingConnection.id] : undefined
+  const editingConnectionStatus = !editingConnectionHasCredentials
+    ? 'missing-key'
+    : editingConnection?.disconnected
+      ? 'disconnected'
+      : editingConnectionHealth === 'checking'
+        ? 'checking'
+        : editingConnectionHealth === 'offline'
+          ? 'offline'
+          : editingConnectionHealth === 'online'
+            ? 'online'
+            : 'checking'
   const cachedCurrentProviderCredits = providerCreditsByConnection[currentCreditKey] ?? null
   const currentProviderCredits = cachedCurrentProviderCredits && cachedCurrentProviderCredits.amount >= 0 ? cachedCurrentProviderCredits : null
-  const queriedProviderCredits = Object.values(providerCreditsByConnection).filter((credits) => credits.amount >= 0)
-  const totalProviderCredits = queriedProviderCredits.reduce((total, credits) => total + credits.amount, 0)
-  const creditUnits = new Set(queriedProviderCredits.map((credits) => credits.unit))
-  const creditsTooltip = queriedProviderCredits.map((credits) => `${credits.provider}：${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(credits.amount)} ${credits.unit}`).join('\n')
+  const creditsTooltip = currentProviderCredits
+    ? `${currentProviderCredits.provider}：${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)} ${currentProviderCredits.unit}\n每 15 秒自动刷新`
+    : ''
   const activeImagePrice = displayedActiveNodeImageModel
     ? providerPricesByConnection[displayedActiveNodeImageModel.connection.id]?.[displayedActiveNodeImageModel.model.id]
     : undefined
@@ -8049,6 +8369,7 @@ function App() {
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
               <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
+              <NodeDataUpdateContext.Provider value={updateNodeData}>
               <NodeImageUploadContext.Provider value={uploadImageToNode}>
               <GroupCollapseContext.Provider value={setGroupCollapsed}>
               <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
@@ -8179,19 +8500,29 @@ function App() {
           }}
           onNodeContextMenu={openNodeContextMenu}
           onPaneContextMenu={openNodeMenu}
-          onDoubleClick={(event) => {
-            const target = event.target as HTMLElement
-            if (!target.classList.contains('react-flow__pane')) return
-            event.preventDefault()
-            openNodeMenu(event)
-          }}
           onDragOver={(event) => {
-            if (event.dataTransfer.types.includes('application/x-disy-asset') || event.dataTransfer.types.includes('application/x-disy-prompt-case') || Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) {
+            if (event.dataTransfer.types.includes('application/x-disy-grid-slice') || event.dataTransfer.types.includes('application/x-disy-asset') || event.dataTransfer.types.includes('application/x-disy-prompt-case') || Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) {
               event.preventDefault()
               event.dataTransfer.dropEffect = 'copy'
             }
           }}
           onDrop={(event) => {
+            const gridSlicePayload = event.dataTransfer.getData('application/x-disy-grid-slice')
+            if (gridSlicePayload) {
+              event.preventDefault(); closeAllMenus()
+              try {
+                const payload = JSON.parse(gridSlicePayload) as { sliceId: string; sourceNodeId: string }
+                const sourceNode = nodes.find((node) => node.id === payload.sourceNodeId)
+                const slice = sourceNode?.data.gridSlices?.find((item) => item.id === payload.sliceId)
+                if (!sourceNode || !slice) throw new Error('slice missing')
+                const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                const id = `grid-image-${crypto.randomUUID()}`
+                setNodes((current) => [...current, { id, type: 'disy', position: { x: flowPosition.x - 130, y: flowPosition.y - 110 }, data: { kind: 'upload', title: slice.title, body: '', fileName: `${slice.title}.png`, imageUrl: slice.url, generationSourceNodeId: sourceNode.id } }])
+                setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: sourceNode.id, target: id, type: 'luminous' }])
+                setToastMessage('已从宫格拖出独立图片')
+              } catch { setToastMessage('宫格图片读取失败，请重新切分') }
+              return
+            }
             const promptCasePayload = event.dataTransfer.getData('application/x-disy-prompt-case')
             if (promptCasePayload) {
               event.preventDefault()
@@ -8284,6 +8615,7 @@ function App() {
               </NodeExtensionMenuContext.Provider>
               </GroupCollapseContext.Provider>
               </NodeImageUploadContext.Provider>
+              </NodeDataUpdateContext.Provider>
               </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
@@ -8327,16 +8659,47 @@ function App() {
               const y = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100))
               setLocalEditMarks((current) => current.length >= 5 ? current : [...current, { id: crypto.randomUUID(), x, y, prompt: '' }])
             }
+            const activeStudioLight = studioLighting.lights.find((light) => light.id === activeStudioLightId) ?? studioLighting.lights[0]
+            const updateStudioLight = (id: string, update: Partial<StudioLight>) => setStudioLighting((current) => ({ ...current, lights: current.lights.map((light) => light.id === id ? { ...light, ...update } : light) }))
+            const addStudioLight = () => {
+              if (studioLighting.lights.length >= 6) return
+              const id = `light-${crypto.randomUUID()}`
+              const index = studioLighting.lights.length
+              setStudioLighting((current) => ({ ...current, lights: [...current.lights, { id, name: index === 1 ? '补光' : index === 2 ? '轮廓光' : `辅助光 ${index}`, yaw: index % 2 ? 65 : -65, pitch: 18 + index * 5, intensity: 35, temperatureK: index % 2 ? 6800 : 4200, enabled: true }] }))
+              setActiveStudioLightId(id)
+            }
+            const resetStudioLights = () => { setStudioLighting({ exposure: 50, lights: [{ id: 'key', name: '主光源', yaw: -40, pitch: 8, intensity: 70, temperatureK: 5600, enabled: true }] }); setActiveStudioLightId('key') }
+            const studioPrompt = studioLighting.lights.filter((light) => light.enabled).map((light) => `${light.name}：水平 ${light.yaw}°、垂直 ${light.pitch}°、强度 ${light.intensity}%、色温 ${light.temperatureK}K`).join('；')
+            const colorFilter = `brightness(${100 + colorAdjustments.exposure + colorAdjustments.shadows * .12 + colorAdjustments.highlights * .06}%) contrast(${100 + colorAdjustments.contrast}%) saturate(${100 + colorAdjustments.saturation}%) hue-rotate(${colorAdjustments.tint * .12}deg)`
+            const startCropResize = (corner: 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w', event: React.PointerEvent<HTMLElement>) => {
+              event.preventDefault(); event.stopPropagation()
+              const plane = event.currentTarget.closest('.image-tool-image-plane') as HTMLElement | null
+              if (!plane) return
+              const bounds = plane.getBoundingClientRect(), start = cropRect, startX = event.clientX, startY = event.clientY
+              const move = (moveEvent: PointerEvent) => {
+                const dx = (moveEvent.clientX - startX) / bounds.width * 100, dy = (moveEvent.clientY - startY) / bounds.height * 100
+                let { x, y, width, height } = start
+                if (corner.includes('e')) width = Math.max(10, Math.min(100 - x, start.width + dx))
+                if (corner.includes('s')) height = Math.max(10, Math.min(100 - y, start.height + dy))
+                if (corner.includes('w')) { const nextX = Math.max(0, Math.min(start.x + start.width - 10, start.x + dx)); width = start.width + start.x - nextX; x = nextX }
+                if (corner.includes('n')) { const nextY = Math.max(0, Math.min(start.y + start.height - 10, start.y + dy)); height = start.height + start.y - nextY; y = nextY }
+                setCropRect({ x, y, width, height })
+              }
+              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+              window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once:true })
+            }
             return <motion.div className="image-tool-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => { if (!cutoutBusy) setImageTool(null) }}>
               <motion.section className={`image-tool-dialog mode-${imageTool.mode}`} initial={{ opacity: 0, y: 18, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }} onMouseDown={(event) => event.stopPropagation()}>
-                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'local-edit' ? '局部修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'local-edit' ? '点击图片标记需要调整的位置，最多 5 处' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
+                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'crop' ? <Crop size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'color' ? <Palette size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'crop' ? '本地裁剪' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'color' ? '调色' : imageTool.mode === 'local-edit' ? '局部修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'crop' ? '调整裁剪区域并保留原图，处理不消耗积分' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'color' ? '实时预览基础影调与白平衡，确认后生成新版本' : imageTool.mode === 'local-edit' ? '点击图片标记需要调整的位置，最多 5 处' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
                 <div className="image-tool-content">
                   <div className={`image-tool-stage mode-${imageTool.mode}`}>
                     <div className="image-tool-image-plane" onPointerDown={addLocalEditMark} style={{ aspectRatio: imageTool.mode === 'expand' ? `${expandSize.width} / ${expandSize.height}` : `${imageToolSourceSize.width} / ${imageToolSourceSize.height}`, ...(imageTool.mode === 'local-edit' ? { width: `min(100%, ${Math.max(1, Math.round(500 * imageToolSourceSize.width / imageToolSourceSize.height))}px)` } : {}) }}>
-                      <img src={sourceUrl} alt="编辑预览" />
+                      <img src={sourceUrl} alt="编辑预览" style={imageTool.mode === 'color' ? { filter: colorFilter } : undefined} />
+                      {imageTool.mode === 'color' && <i className="color-temperature-overlay" style={{ backgroundColor: colorAdjustments.temperature >= 0 ? '#ff8a45' : '#69aaff', opacity: Math.abs(colorAdjustments.temperature) / 260, boxShadow: `inset 0 0 0 999px ${colorAdjustments.tint >= 0 ? 'rgba(224,72,190,' : 'rgba(62,194,120,'}${Math.abs(colorAdjustments.tint) / 420})` }} />}
                       {imageTool.mode === 'grid' && <>{gridGuides.vertical.map((guide, index) => <i key={`v-${index}`} className="image-guide is-vertical" style={{ left: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientX - stage.getBoundingClientRect().left) / stage.getBoundingClientRect().width * 100)); setGuide('vertical', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}{gridGuides.horizontal.map((guide, index) => <i key={`h-${index}`} className="image-guide is-horizontal" style={{ top: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientY - stage.getBoundingClientRect().top) / stage.getBoundingClientRect().height * 100)); setGuide('horizontal', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}</>}
+                      {imageTool.mode === 'crop' && <div className="crop-selection" style={{ left:`${cropRect.x}%`,top:`${cropRect.y}%`,width:`${cropRect.width}%`,height:`${cropRect.height}%` }}>{(['nw','n','ne','e','se','s','sw','w'] as const).map((edge)=><i key={edge} className={edge} onPointerDown={(event)=>startCropResize(edge,event)}/>)}</div>}
                       {imageTool.mode === 'expand' && <div className="expand-boundary" style={{ inset: `${expandInsets.top}% ${expandInsets.right}% ${expandInsets.bottom}% ${expandInsets.left}%` }}><button className="expand-handle top" onPointerDown={(event) => startExpandDrag('top', event)} /><button className="expand-handle right" onPointerDown={(event) => startExpandDrag('right', event)} /><button className="expand-handle bottom" onPointerDown={(event) => startExpandDrag('bottom', event)} /><button className="expand-handle left" onPointerDown={(event) => startExpandDrag('left', event)} /></div>}
-                      {imageTool.mode === 'studio' && <div className="lighting-three-shell"><div className="lighting-three-tabs"><button className={lightingView === 'perspective' ? 'is-active' : ''} onClick={() => setLightingView('perspective')}>透视</button><button className={lightingView === 'front' ? 'is-active' : ''} onClick={() => setLightingView('front')}>正面</button></div><Suspense fallback={<div className="lighting-three-loading"><LoaderCircle className="is-spinning" size={20} />正在载入三维光场…</div>}><LightingSpherePreview imageUrl={sourceUrl} yaw={studioLighting.yaw} pitch={studioLighting.pitch} intensity={studioLighting.intensity} temperatureK={studioLighting.temperatureK} view={lightingView} onChange={(yaw, pitch) => setStudioLighting((current) => ({ ...current, yaw, pitch }))} /></Suspense><span className="lighting-three-label">主光源</span><button type="button" className="lighting-three-reset" onClick={() => setStudioLighting({ yaw: 0, pitch: 0, intensity: 50, temperatureK: 5600, fill: true, rim: false, rimStrength: 20 })}>↻ 重置</button><em>水平 {studioLighting.yaw}° · 垂直 {studioLighting.pitch}°</em></div>}
+                      {imageTool.mode === 'studio' && <div className="lighting-three-shell"><div className="lighting-three-tabs"><button className={lightingView === 'perspective' ? 'is-active' : ''} onClick={() => setLightingView('perspective')}>透视</button><button className={lightingView === 'front' ? 'is-active' : ''} onClick={() => setLightingView('front')}>正面</button></div><Suspense fallback={<div className="lighting-three-loading"><LoaderCircle className="is-spinning" size={20} />正在载入三维光场…</div>}><LightingSpherePreview imageUrl={sourceUrl} lights={studioLighting.lights} activeLightId={activeStudioLight.id} exposure={studioLighting.exposure} view={lightingView} onSelectLight={setActiveStudioLightId} onChange={(id, yaw, pitch) => updateStudioLight(id, { yaw, pitch })} /></Suspense><span className="lighting-three-label"><i style={{ background: activeStudioLight.temperatureK < 5000 ? '#ff9a55' : activeStudioLight.temperatureK > 6200 ? '#8fc9ff' : '#fff7e9' }} />{activeStudioLight.name}</span><button type="button" className="lighting-three-reset" onClick={resetStudioLights}>↻ 重置</button><em>水平 {activeStudioLight.yaw}° · 垂直 {activeStudioLight.pitch}°</em></div>}
                       {imageTool.mode === 'local-edit' && <div className="local-edit-overlay">{localEditMarks.map((mark, index) => <span key={mark.id} className="local-edit-pin" style={{ left: `${mark.x}%`, top: `${mark.y}%` }} onPointerDown={(event) => event.stopPropagation()}>{index + 1}</span>)}</div>}
                     </div>
                   </div>
@@ -8345,6 +8708,12 @@ function App() {
                     <div className="grid-preset-list">{[2, 3, 4, 5].map((size) => <button key={size} type="button" className={customGrid.columns === size && customGrid.rows === size ? 'is-selected' : ''} onClick={() => applyGridPreset(size)}><Grid3X3 size={14} /><span>{size * size} 宫格</span><small>{size} × {size}</small></button>)}</div>
                     <div className="custom-grid-fields"><strong>自定义裁切</strong><label>列数<input type="number" min="1" max="10" value={customGrid.columns} onChange={(event) => applyGridPreset(Math.min(10, Math.max(1, Number(event.target.value))), customGrid.rows)} /></label><span>×</span><label>行数<input type="number" min="1" max="10" value={customGrid.rows} onChange={(event) => applyGridPreset(customGrid.columns, Math.min(10, Math.max(1, Number(event.target.value))))} /></label></div>
                     <div className="guide-actions"><button type="button" onClick={() => setGridGuides((current) => ({ ...current, vertical: [...current.vertical, 50].sort((a, b) => a - b) }))}>+ 竖线</button><button type="button" onClick={() => setGridGuides((current) => ({ ...current, horizontal: [...current.horizontal, 50].sort((a, b) => a - b) }))}>+ 横线</button></div>
+                  </div> : imageTool.mode === 'crop' ? <div className="image-tool-controls crop-controls">
+                    <strong className="control-title">裁剪比例</strong>
+                    <div className="crop-ratio-list">{([['自由',null],['1:1',1],['4:3',4/3],['3:4',3/4],['16:9',16/9],['9:16',9/16]] as const).map(([label,ratio])=><button key={label} onClick={()=>{if(!ratio){setCropRect({x:10,y:10,width:80,height:80});return}const imageRatio=imageToolSourceSize.width/imageToolSourceSize.height;if(ratio>imageRatio){const height=80*imageRatio/ratio;setCropRect({x:10,y:(100-height)/2,width:80,height})}else{const width=80*ratio/imageRatio;setCropRect({x:(100-width)/2,y:10,width,height:80})}}}>{label}</button>)}</div>
+                    <section><strong>裁剪范围</strong>{(['x','y','width','height'] as const).map((key)=><label key={key}><span>{({x:'左',y:'上',width:'宽',height:'高'} as const)[key]}</span><input type="range" min={key==='width'||key==='height'?10:0} max={key==='x'?100-cropRect.width:key==='y'?100-cropRect.height:100-(key==='width'?cropRect.x:cropRect.y)} value={cropRect[key]} onChange={(event)=>setCropRect((current)=>({...current,[key]:Number(event.target.value)}))}/><b>{Math.round(cropRect[key])}%</b></label>)}</section>
+                    <div className="color-preview-note"><Crop size={14}/><span>本地裁剪会生成新节点，原图与原始分辨率信息保留。</span></div>
+                    <button type="button" className="crop-inline-apply" onClick={() => void applyLocalCrop()}><Crop size={14} />本地裁剪</button>
                   </div> : imageTool.mode === 'expand' ? <div className="image-tool-controls">
                     <strong className="control-title">目标比例</strong>
                     <div className="expand-ratio-list">{(['original', '1:1', '4:3', '16:9', '3:4', '9:16'] as const).map((ratio) => <button key={ratio} type="button" className={expandRatio === ratio ? 'is-selected' : ''} onClick={() => applyExpandRatio(ratio)}>{ratio === 'original' ? '原比例' : ratio}</button>)}</div>
@@ -8352,10 +8721,15 @@ function App() {
                     <label className="expand-prompt-label">延展提示词<textarea value={expandPrompt} onChange={(event) => setExpandPrompt(event.target.value)} /></label>
                     <div className="inset-fields"><small>负值表示向原图外侧扩展，可直接拖动画框四边。</small>{(['top', 'right', 'bottom', 'left'] as const).map((side) => <label key={side}>{({ top: '上', right: '右', bottom: '下', left: '左' } as const)[side]} <input type="range" min="-80" max="60" value={expandInsets[side]} onChange={(event) => setExpandInsets((current) => ({ ...current, [side]: Number(event.target.value) }))} /><b>{expandInsets[side]}%</b></label>)}</div>
                   </div> : imageTool.mode === 'studio' ? <div className="image-tool-controls studio-controls">
-                    <section className="lighting-global"><strong>全局</strong><label><span>亮度</span><input type="range" min="10" max="100" value={studioLighting.intensity} onChange={(event) => setStudioLighting((current) => ({ ...current, intensity: Number(event.target.value) }))} /><b>{studioLighting.intensity}%</b></label><label><span>色温</span><input type="range" min="3200" max="7600" step="100" value={studioLighting.temperatureK} onChange={(event) => setStudioLighting((current) => ({ ...current, temperatureK: Number(event.target.value) }))} /><b>{studioLighting.temperatureK}K</b></label></section>
-                    <section><strong>主光源</strong><div className="studio-presets">{[['左侧', -90, 15], ['顶部', 0, 75], ['右侧', 90, 15], ['前方', 0, 10], ['底部', 0, -60], ['后方', 180, 15]].map(([label, yaw, pitch]) => <button key={String(label)} className={studioLighting.yaw === Number(yaw) && studioLighting.pitch === Number(pitch) ? 'is-selected' : ''} onClick={() => setStudioLighting((current) => ({ ...current, yaw: Number(yaw), pitch: Number(pitch) }))}>{label}</button>)}</div></section>
-                    <section className="lighting-rim"><div><strong>轮廓光</strong><button type="button" className={studioLighting.rim ? 'is-on' : ''} onClick={() => setStudioLighting((current) => ({ ...current, rim: !current.rim }))}><i /></button></div>{studioLighting.rim && <label><span>强度</span><input type="range" min="5" max="80" value={studioLighting.rimStrength} onChange={(event) => setStudioLighting((current) => ({ ...current, rimStrength: Number(event.target.value) }))} /><b>{studioLighting.rimStrength}%</b></label>}</section>
-                    <div className="lighting-prompt-preview"><small>打光提示</small><p>{`主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，轮廓光 ${studioLighting.rimStrength}%` : ''}`}</p></div>
+                    <section className="lighting-global"><div className="studio-section-heading"><strong>光源</strong><button type="button" className="studio-add-light" disabled={studioLighting.lights.length >= 6} onClick={addStudioLight}><Plus size={13} />添加光源 <small>{studioLighting.lights.length}/6</small></button></div><label><span>曝光</span><input type="range" min="10" max="100" value={studioLighting.exposure} onChange={(event) => setStudioLighting((current) => ({ ...current, exposure: Number(event.target.value) }))} /><b>{studioLighting.exposure}%</b></label><div className="studio-light-list">{studioLighting.lights.map((light) => <button type="button" key={light.id} className={light.id === activeStudioLight.id ? 'is-selected' : ''} onClick={() => setActiveStudioLightId(light.id)}><i style={{ background: light.temperatureK < 5000 ? '#ff9a55' : light.temperatureK > 6200 ? '#8fc9ff' : '#fff7e9' }} /><span>{light.name}</span><small>{light.intensity}%</small></button>)}</div></section>
+                    <AnimatePresence mode="wait"><motion.section key={activeStudioLight.id} className="studio-active-light" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }}><div className="studio-section-heading"><strong>{activeStudioLight.name}</strong><div><button type="button" className={`studio-light-toggle ${activeStudioLight.enabled ? 'is-on' : ''}`} onClick={() => updateStudioLight(activeStudioLight.id, { enabled: !activeStudioLight.enabled })}><i /></button>{studioLighting.lights.length > 1 && <button type="button" className="studio-remove-light" aria-label="删除光源" onClick={() => { const remaining = studioLighting.lights.filter((light) => light.id !== activeStudioLight.id); setStudioLighting((current) => ({ ...current, lights: remaining })); setActiveStudioLightId(remaining[0].id) }}><Trash2 size={13} /></button>}</div></div><label><span>亮度</span><input type="range" min="5" max="100" value={activeStudioLight.intensity} onChange={(event) => updateStudioLight(activeStudioLight.id, { intensity: Number(event.target.value) })} /><b>{activeStudioLight.intensity}%</b></label><label className="studio-temperature-range"><span>色温</span><input aria-label="色温，左侧暖光，右侧冷光" type="range" min="2800" max="8000" step="100" value={activeStudioLight.temperatureK} onChange={(event) => updateStudioLight(activeStudioLight.id, { temperatureK: Number(event.target.value) })} /><b>{activeStudioLight.temperatureK}K</b></label><div className="studio-presets">{[['左侧', -90, 15], ['顶部', 0, 75], ['右侧', 90, 15], ['前方', 0, 10], ['底部', 0, -60], ['后方', 90, 8]].map(([label, yaw, pitch]) => <button key={String(label)} className={activeStudioLight.yaw === Number(yaw) && activeStudioLight.pitch === Number(pitch) ? 'is-selected' : ''} onClick={() => updateStudioLight(activeStudioLight.id, { yaw: Number(yaw), pitch: Number(pitch) })}>{label}</button>)}</div></motion.section></AnimatePresence>
+                    <div className="lighting-prompt-preview"><small>打光提示 · {studioLighting.lights.filter((light) => light.enabled).length} 个启用光源</small><p>{studioPrompt || '至少启用一个光源。'}</p></div>
+                  </div> : imageTool.mode === 'color' ? <div className="image-tool-controls color-controls">
+                    <div className="color-controls-heading"><div><strong>基础调节</strong><small>所有参数均为非破坏预览</small></div><button type="button" onClick={() => setColorAdjustments({ exposure: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, highlights: 0, shadows: 0 })}><RefreshCw size={13} />重置</button></div>
+                    <div className="color-control-list">{([
+                      ['exposure', '曝光', -50, 50], ['contrast', '对比度', -50, 50], ['saturation', '饱和度', -50, 50], ['temperature', '色温', -50, 50], ['tint', '色调', -50, 50], ['highlights', '高光', -50, 50], ['shadows', '阴影', -50, 50],
+                    ] as const).map(([key, label, min, max]) => <label key={key} className={key === 'temperature' ? 'is-temperature' : key === 'tint' ? 'is-tint' : ''}><span>{label}</span><input type="range" min={min} max={max} value={colorAdjustments[key]} onChange={(event) => setColorAdjustments((current) => ({ ...current, [key]: Number(event.target.value) }))} /><b>{colorAdjustments[key] > 0 ? '+' : ''}{colorAdjustments[key]}</b></label>)}</div>
+                    <div className="color-preview-note"><Palette size={14} /><span>调节会生成新的图片节点，原图始终保留。</span></div>
                   </div> : imageTool.mode === 'local-edit' ? <div className="image-tool-controls local-edit-controls">
                     <div className="local-edit-heading"><div><strong>修改点位</strong><small>仅调整标记区域，其余画面保持不变</small></div><span>{localEditMarks.length} / 5</span></div>
                     <p>点击左侧图片添加点位，再描述希望如何修改。</p>
@@ -8364,7 +8738,7 @@ function App() {
                     {localEditMarks.length >= 5 && <small className="local-edit-limit">已达到 5 个点位上限</small>}
                   </div> : <div className="image-tool-controls cutout-info"><p>本机后台运行 MIT 许可的通用主体模型；首次下载后会缓存，不消耗 API 积分，也不会上传原图。</p><small>适合人像、商品主体；复杂毛发建议生成后检查边缘。</small>{cutoutProgress && <div className="cutout-progress-panel" role="status" aria-live="polite"><div><LoaderCircle className="is-spinning" size={15} /><strong>{cutoutProgress.stage}</strong><b>{typeof cutoutProgress.progress === 'number' ? `${Math.round(cutoutProgress.progress)}%` : ''}</b></div><span><i style={{ width: `${cutoutProgress.progress ?? 8}%` }} /></span>{cutoutProgress.detail && <small>{cutoutProgress.detail}</small>}<em>处理完成前窗口会保持打开，随后自动生成并连接结果节点。</em></div>}</div>}
                 </div>
-                <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" onClick={() => { const direction = studioLighting.yaw > 135 || studioLighting.yaw < -135 ? '后方逆光' : studioLighting.yaw > 45 ? '右侧光' : studioLighting.yaw < -45 ? '左侧光' : studioLighting.pitch > 45 ? '顶部光' : studioLighting.pitch < -35 ? '底部光' : '前方光'; createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线：${direction}，主光水平 ${studioLighting.yaw}°，垂直 ${studioLighting.pitch}°，全局亮度 ${studioLighting.intensity}%，色温 ${studioLighting.temperatureK}K${studioLighting.rim ? `，增加 ${studioLighting.rimStrength}% 轮廓光` : ''}。光影自然、曝光准确，不改变产品形状、画面内容与视角。`) }}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('局部修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
+                <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" disabled={!studioLighting.lights.some((light) => light.enabled)} onClick={() => createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线。全局曝光 ${studioLighting.exposure}%。${studioPrompt}。各光源方向、强弱与色温独立生效，光影自然、曝光准确，不改变产品形状、画面内容与视角。`)}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'color' ? <button type="button" className="is-primary" onClick={() => void applyLocalColor()}><Palette size={15} />本地应用调色</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('局部修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
               </motion.section>
             </motion.div>
           })()}
@@ -8550,10 +8924,10 @@ function App() {
               /></motion.div>}
             </AnimatePresence>
             <div className="empty-canvas-heading">
-              <button onClick={openCenteredNodeMenu}>
+              <span className="empty-canvas-gesture">
                 <Sparkles size={14} />
-                双击
-              </button>
+                右键
+              </span>
               <span>无限自由想象，世界由你创造</span>
             </div>
             <div className="empty-canvas-actions">
@@ -8564,6 +8938,11 @@ function App() {
               <button onClick={() => createNodeFromEmptyState('image')}>
                 <WandSparkles size={15} />
                 图像生成
+              </button>
+              <button className="is-coming-soon" onClick={showVideoGenerationUnavailable}>
+                <Film size={15} />
+                视频生成
+                <small>暂未开放</small>
               </button>
               <button onClick={() => createNodeFromEmptyState('upload')}>
                 <Upload size={15} />
@@ -8983,24 +9362,14 @@ function App() {
           <button
             type="button"
             className="chrome-icon-button"
-            aria-label="导入项目"
-            title="导入项目或画布备份"
+            aria-label="导入 / 导出"
+            title="导入 / 导出项目"
             disabled={transferBusy}
             onClick={() => openTransferDialog('project-replace')}
           >
-            <Upload size={16} />
+            <ArrowUpDown size={16} />
           </button>
-          <button
-            type="button"
-            className="chrome-icon-button"
-            aria-label="导出项目"
-            title="选择导出全部工作区或当前项目"
-            disabled={transferBusy}
-            onClick={() => openTransferDialog('project-replace')}
-          >
-            <Download size={16} />
-          </button>
-          {queriedProviderCredits.length > 0 && <button
+          {currentProviderCredits && <button
             type="button"
             className="credits-chip"
             onClick={openApiSettings}
@@ -9008,7 +9377,7 @@ function App() {
             title={creditsTooltip}
           >
             <WalletCards size={15} />
-            <span>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(totalProviderCredits)} {creditUnits.size === 1 ? queriedProviderCredits[0].unit : '总余额'}</span>
+            <span>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)} {currentProviderCredits.unit}</span>
           </button>}
           <button
             ref={apiButtonRef}
@@ -9053,6 +9422,14 @@ function App() {
             onClick={() => setPromptLibraryOpen(true)}
           >
             <BookOpen size={18} />
+          </button>
+          <button
+            className={workflowTemplateOpen ? 'is-active' : ''}
+            aria-label="工作流"
+            data-tooltip="工作流"
+            onClick={() => setWorkflowTemplateOpen(true)}
+          >
+            <Shapes size={18} />
           </button>
           <button
             aria-label="资产库"
@@ -9130,7 +9507,7 @@ function App() {
                     <div className="help-section-heading"><BookOpen size={15} /><div><strong>从想法到图像</strong><small>四步完成一次可追溯的创作</small></div></div>
                     <div className="help-guide-grid">
                       {[
-                        ['01', '放入素材', '双击空白处，添加文字、图片或图像生成节点。'],
+                        ['01', '放入素材', '右键画布空白处，添加文字、图片或图像生成节点。'],
                         ['02', '建立关系', '连线或在节点编辑器中选择参考图，图1、图2按当前顺序识别。'],
                         ['03', '确认方案', '和 Disy Agent 对话；多方案先选择，再逐一确认，不会直接扣费。'],
                         ['04', '沉淀结果', '生成结果保留在节点版本、生成历史与输出历史中。'],
@@ -9149,8 +9526,8 @@ function App() {
                         ['Delete / Backspace', '删除选中的节点或连线'],
                         ['Ctrl + S', '立即保存当前画布'],
                         ['Ctrl + 滚轮', '缩放画布'],
-                        ['双击空白处', '快速添加节点'],
-                        ['右键', '打开节点或画布菜单'],
+                        ['右键空白处', '快速添加节点'],
+                        ['右键节点', '打开节点操作菜单'],
                         ['Esc', '关闭当前弹窗或菜单'],
                       ].map(([keys, action]) => <div key={keys}><kbd>{keys}</kbd><span>{action}</span></div>)}
                     </div>
@@ -9272,6 +9649,14 @@ function App() {
               <WandSparkles size={16} />
               <span><strong>图像</strong><small>文生图 / 图生图</small></span>
             </button>
+            <button onClick={() => createNode('svg-motion')}>
+              <Activity size={16} />
+              <span><strong>SVG 动效</strong><small>Logo / 图标 / 角色微动效</small></span>
+            </button>
+            <button className="is-coming-soon" onClick={showVideoGenerationUnavailable}>
+              <Film size={16} />
+              <span><strong>视频</strong><small>暂未开放</small></span>
+            </button>
             {!nodeMenu.connectionSourceId && (
               <button onClick={() => openImagePicker({ x: nodeMenu.flowX - 130, y: nodeMenu.flowY - 110 })}>
                 <FileImage size={16} />
@@ -9368,13 +9753,14 @@ function App() {
                 <span>放大查看</span>
               </button>
               <span className="quick-toolbar-divider" />
-              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
-              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
+              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'color')} title="调色"><Palette size={14} /><span>调色</span></button>
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
-              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'local-edit')} title="局部修改"><MessageCircle size={14} /><span>局部修改</span></button>
-              <button type="button" onClick={() => openImageTool(activeImageNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
+              <div className="image-more-wrap"><button type="button" className={imageMoreMenuNodeId === activeImageNode.id ? 'is-active' : ''} onClick={() => setImageMoreMenuNodeId((current) => current === activeImageNode.id ? null : activeImageNode.id)} title="更多图片工具"><MoreHorizontal size={16} /></button>{imageMoreMenuNodeId === activeImageNode.id && <motion.div className="image-more-menu" initial={{opacity:0,y:-5,scale:.98}} animate={{opacity:1,y:0,scale:1}}>
+                <button onClick={()=>openImageTool(activeImageNode.id,'crop')}><Crop size={14}/><span>裁剪</span></button><button onClick={()=>openImageTool(activeImageNode.id,'expand')}><Expand size={14}/><span>自由扩图</span></button><button onClick={()=>openImageTool(activeImageNode.id,'local-edit')}><MessageCircle size={14}/><span>局部修改</span></button><button onClick={()=>openImageTool(activeImageNode.id,'cutout')}><Scissors size={14}/><span>去背景</span></button><button onClick={()=>openImageTool(activeImageNode.id,'grid')}><Grid3X3 size={14}/><span>自由宫格</span></button>
+                <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1;return <button type="button" aria-label={`${columns}×${rows} 切分`} key={index} className={columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows?'is-on':''} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeImageNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
+              </motion.div>}</div>
               <span className="quick-toolbar-divider" />
-              <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])}><Download size={14} /><span>下载</span></button>
+              <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])} title="下载到浏览器默认目录"><Download size={14} /><span>下载</span></button>
               <button type="button" onClick={() => saveNodeToAssets(activeImageNode)}><Library size={14} /><span>加入资产库</span></button>
             </motion.div>
           )}
@@ -9402,13 +9788,14 @@ function App() {
                     <span>放大查看</span>
                   </button>
                   <span className="quick-toolbar-divider" />
-                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'grid')} title="自由宫格切分"><Grid3X3 size={14} /><span>宫格切分</span></button>
-                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'expand')} title="自由区域扩图"><Expand size={14} /><span>自由扩图</span></button>
+                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'color')} title="调色"><Palette size={14} /><span>调色</span></button>
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
-                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'local-edit')} title="局部修改"><MessageCircle size={14} /><span>局部修改</span></button>
-                  <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'cutout')} title="免费本地抠图"><Scissors size={14} /><span>去背景</span></button>
+                  <div className="image-more-wrap"><button type="button" className={imageMoreMenuNodeId === activeGenerationNode.id ? 'is-active' : ''} onClick={() => setImageMoreMenuNodeId((current) => current === activeGenerationNode.id ? null : activeGenerationNode.id)} title="更多图片工具"><MoreHorizontal size={16} /></button>{imageMoreMenuNodeId === activeGenerationNode.id && <motion.div className="image-more-menu" initial={{opacity:0,y:-5,scale:.98}} animate={{opacity:1,y:0,scale:1}}>
+                    <button onClick={()=>openImageTool(activeGenerationNode.id,'crop')}><Crop size={14}/><span>裁剪</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'expand')}><Expand size={14}/><span>自由扩图</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'local-edit')}><MessageCircle size={14}/><span>局部修改</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'cutout')}><Scissors size={14}/><span>去背景</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'grid')}><Grid3X3 size={14}/><span>自由宫格</span></button>
+                    <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1;return <button type="button" aria-label={`${columns}×${rows} 切分`} key={index} className={columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows?'is-on':''} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeGenerationNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
+                  </motion.div>}</div>
                   <span className="quick-toolbar-divider" />
-                  <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])}><Download size={14} /><span>下载</span></button>
+                  <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])} title="下载到浏览器默认目录"><Download size={14} /><span>下载</span></button>
                   <button type="button" onClick={() => saveNodeToAssets(activeGenerationNode)}><Library size={14} /><span>加入资产库</span></button>
                 </>
               ) : (
@@ -9688,7 +10075,8 @@ function App() {
               }}
             >
               <motion.section
-                className="image-node-editor nodrag nowheel"
+                className={`image-node-editor nodrag nowheel ${imageParameterMenuOpen ? 'is-parameter-open' : ''}`}
+                style={{ height: Math.max(260, Math.min(680, activeGenerationNode.data.imageEditorHeight ?? 340)) }}
                 aria-label="图像节点编辑器"
                 initial={{ opacity: 0, y: 14, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -9974,31 +10362,35 @@ function App() {
                                     <small>{option.label}</small>
                                   </button>
                                 ))}
+                                <button type="button" className={customAspectRatioOpen ? 'is-selected is-custom' : 'is-custom'} onClick={() => setCustomAspectRatioOpen((open) => !open)}>
+                                  <span className="ratio-shape" aria-hidden="true">+</span>
+                                  <small>自定义</small>
+                                </button>
                               </div>
+                              {customAspectRatioOpen && <form className="custom-aspect-ratio" onSubmit={(event) => { event.preventDefault(); applyCustomImageAspectRatio() }}>
+                                <label>宽<input aria-label="自定义比例宽度" inputMode="decimal" min="0.01" step="0.01" type="number" value={customAspectWidth} onChange={(event) => setCustomAspectWidth(event.target.value)} /></label>
+                                <span>:</span>
+                                <label>高<input aria-label="自定义比例高度" inputMode="decimal" min="0.01" step="0.01" type="number" value={customAspectHeight} onChange={(event) => setCustomAspectHeight(event.target.value)} /></label>
+                                <button type="submit">应用</button>
+                              </form>}
                             </section>
                           </motion.div>
                         )}
                       </AnimatePresence>
                       <button
                         type="button"
-                        className={`image-option-chip ${imageParameterMenuOpen ? 'is-open' : ''}`}
-                        title="设置图片比例"
+                        className={`image-option-chip image-parameter-summary-chip ${imageParameterMenuOpen ? 'is-open' : ''}`}
+                        title="设置图像参数"
                         onClick={() => {
                           setImageParameterMenuOpen((open) => !open)
                           setQuantityMenuOpen(false)
                           setImageModelMenuOpen(false)
                         }}
-                      ><Focus size={13} /><span>{activeImageAspectRatio}</span></button>
-                      <button
-                        type="button"
-                        className={`image-option-chip ${imageParameterMenuOpen ? 'is-open' : ''}`}
-                        title="设置画质与清晰度"
-                        onClick={() => {
-                          setImageParameterMenuOpen((open) => !open)
-                          setQuantityMenuOpen(false)
-                          setImageModelMenuOpen(false)
-                        }}
-                      ><Grid3X3 size={12} /><span>{activeImageResolution} · {IMAGE_DETAIL_LABELS[activeImageDetail]}</span></button>
+                      >
+                        <span><Focus size={13} />{activeImageAspectRatio}</span>
+                        <i aria-hidden="true" />
+                        <span><Grid3X3 size={12} />{activeImageResolution} · {IMAGE_DETAIL_LABELS[activeImageDetail]}</span>
+                      </button>
                     </div>
                     <div className="generation-quantity-control">
                       <AnimatePresence>
@@ -10039,6 +10431,37 @@ function App() {
                     </div>
                   </div>
                 </footer>
+                <div
+                  className="image-editor-resize-handle"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整节点编辑器高度"
+                  title="上下拖动调整编辑器高度"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    const nodeId = activeGenerationNode.id
+                    const startY = event.clientY
+                    const startHeight = Math.max(260, Math.min(680, activeGenerationNode.data.imageEditorHeight ?? 340))
+                    const maxHeight = Math.max(320, Math.min(680, window.innerHeight - 40))
+                    document.body.classList.add('is-resizing-image-editor')
+                    const handleMove = (moveEvent: PointerEvent) => {
+                      const nextHeight = Math.max(260, Math.min(maxHeight, startHeight + moveEvent.clientY - startY))
+                      setNodes((current) => current.map((node) => node.id === nodeId
+                        ? { ...node, data: { ...node.data, imageEditorHeight: Math.round(nextHeight) } }
+                        : node))
+                    }
+                    const handleUp = () => {
+                      document.body.classList.remove('is-resizing-image-editor')
+                      window.removeEventListener('pointermove', handleMove)
+                      window.removeEventListener('pointerup', handleUp)
+                      window.removeEventListener('pointercancel', handleUp)
+                    }
+                    window.addEventListener('pointermove', handleMove)
+                    window.addEventListener('pointerup', handleUp)
+                    window.addEventListener('pointercancel', handleUp)
+                  }}
+                ><span /></div>
               </motion.section>
             </div>
           )}
@@ -10056,6 +10479,7 @@ function App() {
             >
               <motion.section
                 className="text-node-editor nodrag nowheel"
+                style={{ height: Math.max(260, Math.min(680, activeTextNode.data.textEditorHeight ?? 340)) }}
                 aria-label="文本节点编辑器"
                 initial={{ opacity: 0, y: 14, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -10291,6 +10715,37 @@ function App() {
                     </button>
                   </div>
                 </footer>
+                <div
+                  className="node-editor-resize-handle"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整文本节点编辑器高度"
+                  title="上下拖动调整编辑器高度"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    const nodeId = activeTextNode.id
+                    const startY = event.clientY
+                    const startHeight = Math.max(260, Math.min(680, activeTextNode.data.textEditorHeight ?? 340))
+                    const maxHeight = Math.max(320, Math.min(680, window.innerHeight - 40))
+                    document.body.classList.add('is-resizing-node-editor')
+                    const handleMove = (moveEvent: PointerEvent) => {
+                      const nextHeight = Math.max(260, Math.min(maxHeight, startHeight + moveEvent.clientY - startY))
+                      setNodes((current) => current.map((node) => node.id === nodeId
+                        ? { ...node, data: { ...node.data, textEditorHeight: Math.round(nextHeight) } }
+                        : node))
+                    }
+                    const handleUp = () => {
+                      document.body.classList.remove('is-resizing-node-editor')
+                      window.removeEventListener('pointermove', handleMove)
+                      window.removeEventListener('pointerup', handleUp)
+                      window.removeEventListener('pointercancel', handleUp)
+                    }
+                    window.addEventListener('pointermove', handleMove)
+                    window.addEventListener('pointerup', handleUp)
+                    window.addEventListener('pointercancel', handleUp)
+                  }}
+                ><span /></div>
               </motion.section>
             </div>
           )}
@@ -10594,15 +11049,24 @@ function App() {
         )}
       </AnimatePresence>
 
-      <PromptLibraryPanel
-        open={promptLibraryOpen}
-        onClose={() => setPromptLibraryOpen(false)}
-        onUsePrompt={addPromptCaseNode}
-        onAddImage={addPromptCaseImage}
-        textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
-        defaultTextModelKey={selectedTextModel ? `${selectedTextModel.connection.id}::${selectedTextModel.model.id}` : undefined}
-        onReversePrompts={reverseInspirationPrompts}
-      />
+      <AnimatePresence>
+        {promptLibraryOpen && <Suspense fallback={<div className="prompt-library-backdrop"><div className="prompt-library-state"><span className="prompt-library-spinner" /><strong>正在打开灵感库…</strong></div></div>}><PromptLibraryPanel
+          open
+          onClose={() => setPromptLibraryOpen(false)}
+          onUsePrompt={addPromptCaseNode}
+          onAddImage={addPromptCaseImage}
+          textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+          defaultTextModelKey={selectedTextModel ? `${selectedTextModel.connection.id}::${selectedTextModel.model.id}` : undefined}
+          onReversePrompts={reverseInspirationPrompts}
+        /></Suspense>}
+      </AnimatePresence>
+      <AnimatePresence>
+        {workflowTemplateOpen && <Suspense fallback={<div className="workflow-library-backdrop"><div className="prompt-library-state"><span className="prompt-library-spinner" /><strong>正在打开工作流…</strong></div></div>}><WorkflowTemplatePanel
+          open
+          onClose={() => setWorkflowTemplateOpen(false)}
+          onApply={applyWorkflowTemplate}
+        /></Suspense>}
+      </AnimatePresence>
       <AnimatePresence>
         {assetLibraryOpen && (
           <motion.div
@@ -11185,10 +11649,15 @@ function App() {
               <header className="transfer-modal-header">
                 <div>
                   <h2 id="transfer-dialog-title">导入 / 导出</h2>
-                  <span>{transferScope === 'workspace-append' ? '导入会添加为独立项目，不会覆盖现有内容' : '项目内导入会替换当前项目，其他项目不受影响'}（不含 API Key）</span>
+                  <span>{transferScope === 'workspace-append' ? '工作空间级导入、导出与项目选择' : '仅处理当前项目中的画布、资产、历史与会话'}（不含 API Key）</span>
                 </div>
                 <button type="button" aria-label="关闭导入导出" disabled={transferBusy} onClick={() => setTransferOpen(false)}><X size={18} /></button>
               </header>
+
+              {transferScope === 'project-replace' && <div className="transfer-import-mode">
+                <button type="button" className={projectImportMode === 'merge' ? 'is-selected' : ''} onClick={() => setProjectImportMode('merge')}><Plus size={14} /><span><strong>合并到当前项目</strong><small>追加画布、资产和历史，不覆盖原内容</small></span></button>
+                <button type="button" className={projectImportMode === 'replace' ? 'is-selected' : ''} onClick={() => setProjectImportMode('replace')}><RefreshCw size={14} /><span><strong>替换当前项目</strong><small>覆盖前询问备份，并进行二次确认</small></span></button>
+              </div>}
 
               <button
                 type="button"
@@ -11218,9 +11687,9 @@ function App() {
                 }}
               >
                 <Upload size={28} />
-                <strong>{transferScope === 'workspace-append' ? '导入为独立项目' : '导入并替换当前项目'}</strong>
+                <strong>{transferScope === 'workspace-append' ? '导入为独立项目' : projectImportMode === 'merge' ? '导入并合并到当前项目' : '导入并替换当前项目'}</strong>
                 <span>拖拽 `.disy` / `.json` 到此处，或点击选择文件</span>
-                <em>{transferScope === 'workspace-append' ? '可重复导入同一个项目包，每次都会创建新的独立项目' : '当前项目为空时直接导入；有内容时会先询问备份，并在不备份时二次确认'}</em>
+                <em>{transferScope === 'workspace-append' ? '可重复导入同一个项目包，每次都会创建新的独立项目' : projectImportMode === 'merge' ? '导入内容将追加到当前项目，已有画布和资料保持不变' : '当前项目为空时直接导入；有内容时会先询问备份，并在不备份时二次确认'}</em>
               </button>
 
               {hasImportBackup && <div className="transfer-export-card">
@@ -11239,6 +11708,7 @@ function App() {
                 </button>
               </div>}
 
+              {transferScope === 'workspace-append' ? <>
               <div className="transfer-export-card">
                 <div>
                   <strong>导出全部工作区</strong>
@@ -11259,21 +11729,107 @@ function App() {
 
               <div className="transfer-export-card">
                 <div>
-                  <strong>仅导出当前项目</strong>
-                  <span>包含“{projectName}”及其全部画布、历史、会话与共享资产资料</span>
+                  <strong>选择项目导出</strong>
+                  <span>单选、多选或全选当前工作空间项目，分别打包其画布、历史、会话与共享资产</span>
                 </div>
                 <button
                   type="button"
                   className="transfer-export-button"
                   disabled={transferBusy}
-                  onClick={() => void exportWholeWorkspace({ scope: 'project' }).catch((error) => {
-                    if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '当前项目导出失败')
-                  })}
+                  aria-expanded={projectExportPickerOpen}
+                  onClick={() => setProjectExportPickerOpen((open) => !open)}
                 >
-                  <Download size={16} />
-                  导出当前
+                  <ListChecks size={16} />
+                  选择项目
                 </button>
               </div>
+
+              {projectExportPickerOpen && <div className="transfer-project-picker">
+                <header>
+                  <div><strong>选择要导出的项目</strong><span>已选择 {exportProjectIds.length} / {workspaceProjects.length}</span></div>
+                  <button
+                    type="button"
+                    disabled={!workspaceProjects.length || transferBusy}
+                    onClick={() => setExportProjectIds((current) => current.length === workspaceProjects.length ? [] : workspaceProjects.map((project) => project.id))}
+                  >{exportProjectIds.length === workspaceProjects.length && workspaceProjects.length ? '取消全选' : '全选'}</button>
+                </header>
+                <div className="transfer-project-options">
+                  {workspaceProjects.map((project) => {
+                    const selected = exportProjectIds.includes(project.id)
+                    return <button
+                      type="button"
+                      key={project.id}
+                      className={selected ? 'is-selected' : ''}
+                      aria-pressed={selected}
+                      onClick={() => setExportProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id])}
+                    >
+                      <span className="transfer-project-check">{selected && <Check size={12} />}</span>
+                      <span><strong>{project.name}</strong><small>{project.canvasIds.length} 张画布{project.id === activeProjectId ? ' · 当前项目' : ''}</small></span>
+                    </button>
+                  })}
+                </div>
+                <footer>
+                  <span>{exportProjectIds.length ? `将导出 ${exportProjectIds.length} 个项目` : '至少选择一个项目'}</span>
+                  <button
+                    type="button"
+                    className="transfer-export-button"
+                    disabled={transferBusy || !exportProjectIds.length}
+                    onClick={() => void exportWholeWorkspace({ scope: 'projects', projectIds: exportProjectIds }).catch((error) => {
+                      if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '所选项目导出失败')
+                    })}
+                  ><Download size={16} />导出所选</button>
+                </footer>
+              </div>}
+              </> : <>
+                <div className="transfer-export-card">
+                  <div>
+                    <strong>导出当前项目</strong>
+                    <span>包含“{projectName}”的全部画布、历史、会话与共享资产，其他项目不会导出</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="transfer-export-button"
+                    disabled={transferBusy}
+                    onClick={() => void exportWholeWorkspace({ scope: 'projects', projectIds: [activeProjectId] }).catch((error) => {
+                      if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '当前项目导出失败')
+                    })}
+                  ><Download size={16} />导出项目</button>
+                </div>
+
+                <div className="transfer-export-card">
+                  <div>
+                    <strong>选择画布导出</strong>
+                    <span>单选、多选或全选当前项目画布，生成只包含所选画布的项目包</span>
+                  </div>
+                  <button type="button" className="transfer-export-button" disabled={transferBusy} aria-expanded={canvasExportPickerOpen} onClick={() => setCanvasExportPickerOpen((open) => !open)}><ListChecks size={16} />选择画布</button>
+                </div>
+
+                {canvasExportPickerOpen && <div className="transfer-project-picker">
+                  <header>
+                    <div><strong>选择要导出的画布</strong><span>已选择 {exportCanvasIds.length} / {workspaceCanvases.length}</span></div>
+                    <button
+                      type="button"
+                      disabled={!workspaceCanvases.length || transferBusy}
+                      onClick={() => setExportCanvasIds((current) => current.length === workspaceCanvases.length ? [] : workspaceCanvases.map((canvas) => canvas.id))}
+                    >{exportCanvasIds.length === workspaceCanvases.length && workspaceCanvases.length ? '取消全选' : '全选'}</button>
+                  </header>
+                  <div className="transfer-project-options">
+                    {workspaceCanvases.map((canvas) => {
+                      const selected = exportCanvasIds.includes(canvas.id)
+                      return <button type="button" key={canvas.id} className={selected ? 'is-selected' : ''} aria-pressed={selected} onClick={() => setExportCanvasIds((current) => current.includes(canvas.id) ? current.filter((id) => id !== canvas.id) : [...current, canvas.id])}>
+                        <span className="transfer-project-check">{selected && <Check size={12} />}</span>
+                        <span><strong>{canvas.name}</strong><small>{canvas.id === activeCanvasId ? '当前画布' : '项目画布'}</small></span>
+                      </button>
+                    })}
+                  </div>
+                  <footer>
+                    <span>{exportCanvasIds.length ? `将导出 ${exportCanvasIds.length} 张画布` : '至少选择一张画布'}</span>
+                    <button type="button" className="transfer-export-button" disabled={transferBusy || !exportCanvasIds.length} onClick={() => void exportWholeWorkspace({ scope: 'canvases', canvasIds: exportCanvasIds }).catch((error) => {
+                      if (!transferProgress) setToastMessage(error instanceof Error ? error.message : '所选画布导出失败')
+                    })}><Download size={16} />导出所选</button>
+                  </footer>
+                </div>}
+              </>}
             </motion.section>
           </motion.div>
         )}
@@ -11318,6 +11874,8 @@ function App() {
                   {apiSettings.connections.map((connection) => {
                     const enabledCount = connection.models.filter((model) => model.enabled).length
                     const usable = isConnectionUsable(connection)
+                    const health = connectionHealthByConnection[connection.id]
+                    const appearsOnline = usable && health !== 'offline'
                     return (
                       <div
                         key={connection.id}
@@ -11328,8 +11886,8 @@ function App() {
                           className="api-connection-main"
                           onClick={() => selectApiConnection(connection)}
                         >
-                          <span className={`api-connection-dot ${usable && connection.apiKey ? 'is-online' : ''}`} />
-                          <span><strong>{connection.name}</strong><small>{connection.models.length ? `${enabledCount}/${connection.models.length} 个模型已启用` : (connection.disconnected ? '已断开' : '尚未获取模型')}</small></span>
+                          <span className={`api-connection-dot ${appearsOnline ? 'is-online' : ''}`} />
+                          <span><strong>{connection.name}</strong><small>{!connection.apiKey.trim() ? 'API Key 缺失' : health === 'offline' ? '凭据验证失败' : connection.models.length ? `${enabledCount}/${connection.models.length} 个模型已启用` : (connection.disconnected ? '已断开' : '尚未获取模型')}</small></span>
                         </button>
                         <button
                           type="button"
@@ -11351,10 +11909,10 @@ function App() {
                     <div className="api-detail-heading"><strong>{editingConnectionId === 'new' ? '新建连接' : apiDraft.name || 'API 连接'}</strong><span>{editingConnectionId === 'new' ? '配置一个新的 OpenAI 兼容接口' : '编辑连接与启用模型'}</span></div>
                     {editingConnectionId !== 'new' && (
                       <div className="api-detail-actions">
-                        {apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected ? (
+                        {editingConnectionStatus !== 'online' ? (
                           <>
-                            <span className="api-connection-status is-offline"><i />已断开</span>
-                            <button type="button" className="api-link-action is-reconnect" onClick={reconnectCurrentApiConnection}><PlugZap size={13} />重新连接</button>
+                            <span className="api-connection-status is-offline"><i />{editingConnectionStatus === 'checking' ? '检查中' : editingConnectionStatus === 'missing-key' ? 'API Key 缺失' : editingConnectionStatus === 'offline' ? '验证失败' : '已断开'}</span>
+                            <button type="button" className="api-link-action is-reconnect" disabled={editingConnectionStatus === 'checking'} onClick={() => void reconnectCurrentApiConnection()}><PlugZap size={13} />{editingConnectionStatus === 'missing-key' ? '填写后连接' : '重新连接'}</button>
                           </>
                         ) : (
                           <>
@@ -11367,10 +11925,10 @@ function App() {
                     )}
                   </div>
 
-                  {editingConnectionId !== 'new' && apiSettings.connections.find((connection) => connection.id === editingConnectionId)?.disconnected && (
+                  {editingConnectionId !== 'new' && editingConnectionStatus !== 'online' && editingConnectionStatus !== 'checking' && (
                     <div className="api-disconnected-banner">
                       <Unplug size={15} />
-                      <span><strong>当前连接已断开</strong>节点中不会显示此连接的模型。API Key 与模型目录仍保留，点击右上角「重新连接」即可恢复。</span>
+                      <span><strong>{editingConnectionStatus === 'missing-key' ? 'API Key 已从当前会话中清除' : editingConnectionStatus === 'offline' ? '当前凭据验证失败' : '当前连接已断开'}</strong>{editingConnectionStatus === 'missing-key' ? '请重新填写 API Key；在验证成功前不会显示为已连接。' : editingConnectionStatus === 'offline' ? '请检查接口地址、API Key 或网络状态，再点击右上角重新连接。' : '节点中不会显示此连接的模型，点击右上角「重新连接」并验证后恢复。'}</span>
                     </div>
                   )}
 
@@ -11426,7 +11984,7 @@ function App() {
                         {creditsLoading ? '查询中' : '刷新余额'}
                       </button>
                     </div>
-                    {currentProviderCredits ? <div className="provider-credits-value"><strong>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)}</strong><span>{currentProviderCredits.unit}</span><small>{currentProviderCredits.provider} · 刚刚更新</small></div>
+                    {currentProviderCredits ? <div className="provider-credits-value"><strong>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)}</strong><span>{currentProviderCredits.unit}</span><small>{currentProviderCredits.provider} · {new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(currentProviderCredits.updatedAt))} 更新</small></div>
                       : <p>{creditsError || '点击“刷新余额”查询当前 API Key 的可用积分。'}</p>}
                   </section>
 
@@ -11490,6 +12048,7 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      {projectDialogNode}
     </div>
   )
 }

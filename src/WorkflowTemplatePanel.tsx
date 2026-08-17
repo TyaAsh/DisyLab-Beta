@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react'
 import { ArrowRight, Check, ChevronDown, Download, Pencil, Plus, Search, Shapes, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { useProjectDialog } from './ProjectDialog'
 
 export type WorkflowTemplateNode = {
   id: string
@@ -598,6 +599,9 @@ const VIDEO_TEMPLATE_IDS = new Set([
   'douyin-commerce', 'restaurant-launch', 'tourism-citywalk', 'virtual-human-host', 'virtual-influencer-matrix',
   'education-course-launch', 'automotive-launch', 'fintech-brand-production', 'fintech-growth-operations',
 ])
+const isVideoWorkflow = (template: WorkflowTemplate) => template.category === '影视 / TVC 广告'
+  || VIDEO_TEMPLATE_IDS.has(template.id)
+  || template.tags.some((tag) => /视频|TVC|分镜|短片|MV|电影/i.test(tag))
 const MOTION_NODE_PATTERN = /镜|分镜|故事|动作|交互|过程|演示|首尾帧|动态|口播|场景组|旅拍|发布|Campaign/i
 const STATIC_MASTER_PATTERN = /母版|三视图|设定板|资产|结构|界面母版|标准图|质检|清单/i
 const buildVideoPrompt = (template: WorkflowTemplate, source: WorkflowTemplateNode, shotIndex: number) => {
@@ -786,6 +790,7 @@ function WorkflowCategorySelect({ value, onChange }: { value: string; onChange: 
 }
 
 export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
+  const { confirm: projectConfirm, alert: projectAlert, dialogNode: projectDialogNode } = useProjectDialog()
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('全部')
   const [storage, setStorage] = useState<StoredWorkflowTemplates>(readStorage)
@@ -818,8 +823,8 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
     setSelectedId(template.id)
     setDraft(null)
   }
-  const removeTemplate = (template: WorkflowTemplate) => {
-    if (!window.confirm(`确定删除“${template.title}”吗？`)) return
+  const removeTemplate = async (template: WorkflowTemplate) => {
+    if (!await projectConfirm({ title: '删除工作流模板？', message: `模板“${template.title}”将从本地模板库移除。`, confirmLabel: '确认删除', danger: true })) return
     const sourceId = template.id.replace(/^override:/, '')
     setStorage((current) => template.userDefined
       ? {
@@ -859,7 +864,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
       if (!valid.length) throw new Error('没有可导入的有效工作流')
       setStorage((current) => ({ ...current, custom: [...current.custom, ...valid] }))
       setSelectedId(valid[0].id)
-    } catch (error) { window.alert(error instanceof Error ? error.message : '导入失败') }
+    } catch (error) { await projectAlert({ title: '工作流导入失败', message: error instanceof Error ? error.message : '导入失败', danger: true }) }
   }
   if (!open) return null
 
@@ -882,9 +887,9 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
       <div className="workflow-library-body">
         <div className="workflow-template-grid">
           {results.map((item) => <button type="button" className={`workflow-template-card ${selected?.id === item.id ? 'is-selected' : ''}`} onClick={() => setSelectedId(item.id)} key={item.id}>
-            <div className="workflow-graph-preview" style={{ '--workflow-accent': item.accent } as CSSProperties}>
-              {item.edges.map((itemEdge, index) => <i key={itemEdge.id} style={{ width: `${38 + index * 7}%`, transform: `rotate(${index % 2 ? -13 : 12}deg)` }} />)}
-              {item.nodes.slice(0, 5).map((node, index) => <span className={`is-${node.data.kind}`} style={{ left: `${12 + (index % 3) * 34}%`, top: `${18 + Math.floor(index / 3) * 44}%` }} key={node.id}>{index + 1}</span>)}
+            <div className={`workflow-cover-preview ${isVideoWorkflow(item) ? 'is-video' : ''}`} style={{ '--workflow-accent': item.accent, '--workflow-cover': `url(${isVideoWorkflow(item) ? '/workflow-covers/video-storyboard.png' : '/workflow-covers/creative-production.png'})` } as CSSProperties}>
+              <div className="workflow-cover-shade" />
+              <div className="workflow-cover-meta"><span>{isVideoWorkflow(item) ? 'STORYBOARD' : 'CREATIVE SYSTEM'}</span><b>{item.nodes.length} STEPS</b></div>
             </div>
             <div><small>{item.category}{item.userDefined ? ' · 本地' : ''}</small><strong>{item.title}</strong><p>{item.description}</p><span>{item.nodes.length} 个节点 · {item.edges.length} 条连线</span></div>
           </button>)}
@@ -933,5 +938,6 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
         </form>
       </div>}
     </section>
+    {projectDialogNode}
   </div>
 }

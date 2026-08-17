@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState, type DragEvent } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowUpRight,
   BookOpen,
@@ -10,6 +11,7 @@ import {
   GripVertical,
   ImagePlus,
   LoaderCircle,
+  PanelRightClose,
   Plus,
   Search,
   Settings2,
@@ -191,6 +193,7 @@ export function PromptLibraryPanel({
   defaultTextModelKey,
   onReversePrompts,
 }: Props) {
+  const reduceMotion = useReducedMotion();
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
@@ -220,6 +223,8 @@ export function PromptLibraryPanel({
   const [pendingDeleteCategory, setPendingDeleteCategory] = useState<
     string | null
   >(null);
+  const [pendingDeleteCase, setPendingDeleteCase] =
+    useState<PromptLibraryCase | null>(null);
   const [draft, setDraft] = useState({
     title: "",
     nanoPrompt: "",
@@ -348,12 +353,12 @@ export function PromptLibraryPanel({
   };
 
   const deleteCase = (item: PromptLibraryCase) => {
-    if (
-      !window.confirm(
-        `确认从灵感案例中删除「${item.title}」吗？此操作仅影响当前浏览器，可在刷新数据后恢复公共案例。`,
-      )
-    )
-      return;
+    setPendingDeleteCase(item);
+  };
+
+  const confirmDeleteCase = () => {
+    const item = pendingDeleteCase;
+    if (!item) return;
     if (String(item.id).startsWith("custom-")) {
       const next = customCases.filter((current) => current.id !== item.id);
       saveCustomCases(next);
@@ -364,6 +369,7 @@ export function PromptLibraryPanel({
       setHiddenCaseIds(next);
     }
     setSelected(null);
+    setPendingDeleteCase(null);
   };
 
   const deleteCategory = (value: string) => {
@@ -502,10 +508,11 @@ export function PromptLibraryPanel({
     );
   };
 
-  const moveCategory = (targetCategory: string) => {
-    if (!draggedCategory || draggedCategory === targetCategory) return;
-    const next = categories.filter((value) => value !== draggedCategory);
-    next.splice(next.indexOf(targetCategory), 0, draggedCategory);
+  const moveCategory = (sourceCategory: string, targetCategory: string) => {
+    if (!sourceCategory || sourceCategory === targetCategory) return;
+    const next = categories.filter((value) => value !== sourceCategory);
+    const targetIndex = next.indexOf(targetCategory);
+    next.splice(targetIndex < 0 ? next.length : targetIndex, 0, sourceCategory);
     const nextSettings = { ...categorySettings, order: next };
     localStorage.setItem(CATEGORY_SETTINGS_KEY, JSON.stringify(nextSettings));
     setCategorySettings(nextSettings);
@@ -536,9 +543,15 @@ export function PromptLibraryPanel({
   };
 
   return (
-    <div
+    <motion.div
       className="prompt-library-backdrop"
-      onMouseDown={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: reduceMotion ? 0 : .2, ease: "easeOut" }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
       onDragEnter={(event) => {
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
@@ -555,8 +568,12 @@ export function PromptLibraryPanel({
         if (payload) onAddImage(JSON.parse(payload) as PromptLibraryCase);
       }}
     >
-      <section
+      <motion.section
         className="prompt-library-panel"
+        initial={reduceMotion ? false : { opacity: 0, y: 18, scale: .985 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: .99 }}
+        transition={{ type: "spring", stiffness: 360, damping: 34, mass: .72 }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="prompt-library-title"
@@ -663,9 +680,8 @@ export function PromptLibraryPanel({
                       );
                     else
                       moveCategory(
-                        event.dataTransfer.getData(
-                          "application/x-disy-category",
-                        ) || value,
+                        event.dataTransfer.getData("application/x-disy-category"),
+                        value,
                       );
                   }}
                   onClick={() => setCategory(value)}
@@ -686,8 +702,9 @@ export function PromptLibraryPanel({
               </button>
             </div>
           </div>
+          <AnimatePresence>
           {categoryManagerOpen && (
-            <div className="prompt-category-manager">
+            <motion.div className="prompt-category-manager" initial={reduceMotion ? false : { opacity: 0, y: -8, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -6, scale: .99 }} transition={{ duration: reduceMotion ? 0 : .18, ease: [0.22, 1, 0.36, 1] }}>
               <header>
                 <div>
                   <strong>管理分类</strong>
@@ -812,14 +829,17 @@ export function PromptLibraryPanel({
                   );
                 })}
               </div>
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </div>
 
-        <div
+        <motion.div
+          layout
           className={`prompt-library-content ${selected ? "has-detail" : ""}`}
+          transition={{ layout: { duration: reduceMotion ? 0 : .28, ease: [0.22, 1, 0.36, 1] } }}
         >
-          <div className="prompt-case-grid">
+          <motion.div className="prompt-case-grid" layout>
             {error && (
               <div className="prompt-library-state">
                 <BookOpen size={28} />
@@ -839,12 +859,18 @@ export function PromptLibraryPanel({
                 <span>试试减少筛选条件</span>
               </div>
             )}
-            {pageCases.map((item) => (
-              <article
+            {pageCases.map((item, index) => (
+              <motion.article
+                layout="position"
                 key={item.id}
                 className={`prompt-case-card ${selected?.id === item.id ? "is-selected" : ""}`}
+                initial={reduceMotion ? false : { opacity: 0, y: 10, scale: .985 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: reduceMotion ? 0 : .22, delay: reduceMotion ? 0 : Math.min(index, 11) * .018, ease: [0.22, 1, 0.36, 1] }}
+                whileHover={reduceMotion ? undefined : { y: -3 }}
+                whileTap={reduceMotion ? undefined : { scale: .992 }}
                 draggable
-                onDragStart={(event) => beginDrag(event, item)}
+                onDragStart={(event) => beginDrag(event as unknown as DragEvent, item)}
                 onClick={() => setSelected(item)}
               >
                 <div className="prompt-case-image">
@@ -870,7 +896,7 @@ export function PromptLibraryPanel({
                   <strong>{item.title}</strong>
                   <p>{item.nanoPrompt || item.prompt}</p>
                 </div>
-              </article>
+              </motion.article>
             ))}
             {results.length > PAGE_SIZE && (
               <nav className="prompt-pagination" aria-label="灵感库分页">
@@ -898,14 +924,32 @@ export function PromptLibraryPanel({
                 </button>
               </nav>
             )}
-          </div>
+          </motion.div>
 
+          <AnimatePresence mode="popLayout">
           {selected && (
-            <aside
+            <motion.aside
+              key={String(selected.id)}
+              layout
               className="prompt-case-detail"
+              initial={reduceMotion ? false : { opacity: 0, x: 26 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 18 }}
+              transition={{ duration: reduceMotion ? 0 : .24, ease: [0.22, 1, 0.36, 1] }}
               draggable
-              onDragStart={(event) => beginDrag(event, selected)}
+              onDragStart={(event) => beginDrag(event as unknown as DragEvent, selected)}
             >
+              <div className="prompt-detail-toolbar">
+                <span>案例详情</span>
+                <button
+                  type="button"
+                  title="关闭案例详情"
+                  aria-label="关闭案例详情"
+                  onClick={() => setSelected(null)}
+                >
+                  <PanelRightClose size={16} />
+                </button>
+              </div>
               <div
                 className="prompt-detail-image"
                 draggable
@@ -995,7 +1039,9 @@ export function PromptLibraryPanel({
                     {copied ? "已复制" : "复制"}
                   </button>
                 </div>
-                <p>{promptFor(selected)}</p>
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.p key={`${selected.id}-${promptModel}`} initial={reduceMotion ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: reduceMotion ? 0 : .14 }}>{promptFor(selected)}</motion.p>
+                </AnimatePresence>
               </div>
               <div className="prompt-detail-actions">
                 <button
@@ -1037,17 +1083,21 @@ export function PromptLibraryPanel({
                 </a>
                 。使用前请自行确认原作者授权。
               </footer>
-            </aside>
+            </motion.aside>
           )}
-        </div>
-      </section>
+          </AnimatePresence>
+        </motion.div>
+      </motion.section>
+      <AnimatePresence>
       {creatorOpen && (
-        <div
+        <motion.div
           className="prompt-creator-backdrop"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .16 }}
           onMouseDown={() => setCreatorOpen(false)}
         >
-          <form
+          <motion.form
             className="prompt-creator-dialog"
+            initial={reduceMotion ? false : { opacity: 0, y: 14, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: .99 }} transition={{ duration: reduceMotion ? 0 : .2, ease: [0.22, 1, 0.36, 1] }}
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
@@ -1287,16 +1337,20 @@ export function PromptLibraryPanel({
                 保存到灵感案例
               </button>
             </footer>
-          </form>
-        </div>
+          </motion.form>
+        </motion.div>
       )}
+      </AnimatePresence>
+      <AnimatePresence>
       {editingCase && (
-        <div
+        <motion.div
           className="prompt-editor-backdrop"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .16 }}
           onMouseDown={() => setEditingCase(null)}
         >
-          <form
+          <motion.form
             className="prompt-editor-dialog"
+            initial={reduceMotion ? false : { opacity: 0, y: 12, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: .99 }} transition={{ duration: reduceMotion ? 0 : .2, ease: [0.22, 1, 0.36, 1] }}
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
@@ -1394,9 +1448,36 @@ export function PromptLibraryPanel({
                 保存修改
               </button>
             </footer>
-          </form>
-        </div>
+          </motion.form>
+        </motion.div>
       )}
-    </div>
+      </AnimatePresence>
+      <AnimatePresence>
+      {pendingDeleteCase && (
+        <motion.div
+          className="prompt-inline-confirm-backdrop"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .14 }}
+          role="presentation"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (event.target === event.currentTarget) setPendingDeleteCase(null);
+          }}
+        >
+          <motion.section className="prompt-inline-confirm" role="alertdialog" aria-modal="true" aria-labelledby="prompt-delete-title" initial={reduceMotion ? false : { opacity: 0, y: 10, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: .985 }} transition={{ duration: reduceMotion ? 0 : .18, ease: [0.22, 1, 0.36, 1] }} onClick={(event) => event.stopPropagation()}>
+            <span className="prompt-inline-confirm-icon"><Trash2 size={17} /></span>
+            <div>
+              <h3 id="prompt-delete-title">确认删除案例？</h3>
+              <p>“{pendingDeleteCase.title}”删除后仅影响当前浏览器，可刷新公共数据恢复。</p>
+            </div>
+            <footer>
+              <button type="button" onClick={() => setPendingDeleteCase(null)}>取消</button>
+              <button type="button" className="is-danger" onClick={confirmDeleteCase}>确认删除</button>
+            </footer>
+          </motion.section>
+        </motion.div>
+      )}
+      </AnimatePresence>
+    </motion.div>
   );
 }

@@ -354,7 +354,7 @@ export async function reinflateBundleMedia(
   }
 }
 
-export function triggerBlobDownload(blob: Blob, fileName: string) {
+export async function triggerBlobDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
