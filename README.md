@@ -9,6 +9,10 @@
 <h1 align="center">DisyLab</h1>
 
 <p align="center">
+  简体中文 · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <strong>让角色、参考、提示词和每一次尝试，都留在同一张会生长的画布上。</strong>
 </p>
 
@@ -34,7 +38,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.3-77bdf2" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.4-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
@@ -43,7 +47,16 @@
 > [!IMPORTANT]
 > **DisyLab 是源码公开可见（source-available）的专有软件，不是开源软件。** 未经版权所有者事先书面许可，不得商用、售卖、出租、白标、再分发、再许可或将本项目及其修改版本用于收费服务。查看完整的[中文授权声明](LICENSE.zh-CN.md)与[英文许可证](LICENSE)。
 
-> 这里是 DisyLab v1.0.3。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
+> 这里是 DisyLab v1.0.4。项目、画布、资产、历史和 Agent 会话默认留在你的浏览器里；你的创作是你的，API Key 也是。
+
+## v1.0.4 新增
+
+- **工作流系统**：新增工作流模板库、分类与搜索、平滑动效、画布导入和可复用节点流程。
+- **完整视频工作流**：支持文生视频、图生视频、首尾帧、图片参考和全能参考模式，并按模型能力约束参数。
+- **视频编辑能力**：新增剪辑台、画布内九宫格裁剪、当前帧/首帧/尾帧截取、全屏预览、下载与视频资产沉淀。
+- **视频 Agent 方案**：Agent 可先生成可确认的视频方案，再创建视频节点并执行任务；项目风格预设可参与支持参考图的视频模式。
+- **iOS 26 风格视觉系统**：节点、编辑器、悬浮工具条、菜单和弹窗统一为高可读性的磨砂玻璃语言，并完善层级与 Esc 关闭行为。
+- **多平台部署 relay**：Cloudflare Pages、Netlify 与 Vercel 均提供 APIYI 视频任务、轮询和媒体回传入口。
 
 ![DisyLab Y2K 角色视觉项目](docs/assets/y2k-canvas-overview.png)
 
@@ -106,6 +119,9 @@ Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择
 | 多类型节点 | 文本、图像生成、上传图片和组合节点，可拖拽、复制、删除、打组和解组。 |
 | 可视化连接 | 用连线组织提示词、参考图和生成节点，选中连接提供明确反馈。 |
 | 文本与图像生成 | 支持兼容 OpenAI 风格的 `chat/completions` 与 `images/generations` 接口。 |
+| 视频生成 | 支持文生视频、图生视频、首尾帧、图片参考与全能参考，并包含模型能力校验、任务进度和本地结果保存。 |
+| 视频编辑 | 支持时间轴剪辑、画布内自由裁剪、当前帧/首帧/尾帧截取、全屏播放、下载与加入资产库。 |
+| 工作流模板 | 提供可搜索、分类和复用的工作流弹窗，可将模板节点结构导入当前画布。 |
 | 多 API 连接 | 可维护多个 API 连接、获取模型目录，并按文本、图像和视频能力分类。 |
 | 参考图工作流 | 通过画布连线或手动选择添加参考图，在提示词中显示可移除的引用标签。 |
 | 图像结果管理 | 支持多张生成结果、结果切换、放大画廊、滚轮浏览和下载。 |
@@ -128,19 +144,18 @@ Agent 提出多个方向时，Disy 不再把关键词煮成一锅粥。先选择
 | 提示库 | 内置压缩参考图与可编辑 Prompt，支持分类、风格筛选、分页懒加载、拖入画布、写入提示词节点，以及个人案例沉淀。 |
 | 打光 | Three.js 交互式光位预览，拖动主光源并调整亮度、色温、轮廓光，再以生成提示词创建下游图像任务。 |
 
-更完整的功能边界和版本信息见 [v1.0.3 版本说明](docs/Disy-v1.0.3-版本说明.md)。
+更完整的功能边界和版本信息见 [v1.0.4 版本说明](docs/Disy-v1.0.4-版本说明.md)。
 
 ## 当前版本边界
 
-Disy v1.0.3 聚焦于浏览器端的个人创作闭环，目前尚未提供：
+Disy v1.0.4 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 
 - 账号注册、登录和用户权限。
 - 云端项目同步与多人实时协作。
 - 服务端 API Key 托管和公共生成额度。
-- 视频生成工作流。
 - 可跨设备同步的资产库和 Agent 会话。
 
-当前前端会直接请求使用者配置的模型服务，因此目标服务必须允许浏览器跨域访问。若要向大量用户提供共享生成额度，需要先增加服务端代理、身份校验、限流、费用控制和内容安全机制。
+除 APIYI 外，当前前端会直接请求使用者配置的模型服务，因此自定义接口必须允许浏览器跨域访问。APIYI 的模型、文本、图片、视频任务和短时 CDN 结果会自动走项目内的同源 relay；relay 只转发当前请求，不保存 API Key。若要向大量用户提供共享生成额度，仍需要增加身份校验、限流、费用控制和内容安全机制。
 
 ## 技术栈
 
@@ -156,7 +171,7 @@ Disy v1.0.3 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 | IndexedDB / localStorage / sessionStorage | 本地项目、资产、历史和会话密钥 |
 | Cloudflare Pages | Web 体验版部署 |
 
-当前版本改动可查看 [v1.0.3 版本说明](docs/Disy-v1.0.3-版本说明.md)。
+当前版本改动可查看 [v1.0.4 版本说明](docs/Disy-v1.0.4-版本说明.md)。
 
 ## 快速开始
 
@@ -171,6 +186,8 @@ Disy v1.0.3 聚焦于浏览器端的个人创作闭环，目前尚未提供：
 ```bash
 npm install
 ```
+
+从 GitHub 下载后请保留 `package-lock.json` 并使用 Node.js 22.12+；不要上传 `node_modules/`、`dist/`、`.tmp/` 或 `.env`。API Key 不在仓库中，首次打开应用后需要在当前浏览器重新填写，Key 只保存在会话存储中。
 
 ### 启动开发环境
 
@@ -194,6 +211,20 @@ npm run preview
 ```
 
 生产文件输出到 `dist/`。
+
+### Cloudflare Pages 部署
+
+仓库已经包含 Cloudflare Pages Functions，不能只上传 `dist/` 后再单独部署 API。请在 Pages 项目中使用：
+
+- 构建命令：`npm run build`
+- 输出目录：`dist`
+- Node.js：`22.12` 或更高（仓库同时提供 `.nvmrc`、`.node-version` 和 `package.json` engines）
+
+根目录的 `functions/` 会随 Pages 一起部署，提供 `/apiyi/openai/*`、`/apiyi/seedance/*`、`/apiyi/wan/*`、`/apiyi/veo/*` 和 `/apiyi/media`。不要把 `functions/` 删除或只发布构建产物，否则视频任务可以提交但无法轮询或下载结果。
+
+Netlify 与 Vercel 的兼容入口分别位于 `netlify/functions/` 与 `api/`，对应的路由配置已经写入 `netlify.toml` 和 `vercel.json`。
+
+GitHub Pages 只适合仓库中的 `site/` 项目介绍页，不会执行 `functions/`、`api/` 或 `netlify/functions/`。如果把 `dist/` 直接发布到 GitHub Pages，普通静态页面可以打开，但 APIYI 视频任务的提交、轮询和媒体回传不会工作；生产部署请使用 Cloudflare Pages、Netlify 或 Vercel。
 
 ## API 配置
 
@@ -222,25 +253,26 @@ src/
 
 docs/                  # 可公开的版本与功能文档
 public/                # 公共静态资源
+functions/              # Cloudflare Pages Functions（APIYI 同源 relay）
+netlify/functions/      # Netlify Functions 兼容入口
+api/                    # Vercel Functions 兼容入口
 netlify.toml           # 旧版 Netlify 部署兼容配置
 ```
 
 ## 项目文档
 
+- [v1.0.4 版本说明](docs/Disy-v1.0.4-版本说明.md)
 - [v1.0.3 版本说明](docs/Disy-v1.0.3-版本说明.md)
 
 ## Roadmap
 
-下一版本计划优先加入：
+下一版本计划重点推出：
 
-- 视频生成、首尾帧、参考图和视频资产管理。
-- 浅色皮肤与更完整的主题系统。
-- 人物预设、场景预设和分镜预设。
-- Skill 上传与结构化创作工作流。
-- 扩图、抠图等图像编辑能力。
-- 节点搜索、快速定位和 Agent 对话历史搜索。
+- **3D 预演台**：在正式生成前预演镜头、场景、角色站位与空间关系。
+- **Skill 集成**：把可复用的专业能力接入 Agent 与结构化创作流程。
+- **多语言与主题系统**：更多界面语言以及深色 / 浅色模式将逐步开放。
 
-更长期的方向包括账号与云同步、项目分享、协作、桌面端和服务端任务。音频生成不在产品规划内，后续也不会开发。
+同时，DisyLab 正在推进前后端分离架构，桌面端也处于开发中。更长期的方向包括账号与云同步、项目分享和协作。音频生成不在产品规划内，后续也不会开发。
 
 路线图会根据真实创作体验和测试反馈持续调整。
 

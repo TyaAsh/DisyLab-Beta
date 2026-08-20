@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react'
+import { useGSAP } from '@gsap/react'
+import { gsap } from 'gsap'
 import { ArrowRight, Check, ChevronDown, Download, Pencil, Plus, Search, Shapes, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { useProjectDialog } from './ProjectDialog'
+
+gsap.registerPlugin(useGSAP)
 
 export type WorkflowTemplateNode = {
   id: string
@@ -797,7 +801,54 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
   const [selectedId, setSelectedId] = useState(BUILT_IN_TEMPLATES[0].id)
   const [draft, setDraft] = useState<EditorDraft | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  const closingRef = useRef(false)
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(storage)) }, [storage])
+
+  const { contextSafe } = useGSAP(() => {
+    if (!open || !backdropRef.current || !panelRef.current) return
+    closingRef.current = false
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reducedMotion) {
+      gsap.set([backdropRef.current, panelRef.current], { autoAlpha: 1, clearProps: 'transform' })
+      return
+    }
+    const cards = gsap.utils.toArray<HTMLElement>('.workflow-template-card').slice(0, 12)
+    const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } })
+    timeline
+      .fromTo(backdropRef.current, { autoAlpha: 0 }, { autoAlpha: 1, duration: .28 })
+      .fromTo(panelRef.current, { autoAlpha: 0, y: 24, scale: .975 }, { autoAlpha: 1, y: 0, scale: 1, duration: .52, ease: 'power4.out' }, .03)
+      .fromTo('.workflow-library > header > *, .workflow-library-toolbar > *', { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: .32, stagger: .035 }, .16)
+      .fromTo(cards, { autoAlpha: 0, y: 12, scale: .985 }, { autoAlpha: 1, y: 0, scale: 1, duration: .34, stagger: .025, ease: 'power2.out' }, .2)
+      .fromTo('.workflow-template-detail', { autoAlpha: 0, x: 10 }, { autoAlpha: 1, x: 0, duration: .36 }, .24)
+  }, { scope: backdropRef, dependencies: [open], revertOnUpdate: true })
+
+  const requestClose = contextSafe(() => {
+    if (closingRef.current) return
+    const backdrop = backdropRef.current
+    const panel = panelRef.current
+    if (!backdrop || !panel || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onClose()
+      return
+    }
+    closingRef.current = true
+    gsap.timeline({ onComplete: onClose })
+      .to(panel, { autoAlpha: 0, y: 14, scale: .985, duration: .24, ease: 'power2.in' })
+      .to(backdrop, { autoAlpha: 0, duration: .18, ease: 'power1.inOut' }, '<.05')
+  })
+
+  useEffect(() => {
+    if (!open) return
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      if (draft) setDraft(null)
+      else requestClose()
+    }
+    window.addEventListener('keydown', closeWithEscape)
+    return () => window.removeEventListener('keydown', closeWithEscape)
+  }, [draft, open, requestClose])
   const templates = useMemo(() => {
     const overrides = new Map(storage.overrides.map((item) => [item.id.replace(/^override:/, ''), item]))
     const builtIns = BUILT_IN_TEMPLATES
@@ -868,8 +919,8 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
   }
   if (!open) return null
 
-  return <div className="workflow-library-backdrop" onMouseDown={onClose}>
-    <section className="workflow-library" onMouseDown={(event) => event.stopPropagation()}>
+  return <div ref={backdropRef} className="workflow-library-backdrop" onMouseDown={requestClose}>
+    <section ref={panelRef} className="workflow-library" onMouseDown={(event) => event.stopPropagation()}>
       <header>
         <div><span><Shapes size={18} /></span><div><small>WORKFLOW LIBRARY</small><h2>工作流模板库</h2></div></div>
         <div className="workflow-header-actions">
@@ -877,7 +928,7 @@ export function WorkflowTemplatePanel({ open, onClose, onApply }: Props) {
           <button type="button" onClick={() => importRef.current?.click()}><Upload size={15} />导入</button>
           <button type="button" onClick={exportTemplates}><Download size={15} />导出</button>
           <button type="button" className="is-primary" onClick={() => setDraft(EMPTY_DRAFT())}><Plus size={15} />新建模板</button>
-          <button type="button" aria-label="关闭工作流模板库" onClick={onClose}><X size={19} /></button>
+          <button type="button" aria-label="关闭工作流模板库" onClick={requestClose}><X size={19} /></button>
         </div>
       </header>
       <div className="workflow-library-toolbar">

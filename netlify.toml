@@ -6,6 +6,36 @@
   NODE_VERSION = "22"
 
 [[redirects]]
+  from = "/apiyi/seedance/*"
+  to = "/.netlify/functions/apiyi-seedance/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/apiyi/media"
+  to = "/.netlify/functions/apiyi-media"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/apiyi/openai/*"
+  to = "/.netlify/functions/apiyi-openai/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/apiyi/wan/*"
+  to = "/.netlify/functions/apiyi-wan/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/apiyi/veo/*"
+  to = "/.netlify/functions/apiyi-veo/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

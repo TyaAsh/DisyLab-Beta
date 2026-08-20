@@ -249,6 +249,26 @@ export function PromptLibraryPanel({
     categories: [] as string[],
   });
   const [draggedCategory, setDraggedCategory] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (pendingDeleteCase) setPendingDeleteCase(null);
+      else if (pendingDeleteCategory) setPendingDeleteCategory(null);
+      else if (editingCategory) setEditingCategory(null);
+      else if (editingCase) setEditingCase(null);
+      else if (creatorCategoryOpen) setCreatorCategoryOpen(false);
+      else if (reverseModelMenuOpen) setReverseModelMenuOpen(false);
+      else if (creatorOpen) setCreatorOpen(false);
+      else if (selected) setSelected(null);
+      else if (categoryManagerOpen) setCategoryManagerOpen(false);
+      else onClose();
+    };
+    window.addEventListener("keydown", closeWithEscape);
+    return () => window.removeEventListener("keydown", closeWithEscape);
+  }, [categoryManagerOpen, creatorCategoryOpen, creatorOpen, editingCase, editingCategory, onClose, open, pendingDeleteCase, pendingDeleteCategory, reverseModelMenuOpen, selected]);
   const creatorCategoryMenuId = useId();
   const reverseModelMenuId = useId();
   const reverseTextModel = textModels.find(

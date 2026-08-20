@@ -24,6 +24,7 @@ export type AgentImageReference = {
   nodeId: string
   name: string
   url: string
+  kind?: 'image' | 'video'
   autoResolved?: boolean
   resolutionReason?: string
 }
@@ -31,7 +32,7 @@ export type AgentImageReference = {
 export type AgentContextReference = {
   nodeId: string
   name: string
-  kind: 'image' | 'text'
+  kind: 'image' | 'video' | 'text'
   url?: string
   excerpt?: string
   autoResolved?: boolean
@@ -81,6 +82,31 @@ export type AgentImagePlan = {
   error?: string
 }
 
+export type AgentVideoPlan = {
+  id: string
+  mediaKind: 'video'
+  status: 'ready' | 'running' | 'completed' | 'failed' | 'cancelled'
+  label?: string
+  prompt: string
+  referenceNodeIds: string[]
+  references?: AgentImageReference[]
+  contextReferences?: AgentContextReference[]
+  invokedStyleReferences?: AgentStyleReference[]
+  styleInvocationWord?: string
+  invokedStylePresets?: AgentInvokedStylePreset[]
+  aspectRatio: string
+  resolution: string
+  duration: number
+  count: number
+  generationMode?: 'text' | 'image' | 'frames' | 'reference' | 'omni'
+  videoConnectionId?: string
+  videoModelId?: string
+  assistantMessageId?: string
+  createdAt?: string
+  nodeId?: string
+  error?: string
+}
+
 export type AgentTextPlan = {
   id: string
   status: 'ready' | 'completed' | 'cancelled'
@@ -108,6 +134,8 @@ export type AgentReply = {
   reply: string
   imagePlan?: AgentImagePlanDraft
   imagePlans?: AgentImagePlanDraft[]
+  videoPlan?: AgentVideoPlanDraft
+  videoPlans?: AgentVideoPlanDraft[]
   textNode?: {
     title: string
     content: string
@@ -115,6 +143,7 @@ export type AgentReply = {
 }
 
 export type AgentImagePlanDraft = Pick<AgentImagePlan, 'prompt' | 'aspectRatio' | 'resolution' | 'detail' | 'count' | 'label'>
+export type AgentVideoPlanDraft = Pick<AgentVideoPlan, 'prompt' | 'aspectRatio' | 'resolution' | 'duration' | 'count' | 'label'>
 
 export function compactReferenceName(value: string, maxLength = 8) {
   const characters = Array.from(value.trim())
@@ -154,6 +183,11 @@ export function messageExpectsImagePlans(content: string) {
   return explicitImageIntent
 }
 
+export function messageExpectsVideoPlans(content: string) {
+  return /(?:生成|制作|创作|做|出|续写|延展).{0,12}(?:视频|短片|动画|动态画面)/i.test(content)
+    || /(?:文生视频|图生视频|视频生成|生成视频)/i.test(content)
+}
+
 function extractFirstJsonContainer(value: string) {
   const objectStart = value.indexOf('{')
   const arrayStart = value.indexOf('[')
@@ -185,7 +219,7 @@ function extractFirstJsonContainer(value: string) {
 function normalizeAgentReplyRecord(value: unknown): Record<string, unknown> | null {
   if (Array.isArray(value)) {
     const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    const protocolRecords = records.filter((record) => ['reply', 'imagePlan', 'imagePlans', 'textNode'].some((field) => field in record))
+    const protocolRecords = records.filter((record) => ['reply', 'imagePlan', 'imagePlans', 'videoPlan', 'videoPlans', 'textNode'].some((field) => field in record))
     return protocolRecords.length ? Object.assign({}, ...protocolRecords) : null
   }
   return value && typeof value === 'object' ? value as Record<string, unknown> : null
@@ -218,13 +252,13 @@ function extractMalformedReply(value: string) {
 
 function looksLikeAgentProtocolPayload(value: string) {
   const cleaned = value.trim()
-  const hasProtocolField = /(?:["']|\\["'])?(?:reply|imagePlans?|textNode)(?:["']|\\["'])?\s*:/i.test(cleaned)
+  const hasProtocolField = /(?:["']|\\["'])?(?:reply|imagePlans?|videoPlans?|textNode)(?:["']|\\["'])?\s*:/i.test(cleaned)
   if (!hasProtocolField) return false
   return /^```(?:json|js)?/i.test(cleaned)
     || /^[\[{"']/.test(cleaned)
-    || /\{[\s\S]*(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
-    || /^(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
-    || /(?:^|\n)\s*(?:reply|imagePlans?|textNode)\s*:/i.test(cleaned)
+    || /\{[\s\S]*(?:reply|imagePlans?|videoPlans?|textNode)\s*:/i.test(cleaned)
+    || /^(?:reply|imagePlans?|videoPlans?|textNode)\s*:/i.test(cleaned)
+    || /(?:^|\n)\s*(?:reply|imagePlans?|videoPlans?|textNode)\s*:/i.test(cleaned)
 }
 
 export function normalizeAgentMessageContent(content: string) {
@@ -256,6 +290,25 @@ export function parseAgentReply(raw: string): AgentReply {
         }
       })
       .filter((candidate): candidate is AgentImagePlanDraft => Boolean(candidate))
+    const videoCandidates = Array.isArray(value.videoPlans)
+      ? value.videoPlans.filter((candidate): candidate is Record<string, unknown> => Boolean(candidate) && typeof candidate === 'object')
+      : value.videoPlan && typeof value.videoPlan === 'object'
+        ? [value.videoPlan as Record<string, unknown>]
+        : []
+    const videoPlans = videoCandidates
+      .map((candidate, index): AgentVideoPlanDraft | null => {
+        const prompt = typeof candidate.prompt === 'string' ? candidate.prompt.trim() : ''
+        if (!prompt) return null
+        return {
+          label: typeof candidate.label === 'string' && candidate.label.trim() ? candidate.label.trim() : `视频方案${index + 1}`,
+          prompt,
+          aspectRatio: typeof candidate.aspectRatio === 'string' ? candidate.aspectRatio : '16:9',
+          resolution: typeof candidate.resolution === 'string' ? candidate.resolution : '720p',
+          duration: Math.min(15, Math.max(4, Number(candidate.duration) || 4)),
+          count: Math.min(4, Math.max(1, Number(candidate.count) || 1)),
+        }
+      })
+      .filter((candidate): candidate is AgentVideoPlanDraft => Boolean(candidate))
     const rawTextNode = value.textNode && typeof value.textNode === 'object'
       ? value.textNode as Record<string, unknown>
       : null
@@ -269,9 +322,12 @@ export function parseAgentReply(raw: string): AgentReply {
     return {
       reply: reply
         || (imagePlans.length ? `我已整理好${imagePlans.length > 1 ? `${imagePlans.length}份` : '一份'}图像方案，请选择并确认后生成。` : '')
+        || (videoPlans.length ? `我已整理好${videoPlans.length > 1 ? `${videoPlans.length}份` : '一份'}视频方案，请确认后生成。` : '')
         || (textNode ? '我已整理好最终文本，并放入画布文本节点。' : '这次回复格式异常，请重新发送一次。'),
       imagePlan: imagePlans[0],
       imagePlans: imagePlans.length ? imagePlans : undefined,
+      videoPlan: videoPlans[0],
+      videoPlans: videoPlans.length ? videoPlans : undefined,
       textNode,
     }
   } catch {

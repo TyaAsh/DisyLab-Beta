@@ -77,7 +77,7 @@ export type OperatorRecoveryLog = {
   prompt: string
   durationMs: number
   resultType: 'success' | 'failed'
-  kind?: 'image' | 'text'
+  kind?: 'image' | 'text' | 'video'
   requestJson: string
   resultJson: string
   resultUrls?: string[]

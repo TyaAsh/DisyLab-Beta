@@ -58,7 +58,7 @@ export type ApiSettings = {
 
 function inferLegacyCapability(modelId: string): ModelCapability | null {
   if (/image|seedream|imagen|flux|banana|dall-e|gpt-image/i.test(modelId)) return 'image'
-  if (/video|seedance|sora|veo|kling|runway|hailuo/i.test(modelId)) return 'video'
+  if (/video|seedance|sora|veo|kling|runway|hailuo|happyhorse|wan(?:2\.\d)?|(?:^|[-_.])(?:t2v|i2v|r2v)(?:[-_.]|$)/i.test(modelId)) return 'video'
   if (/tts|speech|audio|voice|whisper/i.test(modelId)) return null
   return 'text'
 }

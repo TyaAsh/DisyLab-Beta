@@ -19,6 +19,8 @@ import {
   ArrowUpRight,
   Aperture,
   Bold,
+  BetweenHorizontalEnd,
+  BetweenHorizontalStart,
   BookOpen,
   Box,
   BriefcaseBusiness,
@@ -40,11 +42,14 @@ import {
   FolderPlus,
   Focus,
   Film,
+  Frame,
+  HardDrive,
   Grid3X3,
   History,
   Hash,
   Heart,
   ImagePlus,
+  ImageUp,
   Info,
   Italic,
   KeyRound,
@@ -65,8 +70,10 @@ import {
   Pause,
   Palette,
   Pencil,
+  Play,
   Plus,
   Pilcrow,
+  Ratio,
   Search,
   Settings2,
   Shapes,
@@ -76,6 +83,9 @@ import {
   Type,
   Trash2,
   Upload,
+  Volume2,
+  VolumeX,
+  Video,
   ArrowUpDown,
   Unlink2,
   Unlock,
@@ -115,16 +125,16 @@ import {
   type OnConnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConfig, type ApiSettings, type ModelCapability, type ModelSelection } from './store'
-import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, mergeWorkspaceIntoProject, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, workspaceSnapshotHasContent, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
+import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConfig, type ModelCapability, type ModelSelection } from './store'
+import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, mergeWorkspaceIntoProject, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
-import { extractImageUrlsFromAdminResult, fetchProviderCredits, fetchProviderModelPrices, fetchRemoteModels, generateRemoteImages, generateRemoteText, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, shouldAppendReferenceGuide, validateApiCredentials, type GenerationAdminLog, type GenerationErrorCategory, type ProviderCredits, type ProviderModelPrice } from './imageApi'
+import { extractImageUrlsFromAdminResult, fetchProviderCredits, fetchProviderModelPrices, fetchRemoteModels, fetchUsdToCnyRate, generateRemoteImages, generateRemoteText, generateRemoteVideo, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, resolveProviderLabel, shouldAppendReferenceGuide, validateApiCredentials, type CurrencyRate, type GenerationAdminLog, type GenerationErrorCategory, type ProviderCredits, type ProviderModelPrice } from './imageApi'
 import { AgentPanel } from './AgentPanel'
 import { useProjectDialog } from './ProjectDialog'
 import type { PromptLibraryCase } from './PromptLibraryPanel'
 import type { WorkflowTemplate } from './WorkflowTemplatePanel'
-import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan } from './agent'
+import { compactReferenceName, getRequestedAgentPlanCount, messageExpectsImagePlans, messageExpectsVideoPlans, messageRequestsDirectImagePlan, normalizeAgentMessageContent, parseAgentReply, type AgentContextReference, type AgentImagePlan, type AgentImageReference, type AgentMessage, type AgentTextPlan, type AgentVideoPlan } from './agent'
 import { DEFAULT_SVG_MOTION, type SvgMotionSettings } from './svgMotion'
 
 const PromptLibraryPanel = lazy(() => import('./PromptLibraryPanel').then((module) => ({ default: module.PromptLibraryPanel })))
@@ -157,6 +167,8 @@ type CreatableNodeKind = Exclude<NodeKind, 'group'>
 type ImageAspectRatio = 'auto' | `${number}:${number}`
 type ImageResolution = '1K' | '2K' | '4K'
 type ImageDetail = 'low' | 'medium' | 'high'
+type VideoAspectRatio = 'auto' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16' | '21:9'
+type VideoDuration = number
 type StudioLight = { id: string; name: string; yaw: number; pitch: number; intensity: number; temperatureK: number; enabled: boolean }
 type StudioLighting = { exposure: number; lights: StudioLight[] }
 type GroupIconKey = 'folder' | 'hash' | 'palette' | 'camera' | 'heart' | 'star' | 'crown' | 'film' | 'music' | 'briefcase' | 'idea' | 'rocket' | 'shapes' | 'aperture'
@@ -221,6 +233,39 @@ type CanvasNode = Node<{
   imageModelId?: string
   imageModelName?: string
   generationError?: string
+  promptOptimizationBackup?: string
+  promptOptimizedAt?: string
+  videoUrl?: string
+  videoSource?: 'generated' | 'local-upload'
+  videoMediaId?: string
+  videoGeneratedAt?: string
+  videoTaskId?: string
+  videoProgress?: number
+  videoAspectRatio?: VideoAspectRatio
+  videoDuration?: VideoDuration
+  videoResolution?: '480p' | '720p' | '1080p' | '4k'
+  videoQuality?: 'standard' | 'professional' | '4k'
+  videoGenerationMethod?: 'text' | 'omni' | 'image' | 'frames' | 'reference'
+  videoGenerateAudio?: boolean
+  videoGenerateCount?: 1 | 2 | 3 | 4
+  videoEditorHeight?: number
+  videoTrimmed?: boolean
+  videoMultiShot?: boolean
+  videoShots?: Array<{ id: string; prompt: string; seconds: number }>
+  videoAdaptResolution?: boolean
+  videoStylePreset?: string
+  videoMicInput?: boolean
+  videoReferenceImageUrl?: string
+  videoReferenceImageName?: string
+  videoFirstFrameUrl?: string
+  videoLastFrameUrl?: string
+  videoReferenceUrl?: string
+  videoReferenceFileName?: string
+  videoReferenceVideos?: Array<{ id: string; name: string; url: string }>
+  videoReferenceOrder?: string[]
+  videoModelConnectionId?: string
+  videoModelId?: string
+  videoModelName?: string
   groupColor?: string
   groupFolderColor?: string
   groupAccentColor?: string
@@ -228,6 +273,7 @@ type CanvasNode = Node<{
   groupCollapsed?: boolean
   groupNodeCount?: number
   groupPreviewUrls?: string[]
+  groupPreviewMedia?: Array<{ kind: 'image' | 'video'; url?: string; mediaId?: string }>
   groupExpandedWidth?: number
   groupExpandedHeight?: number
   gridSlices?: Array<{ id: string; url: string; title: string }>
@@ -257,9 +303,55 @@ type ActiveNodeReference = {
   selected: boolean
   name: string
   mention: string
-  kind: 'text' | 'image'
+  kind: 'text' | 'image' | 'video'
+  available?: boolean
+  disabledReason?: string
   text?: string
   url?: string
+  mediaId?: string
+}
+
+function VideoReferenceThumbnail({ reference, name }: { reference: Pick<ActiveNodeReference, 'url' | 'mediaId'>; name: string }) {
+  const [resolvedUrl, setResolvedUrl] = useState(reference.url)
+
+  useEffect(() => {
+    if (reference.url) {
+      setResolvedUrl(reference.url)
+      return
+    }
+    if (!reference.mediaId) {
+      setResolvedUrl(undefined)
+      return
+    }
+    let disposed = false
+    let objectUrl = ''
+    setResolvedUrl(undefined)
+    void loadHistoryMedia(reference.mediaId).then((record) => {
+      if (disposed || !record) return
+      objectUrl = URL.createObjectURL(record.blob)
+      setResolvedUrl(objectUrl)
+    })
+    return () => {
+      disposed = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [reference.mediaId, reference.url])
+
+  if (!resolvedUrl) return <span className="reference-text-thumbnail is-video-reference"><Film size={13} /></span>
+  return (
+    <video
+      className="video-reference-thumbnail"
+      src={resolvedUrl}
+      aria-label={`${name} 视频缩略图`}
+      muted
+      playsInline
+      preload="auto"
+      onLoadedMetadata={(event) => {
+        const video = event.currentTarget
+        if (video.duration > 0) video.currentTime = Math.min(0.05, video.duration / 2)
+      }}
+    />
+  )
 }
 
 const IMAGE_ASPECT_OPTIONS: Array<{ value: ImageAspectRatio; label: string; width: number; height: number }> = [
@@ -347,17 +439,110 @@ function getImageGenerationNodeSize(aspectRatio: ImageAspectRatio = '1:1') {
   }
 }
 
+const VIDEO_ASPECT_OPTIONS: Array<{ value: VideoAspectRatio; label: string; width: number; height: number }> = [
+  // Keep the adaptive glyph consistent with the image parameter panel.
+  { value: 'auto', label: 'Auto', width: 1, height: 1 },
+  { value: '16:9', label: '16:9', width: 16, height: 9 },
+  { value: '4:3', label: '4:3', width: 4, height: 3 },
+  { value: '1:1', label: '1:1', width: 1, height: 1 },
+  { value: '3:4', label: '3:4', width: 3, height: 4 },
+  { value: '9:16', label: '9:16', width: 9, height: 16 },
+  { value: '21:9', label: '21:9', width: 21, height: 9 },
+]
+
+type VideoResolution = NonNullable<CanvasNode['data']['videoResolution']>
+type VideoModelCapabilities = {
+  resolutions: readonly VideoResolution[]
+  ratios: readonly VideoAspectRatio[]
+}
+
+const ALL_VIDEO_RESOLUTIONS: readonly VideoResolution[] = ['480p', '720p', '1080p', '4k']
+const ALL_VIDEO_RATIOS: readonly VideoAspectRatio[] = VIDEO_ASPECT_OPTIONS.map((option) => option.value)
+
+/** Provider-specific constraints for the video adapters implemented in imageApi.ts. */
+function getVideoModelCapabilities(modelName = ''): VideoModelCapabilities {
+  const normalized = modelName.toLowerCase()
+  if (/seedance.*(?:fast|mini)|(?:fast|mini).*seedance/.test(normalized)) {
+    return { resolutions: ['480p', '720p'], ratios: ALL_VIDEO_RATIOS }
+  }
+  if (/seedance|doubao-seedance/.test(normalized)) {
+    return { resolutions: ['480p', '720p', '1080p'], ratios: ALL_VIDEO_RATIOS }
+  }
+  if (/veo[-_ ]?3(?:\.1)?/.test(normalized)) {
+    return { resolutions: ['720p', '1080p', '4k'], ratios: ['16:9', '9:16'] }
+  }
+  if (/wan2\.|happyhorse/.test(normalized)) {
+    return { resolutions: ['720p', '1080p'], ratios: ['16:9', '4:3', '1:1', '3:4', '9:16'] }
+  }
+  // Unknown/generic models keep the existing option set until their provider
+  // exposes structured capability metadata.
+  return { resolutions: ALL_VIDEO_RESOLUTIONS, ratios: ALL_VIDEO_RATIOS }
+}
+
+/** 视频节点尺寸：与图像节点同款占位卡片，默认 16:9 比例 */
+function getVideoNodeSize(aspectRatio: VideoAspectRatio = '16:9') {
+  const option = VIDEO_ASPECT_OPTIONS.find((item) => item.value === aspectRatio)
+  const [customWidth, customHeight] = String(aspectRatio).split(':').map(Number)
+  const ratio = option
+    ? option.width / option.height
+    : Number.isFinite(customWidth) && Number.isFinite(customHeight) && customWidth > 0 && customHeight > 0
+      ? customWidth / customHeight
+      : 16 / 9
+  const baseArea = 384 * 216
+  let contentWidth = Math.sqrt(baseArea * ratio)
+  let contentHeight = contentWidth / ratio
+  const minimumEdge = Math.min(contentWidth, contentHeight)
+  if (minimumEdge < 216) {
+    const scale = 216 / minimumEdge
+    contentWidth *= scale
+    contentHeight *= scale
+  }
+  const maximumEdge = Math.max(contentWidth, contentHeight)
+  if (maximumEdge > 480) {
+    const scale = 480 / maximumEdge
+    contentWidth *= scale
+    contentHeight *= scale
+  }
+  return {
+    width: Math.round(contentWidth),
+    height: Math.round(contentHeight),
+  }
+}
+
 const NodeTextUpdateContext = createContext<(nodeId: string, body: string) => void>(() => undefined)
 const NodeTitleUpdateContext = createContext<(nodeId: string, title: string) => void>(() => undefined)
 const NodeDataUpdateContext = createContext<(nodeId: string, patch: Partial<CanvasNode['data']>) => void>(() => undefined)
 const NodeImageUploadContext = createContext<(nodeId: string, file: File) => void>(() => undefined)
+const NodeVideoUploadContext = createContext<(nodeId: string, file: File) => void>(() => undefined)
 const ImageGalleryOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 const ImagePreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
+const VideoPreviewOpenContext = createContext<(nodeId: string) => void>(() => undefined)
 type ImageToolMode = 'grid' | 'crop' | 'expand' | 'studio' | 'color' | 'local-edit' | 'cutout'
 const ImageToolOpenContext = createContext<(nodeId: string, mode: ImageToolMode) => void>(() => undefined)
 const NodeExtensionMenuContext = createContext<(nodeId: string, anchor: HTMLElement, direction: 'incoming' | 'outgoing') => void>(() => undefined)
 const GroupCollapseContext = createContext<(nodeId: string, collapsed: boolean) => void>(() => undefined)
 const ActiveGenerationNodesContext = createContext<ReadonlySet<string>>(new Set())
+type VideoModelOption = { connectionId: string; modelId: string; name: string; connectionName: string }
+
+/** Group model connections by the provider behind their actual API endpoint. */
+function getVideoModelProviderLabel(baseUrl: string) {
+  try {
+    return resolveProviderLabel(baseUrl)
+  } catch {
+    // Keep an invalid or incomplete connection from breaking the model picker.
+    try {
+      return new URL(baseUrl.trim()).hostname.replace(/^www\./i, '') || 'Custom API'
+    } catch {
+      return 'Custom API'
+    }
+  }
+}
+
+const VideoGenerationContext = createContext<{
+  models: VideoModelOption[]
+  generate: (nodeId: string) => void
+  cancel: (nodeId: string) => void
+}>({ models: [], generate: () => undefined, cancel: () => undefined })
 
 const GROUP_ICON_OPTIONS: Array<{ key: GroupIconKey; label: string }> = [
   { key: 'folder', label: '文件夹' },
@@ -438,6 +623,13 @@ type GenerationRecord = {
   fileName: string
   projectId?: string
   mediaId?: string
+  kind?: 'image' | 'video'
+}
+
+type ProjectCoverPreview = {
+  kind: 'image' | 'video'
+  url: string
+  createdAt: string
 }
 
 type LibraryPreview = {
@@ -454,7 +646,7 @@ type DeleteConfirm =
 type OutputHistoryRecord = {
   id: string
   createdAt: string
-  kind: 'text' | 'image'
+  kind: 'text' | 'image' | 'video'
   status: 'success' | 'failed'
   prompt: string
   modelId: string
@@ -472,6 +664,20 @@ type OutputHistoryRecord = {
     status?: number
     requestId?: string
   }
+}
+
+type StoredAgentPlan = AgentImagePlan | AgentVideoPlan | AgentTextPlan
+
+function isAgentVideoPlan(plan: StoredAgentPlan): plan is AgentVideoPlan {
+  return 'prompt' in plan && 'mediaKind' in plan && plan.mediaKind === 'video'
+}
+
+function isAgentImagePlan(plan: StoredAgentPlan): plan is AgentImagePlan {
+  return 'prompt' in plan && !isAgentVideoPlan(plan)
+}
+
+function isAgentTextPlan(plan: StoredAgentPlan): plan is AgentTextPlan {
+  return 'content' in plan
 }
 
 const ASSET_FOLDERS_KEY = 'disy-asset-folders'
@@ -497,6 +703,9 @@ const API_PROVIDER_PRESETS = [
   { id: 'apimart', name: 'APIMart', baseUrl: 'https://api.apimart.ai/v1', detail: 'OpenAI 兼容 · 支持余额查询' },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: '官方 GPT 与图像模型' },
   { id: 'jimeng', name: '即梦', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', detail: '字节跳动 · 即梦 / Seedream' },
+  { id: 'gemini', name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', detail: '官方 Gemini · OpenAI 兼容' },
+  { id: 'runninghub', name: 'RunningHub', baseUrl: 'https://www.runninghub.ai/openapi/v1', detail: '工作流与媒体生成接口' },
+  { id: 'custom', name: '自定义接口', baseUrl: '', detail: '兼容 OpenAI 的任意服务' },
 ] as const
 
 function readSavedAssets() {
@@ -559,27 +768,10 @@ type SelectionToolbarRect = {
   top: number
 }
 
-type WritableFileHandle = {
-  createWritable: () => Promise<{
-    write: (data: Blob) => Promise<void>
-    close: () => Promise<void>
-  }>
-}
-
-type FilePickerWindow = Window & {
-  showSaveFilePicker?: (options: {
-    suggestedName: string
-    types?: Array<{ description: string; accept: Record<string, string[]> }>
-  }) => Promise<WritableFileHandle>
-  showDirectoryPicker?: () => Promise<{
-    getFileHandle: (name: string, options: { create: boolean }) => Promise<WritableFileHandle>
-  }>
-}
-
 function getNodeDisplayTitle(data: CanvasNode['data']) {
   if (data.kind === 'text') return data.title || '文本'
   if (data.kind === 'image') return data.title || '图像'
-  if (data.kind === 'video') return data.title || '视频（暂未开放）'
+  if (data.kind === 'video') return data.title || '视频'
   if (data.kind === 'group') return data.title || '分组'
   return data.title || data.fileName || '图像'
 }
@@ -605,19 +797,28 @@ function getWelcomeModelGlyph(name: string, image = false) {
   if (/gemini|nanobanana|imagen|google/.test(normalized)) return '✦'
   if (/claude|anthropic/.test(normalized)) return 'C'
   if (/即梦|jimeng|dreamina|seedream|seedance/.test(normalized)) return '即'
+  if (/minimax|h3|hailuo/.test(normalized)) return 'M'
+  if (/可灵|kling/.test(normalized)) return '✦'
   if (/豆包|doubao/.test(normalized)) return '豆'
+  if (/kimi|moonshot/.test(normalized)) return 'K'
+  if (/grok|xai/.test(normalized)) return 'x'
+  if (/deepseek/.test(normalized)) return 'D'
+  if (/qwen|通义|tongyi|千问/.test(normalized)) return 'Q'
+  if (/glm|智谱|chatglm|zhipu/.test(normalized)) return 'GLM'
+  if (/minimax|h3|hailuo|海螺/.test(normalized)) return 'M'
   return image ? '✦' : 'AI'
 }
 
-function ModelBrandBadge({ name, image = false }: { name?: string; image?: boolean }) {
-  return <span className={`welcome-model-badge ${image ? 'is-image' : ''}`} aria-hidden="true">{getWelcomeModelGlyph(name ?? '', image)}</span>
+function ModelBrandBadge({ name, image = false, video = false }: { name?: string; image?: boolean; video?: boolean }) {
+  return <span className={`welcome-model-badge ${image ? 'is-image' : ''} ${video ? 'is-video' : ''}`} aria-hidden="true">{getWelcomeModelGlyph(name ?? '', image || video)}</span>
 }
 
-function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, onChange }: {
+function WelcomeModelSelect({ value, placeholder, options, image, video, typeSelect, onChange }: {
   value: string
   placeholder: string
   options: Array<{ key: string; name: string; connectionName?: string }>
   image?: boolean
+  video?: boolean
   typeSelect?: boolean
   onChange: (key: string) => void
 }) {
@@ -638,7 +839,9 @@ function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, on
     <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
       {typeSelect
         ? <span className="welcome-model-badge is-type"><Plus size={13} /></span>
-        : <span className={`welcome-model-badge ${image ? 'is-image' : ''}`}>{getWelcomeModelGlyph(selected?.name ?? '', image)}</span>}
+        : video
+          ? <ModelBrandBadge name={selected?.name} video />
+          : <span className={`welcome-model-badge ${image ? 'is-image' : ''}`}>{getWelcomeModelGlyph(selected?.name ?? '', image)}</span>}
       <strong>{selected?.name ?? placeholder}</strong>
       <ChevronDown size={13} />
     </button>
@@ -651,27 +854,32 @@ function WelcomeModelSelect({ value, placeholder, options, image, typeSelect, on
 function WelcomeAgentComposer({
   textModels,
   imageModels,
+  videoModels,
   textModelKey,
   imageModelKey,
+  videoModelKey,
   onTextModelChange,
   onImageModelChange,
-  onVideoUnavailable,
+  onVideoModelChange,
   onSend,
   busy,
 }: {
   textModels: Array<{ key: string; name: string; connectionName?: string }>
   imageModels: Array<{ key: string; name: string; connectionName?: string }>
+  videoModels: Array<{ key: string; name: string; connectionName?: string }>
   textModelKey: string
   imageModelKey: string
+  videoModelKey: string
   onTextModelChange: (key: string) => void
   onImageModelChange: (key: string) => void
-  onVideoUnavailable: () => void
+  onVideoModelChange: (key: string) => void
   onSend: (content: string) => void
   busy: boolean
 }) {
   const [value, setValue] = useState('')
-  const [mediaKind, setMediaKind] = useState<'choose' | 'image'>('choose')
+  const [mediaKind, setMediaKind] = useState<'choose' | 'image' | 'video'>('choose')
   const [imageModelChosen, setImageModelChosen] = useState(false)
+  const [videoModelChosen, setVideoModelChosen] = useState(false)
   const [placeholder, setPlaceholder] = useState('比如：做一组夏日咖啡店的视觉方案')
   const prompts = ['比如：做一组夏日咖啡店的视觉方案', '比如：电商头脑风暴，帮我找 3 个方向', '比如：把这个产品做成更有记忆点的海报', '比如：为我的品牌整理一套视觉灵感']
   useEffect(() => {
@@ -702,16 +910,19 @@ function WelcomeAgentComposer({
         value=""
         placeholder="请选择"
         typeSelect
-        options={[{ key: 'image', name: '图像' }, { key: 'video', name: '视频（暂未开放）' }]}
+        options={[{ key: 'image', name: '图像' }, { key: 'video', name: '视频' }]}
         onChange={(kind) => {
           if (kind === 'video') {
-            onVideoUnavailable()
+            onVideoModelChange('')
+            setVideoModelChosen(false)
+            setMediaKind('video')
             return
           }
+          onImageModelChange('')
           setMediaKind('image')
           setImageModelChosen(false)
         }}
-      /> : <WelcomeModelSelect
+      /> : mediaKind === 'image' ? <WelcomeModelSelect
         value={imageModelChosen ? imageModelKey : ''}
         placeholder={imageModels.length ? '选择生图模型' : '请先配置生图模型'}
         options={[{ key: '__choose_type__', name: '返回生成类型' }, ...imageModels]}
@@ -724,6 +935,20 @@ function WelcomeAgentComposer({
           }
           onImageModelChange(key)
           setImageModelChosen(true)
+        }}
+      /> : <WelcomeModelSelect
+        value={videoModelChosen ? videoModelKey : ''}
+        placeholder={videoModels.length ? '选择视频模型' : '请先配置视频模型'}
+        options={[{ key: '__choose_type__', name: '返回生成类型' }, ...videoModels]}
+        video
+        onChange={(key) => {
+          if (key === '__choose_type__') {
+            setMediaKind('choose')
+            setVideoModelChosen(false)
+            return
+          }
+          onVideoModelChange(key)
+          setVideoModelChosen(true)
         }}
       />}
     </div>
@@ -747,6 +972,138 @@ function formatRelativeTime(value: string) {
   if (hours < 24) return `${hours} 小时前`
   const days = Math.floor(hours / 24)
   return `${days} 天前`
+}
+
+function formatVideoTime(value: number) {
+  if (!Number.isFinite(value) || value < 0) return '0:00'
+  const seconds = Math.floor(value)
+  const fraction = Math.floor((value - seconds) * 100)
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}${fraction ? `.${String(fraction).padStart(2, '0')}` : ''}`
+}
+
+function formatModelDisplayName(value: string | undefined, options: { video?: boolean } = {}) {
+  const original = value ?? ''
+  const cleaned = original
+    .trim()
+    .replace(/(?:[-_ ]+)(?:\d{6}|\d{8})$/i, '')
+    .replace(/(?:[-_ ]+(?:generated?|generate)[-_ ]+preview|[-_ ]+preview)$/i, '')
+    // Keep capability suffixes such as t2v/i2v/r2v/videoedit visible. They are
+    // operationally different API modes, not cosmetic version noise.
+    .replace(options.video ? /(?:[-_ ]?video[-_ ]?generation|[-_ ]?video)$/i : /$^/, '')
+    .replace(/\b([1-9]\d?)[-_ ]([0-9])(?=[-_ ]|$)/g, '$1.$2')
+    .replace(/[-_]+/g, ' ')
+    .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  if (!cleaned) return original
+  let title = cleaned.replace(/\b\w/g, (letter) => letter.toUpperCase())
+  const brandNames: Array<[RegExp, string]> = [
+    [/\bapiyi\b/gi, 'APIYI'],
+    [/\bgrs(?:\s+ai)?\b/gi, 'GRS AI'],
+    [/\bopenai\b/gi, 'OpenAI'],
+    [/\bgpt\b/gi, 'GPT'],
+    [/\bveo\b/gi, 'Veo'],
+    [/\bsora\b/gi, 'Sora'],
+    [/\bdoubao\b/gi, 'Doubao'],
+    [/\bseedance\b/gi, 'Seedance'],
+    [/\bseedream\b/gi, 'Seedream'],
+    [/\bnano\s+banana\b/gi, 'Nano Banana'],
+    [/\bhappyhorse\b/gi, 'HappyHorse'],
+    [/\bwan\b/gi, 'Wan'],
+    [/\bflux\b/gi, 'FLUX'],
+    [/\bqwen\b/gi, 'Qwen'],
+    [/\bgemini\b/gi, 'Gemini'],
+    [/\bdeepseek\b/gi, 'DeepSeek'],
+    [/\bclaude\b/gi, 'Claude'],
+    [/\bminimax\b/gi, 'MiniMax'],
+    [/\bkling\b/gi, 'Kling'],
+    [/\bhailuo\b/gi, 'Hailuo'],
+  ]
+  brandNames.forEach(([pattern, replacement]) => { title = title.replace(pattern, replacement) })
+  return title.replace(/\s{2,}/g, ' ').trim()
+}
+
+function formatVideoModelName(value: string | undefined) {
+  return formatModelDisplayName(value, { video: true })
+}
+
+function formatImageModelName(value: string | undefined) {
+  return formatModelDisplayName(value)
+}
+
+function estimateApiYiVideoCost(modelId: string, resolution: string, duration: number, count: number, hasVideoInput: boolean) {
+  const normalized = modelId.toLowerCase()
+  const totalSeconds = Math.max(1, duration) * Math.max(1, count)
+  if (/wan2\.7/.test(normalized)) {
+    const low = 0.084 * totalSeconds
+    const high = 0.14 * totalSeconds
+    return {
+      label: `约 $${low.toFixed(2)}-${high.toFixed(2)}${hasVideoInput ? ' 起' : ''}`,
+      title: `APIYI Wan2.7 文档区间估算（按秒，${duration} 秒）。实际价格按分辨率/任务和调用日志为准。`,
+    }
+  }
+  if (/happyhorse/.test(normalized)) {
+    const low = 0.126 * totalSeconds
+    const high = 0.224 * totalSeconds
+    return {
+      label: `约 $${low.toFixed(2)}-${high.toFixed(2)}${hasVideoInput ? ' 起' : ''}`,
+      title: `APIYI HappyHorse 1.1 文档区间估算（按秒，${duration} 秒）。实际价格按分辨率/任务和调用日志为准。`,
+    }
+  }
+  if (/veo-3\.1.*fast/.test(normalized)) {
+    const amount = 0.3 * Math.max(1, count)
+    return {
+      label: `约 $${amount.toFixed(2)}`,
+      title: 'APIYI VEO 3.1 Fast 官方按次估算（4/6/8 秒同价），实际以调用日志为准。',
+    }
+  }
+  if (/veo-3\.1/.test(normalized)) {
+    const amount = 1.2 * Math.max(1, count)
+    return {
+      label: `约 $${amount.toFixed(2)}`,
+      title: 'APIYI VEO 3.1 官方按次估算（4/6/8 秒同价），实际以调用日志为准。',
+    }
+  }
+  if (!normalized.includes('doubao-seedance-2-0')) return null
+  const tier = normalized.includes('-mini-') ? 'mini' : normalized.includes('-fast-') ? 'fast' : 'standard'
+  const anchors: Record<string, Record<string, number>> = {
+    standard: { '480p': 2.31, '720p': 4.97, '1080p': 12.39 },
+    fast: { '480p': 1.86, '720p': 4.00 },
+    mini: { '480p': 1.16, '720p': 2.50 },
+  }
+  const perFiveSeconds = anchors[tier][resolution]
+  if (!perFiveSeconds) return null
+  const total = perFiveSeconds * totalSeconds / 5
+  const amount = total < 10 ? total.toFixed(2) : total.toFixed(1)
+  return {
+    label: `约 ¥${amount}${hasVideoInput ? ' 起' : ''}`,
+    title: `APIYI Seedance 2.0 官方锚点估算（${resolution}，${duration} 秒${hasVideoInput ? '，含输入视频，实际会更高' : ''}）。实际扣费以 usage / 调用日志为准。`,
+  }
+}
+
+function formatProviderModelCost(price: ProviderModelPrice, count: number, usdToCny?: number | null) {
+  if (price.billing === 'token') return '按用量计费'
+  if (price.unit === 'USD') {
+    const amount = price.credits * Math.max(1, count)
+    return usdToCny ? `约 ¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(amount * usdToCny)}` : `约 $${amount.toFixed(2)}`
+  }
+  return `${price.credits * Math.max(1, count)} 积分`
+}
+
+function convertUsdLabelToCny(label: string, rate: number | null | undefined) {
+  if (!rate || !label.includes('$')) return label
+  return label.replace(/\$(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?/g, (_match: string, low: string, high?: string) => {
+    const format = (value: string) => `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value) * rate)}`
+    return high ? `${format(low)}-${format(high)}` : format(low)
+  })
+}
+
+function formatProviderPriceTooltip(price: ProviderModelPrice, usdToCny?: number | null) {
+  const original = price.priceExample || (price.unit === 'USD' ? `约 $${price.credits.toFixed(2)} / 次` : '厂商实时积分价格')
+  if (price.unit !== 'USD') return original
+  if (!usdToCny) return `${original} · 汇率服务暂不可用，暂保留原币种`
+  const converted = convertUsdLabelToCny(original, usdToCny).replace(/(\d+(?:\.\d+)?)\s*USD/gi, (_match, value: string) => `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value) * usdToCny)}`)
+  return `${converted} · 原始 ${original} · 汇率 1 USD = ${usdToCny.toFixed(4)} CNY`
 }
 
 function formatProjectDate(value: string) {
@@ -915,7 +1272,7 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
   const lastEmittedValueRef = useRef(value)
   const composingRef = useRef(false)
   const lastCaretRef = useRef(value.length)
-  const referenceSignature = references.map((reference) => `${reference.id}:${reference.mention}:${reference.url ?? ''}:${'kind' in reference ? reference.kind : 'image'}`).join('|')
+  const referenceSignature = references.map((reference) => `${reference.id}:${reference.mention}:${reference.url ?? ''}:${'mediaId' in reference ? reference.mediaId ?? '' : ''}:${'kind' in reference ? reference.kind : 'image'}:${'disabledReason' in reference ? reference.disabledReason ?? '' : ''}`).join('|')
 
   const renderValue = useCallback(() => {
     const root = rootRef.current
@@ -936,19 +1293,32 @@ const AtomicPromptEditor = forwardRef<AtomicPromptEditorHandle, AtomicPromptEdit
         return
       }
       const token = document.createElement('span')
-      token.className = `inline-image-reference atomic-image-reference ${'kind' in reference && reference.kind === 'text' ? 'is-text-reference' : ''}`
+      token.className = `inline-image-reference atomic-image-reference ${'kind' in reference && reference.kind === 'text' ? 'is-text-reference' : ''} ${'disabledReason' in reference && reference.disabledReason ? 'is-disabled' : ''}`
       token.contentEditable = 'false'
       token.dataset.atomicMention = reference.mention
       let visual: HTMLElement
-      if (reference.url) {
+      if (reference.url && 'kind' in reference && reference.kind === 'video') {
+        const video = document.createElement('video')
+        video.className = 'video-reference-thumbnail'
+        video.src = reference.url
+        video.muted = true
+        video.defaultMuted = true
+        video.playsInline = true
+        video.preload = 'auto'
+        video.setAttribute('aria-label', `${reference.name} 视频缩略图`)
+        video.addEventListener('loadedmetadata', () => {
+          if (video.duration > 0) video.currentTime = Math.min(0.05, video.duration / 2)
+        }, { once: true })
+        visual = video
+      } else if (reference.url && (!('kind' in reference) || reference.kind !== 'video')) {
         const image = document.createElement('img')
         image.src = reference.url
         image.alt = ''
         visual = image
       } else {
         const glyph = document.createElement('span')
-        glyph.className = 'atomic-text-reference-glyph'
-        glyph.textContent = 'T'
+        glyph.className = `atomic-text-reference-glyph ${'kind' in reference && reference.kind === 'video' ? 'is-video' : ''}`
+        glyph.textContent = 'kind' in reference && reference.kind === 'video' ? 'V' : 'T'
         visual = glyph
       }
       const label = document.createElement('span')
@@ -1224,6 +1594,15 @@ function getCanvasPreviewUrl(canvas: Pick<WorkspaceCanvas, 'nodes'>) {
     (node.data.kind === 'image' || node.data.kind === 'upload') && Boolean(node.data.imageUrl)
   ))
   return previewNode?.data.imageUrl
+}
+
+function ProjectCoverMedia({ cover, alt }: { cover?: ProjectCoverPreview; alt: string }) {
+  const [failedUrl, setFailedUrl] = useState('')
+  if (!cover || failedUrl === cover.url) return null
+  if (cover.kind === 'video') {
+    return <video className="project-cover-video" src={cover.url} muted playsInline preload="auto" aria-label={alt} onError={() => setFailedUrl(cover.url)} />
+  }
+  return <img className="project-cover-image" src={cover.url} alt={alt} onError={() => setFailedUrl(cover.url)} />
 }
 
 function uniqueNamedImageReferences<T extends { name: string; url: string }>(references: T[]) {
@@ -1539,18 +1918,22 @@ const NodeCard = memo(function NodeCard({
   width?: number
   height?: number
 }) {
-  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : data.kind === 'video' ? Film : data.kind === 'svg-motion' ? Activity : WandSparkles
+  const Icon = data.kind === 'text' ? Type : data.kind === 'upload' ? Upload : data.kind === 'svg-motion' ? Activity : WandSparkles
   const updateNodeText = useContext(NodeTextUpdateContext)
   const updateNodeTitle = useContext(NodeTitleUpdateContext)
   const updateNodeData = useContext(NodeDataUpdateContext)
   const uploadNodeImage = useContext(NodeImageUploadContext)
+  const uploadNodeVideo = useContext(NodeVideoUploadContext)
   const openImageGallery = useContext(ImageGalleryOpenContext)
   const openImagePreview = useContext(ImagePreviewOpenContext)
+  const openVideoPreview = useContext(VideoPreviewOpenContext)
   const openImageTool = useContext(ImageToolOpenContext)
   const openExtensionMenu = useContext(NodeExtensionMenuContext)
   const setGroupCollapsed = useContext(GroupCollapseContext)
   const activeGenerationNodeIds = useContext(ActiveGenerationNodesContext)
   const isActivelyGenerating = activeGenerationNodeIds.has(id)
+  const isGeneratedVideo = data.kind === 'video' && Boolean(data.videoMediaId || data.videoGeneratedAt || data.status === '已完成')
+  const isUploadedVideo = data.kind === 'video' && Boolean(data.videoUrl) && !isGeneratedVideo && data.status !== '已上传' && data.videoSource !== 'local-upload'
   // Results take precedence over a stale failure status. A node can retain an old
   // image while a retry completes, so never cover a usable result with an error.
   const hasGenerationFailed = data.kind === 'image'
@@ -1564,7 +1947,43 @@ const NodeCard = memo(function NodeCard({
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(getNodeDisplayTitle(data))
   const [uploadDragging, setUploadDragging] = useState(false)
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string | undefined>(data.videoUrl)
+  const videoElementRef = useRef<HTMLVideoElement>(null)
+  const [videoPlaying, setVideoPlaying] = useState(false)
+  const [videoMuted, setVideoMuted] = useState(false)
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
+  const persistedVideoDuration = Number.isFinite(Number(data.videoDuration)) && Number(data.videoDuration) > 0 ? Number(data.videoDuration) : 0
+  const [videoDuration, setVideoDuration] = useState(persistedVideoDuration)
   const groupCardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (data.kind !== 'video') return
+    if (data.videoUrl) {
+      setResolvedVideoUrl(data.videoUrl)
+      return
+    }
+    if (!data.videoMediaId) {
+      setResolvedVideoUrl(undefined)
+      return
+    }
+    let disposed = false
+    let objectUrl = ''
+    void loadHistoryMedia(data.videoMediaId).then((record) => {
+      if (!record || disposed) return
+      objectUrl = URL.createObjectURL(record.blob)
+      setResolvedVideoUrl(objectUrl)
+    })
+    return () => {
+      disposed = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [data.kind, data.videoMediaId, data.videoUrl])
+
+  useEffect(() => {
+    setVideoPlaying(false)
+    setVideoCurrentTime(0)
+    setVideoDuration(persistedVideoDuration)
+  }, [persistedVideoDuration, resolvedVideoUrl])
 
   useGSAP(() => {
     if (data.kind !== 'group' || !groupCardRef.current) return
@@ -1583,7 +2002,7 @@ const NodeCard = memo(function NodeCard({
       clearProps: 'transform,opacity,visibility',
     })
     if (!reducedMotion && data.groupCollapsed) {
-      gsap.fromTo(card.querySelectorAll('.collapsed-group-preview img'), {
+      gsap.fromTo(card.querySelectorAll('.collapsed-group-preview img, .collapsed-group-preview video'), {
         autoAlpha: 0,
         y: 8,
         rotation: -2,
@@ -1628,6 +2047,9 @@ const NodeCard = memo(function NodeCard({
   if (data.kind === 'group') {
     if (data.groupCollapsed) {
       const previews = data.groupPreviewUrls ?? []
+      const previewMedia = data.groupPreviewMedia?.length
+        ? data.groupPreviewMedia
+        : previews.map((url) => ({ kind: 'image' as const, url }))
       const accent = data.groupAccentColor || '#78b7ef'
       const groupSurface = data.groupFolderColor || 'linear-gradient(135deg, #70e8f1 0%, #70b5ff 36%, #a793ff 68%, #f0a8d3 100%)'
       return (
@@ -1648,9 +2070,13 @@ const NodeCard = memo(function NodeCard({
           <Handle id="group-source-top" type="source" position={Position.Top} className="collapsed-group-handle" isConnectable={false} />
           <Handle id="group-source-right" type="source" position={Position.Right} className="collapsed-group-handle" isConnectable={false} />
           <Handle id="group-source-bottom" type="source" position={Position.Bottom} className="collapsed-group-handle" isConnectable={false} />
-          <div className={`collapsed-group-preview ${previews.length ? '' : 'is-empty'}`}>
-            {previews.slice(0, 3).map((url, index) => <img key={`${url}-${index}`} src={url} alt="" draggable={false} />)}
-            {!previews.length && <Folder size={34} strokeWidth={1.3} />}
+          <div className={`collapsed-group-preview ${previewMedia.length ? '' : 'is-empty'}`}>
+            {previewMedia.slice(0, 3).map((preview, index) => preview.kind === 'video'
+              ? <VideoReferenceThumbnail key={`video-${preview.mediaId || preview.url || index}`} reference={preview} name={`分组视频 ${index + 1}`} />
+              : preview.url
+                ? <img key={`image-${preview.url}-${index}`} src={preview.url} alt="" draggable={false} />
+                : null)}
+            {!previewMedia.length && <Folder size={34} strokeWidth={1.3} />}
           </div>
           <div className="collapsed-group-meta">
             <span className="collapsed-group-icon"><GroupTypeIcon icon={data.groupIcon} size={14} /></span>
@@ -1787,10 +2213,10 @@ const NodeCard = memo(function NodeCard({
 
   return (
     <div
-      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'svg-motion' ? 'svg-motion-node' : ''} ${data.kind === 'image' ? 'image-generation-node' : ''} ${data.kind === 'image' && isActivelyGenerating ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
+      className={`disy-node ${data.kind === 'text' ? 'resizable-text-node' : ''} ${data.kind === 'svg-motion' ? 'svg-motion-node' : ''} ${data.kind === 'image' || data.kind === 'video' ? 'image-generation-node' : ''} ${(data.kind === 'image' || data.kind === 'video') && isActivelyGenerating ? 'is-generating' : ''} ${selected ? 'is-selected' : ''}`}
       style={data.kind === 'text'
         ? { width: width || 275, height: height || 126 }
-        : data.kind === 'image'
+        : data.kind === 'image' || data.kind === 'video'
           ? { width: '100%', height: '100%' }
           : undefined}
     >
@@ -1808,7 +2234,11 @@ const NodeCard = memo(function NodeCard({
       )}
       <div className="node-heading">
         <span className={`node-icon node-icon-${data.kind}`}>
-          <Icon size={15} strokeWidth={2.2} />
+          {data.kind === 'video' ? (
+            <Film size={14} strokeWidth={1.9} />
+          ) : (
+            <Icon size={15} strokeWidth={2.2} />
+          )}
         </span>
         {nodeTitle}
       </div>
@@ -1847,10 +2277,8 @@ const NodeCard = memo(function NodeCard({
           />
         </label>
       ) : data.kind === 'video' ? (
-        <div className="video-placeholder" aria-label="视频生成占位节点">
-          <Film size={24} strokeWidth={1.6} />
-          <strong>视频生成 · 即将开放</strong>
-          <span>{data.body || '已保留首尾帧、时长与运镜说明；开放后可直接生成。'}</span>
+        <div className={`image-placeholder video-image-placeholder ${resolvedVideoUrl ? 'has-reference' : ''} ${isGeneratedVideo ? 'is-generated-video' : ''} ${isUploadedVideo ? 'is-uploaded-video' : ''}`} onDragOver={(event) => { if (isGeneratedVideo) return; event.preventDefault(); event.stopPropagation() }} onDrop={(event) => { if (isGeneratedVideo) return; event.preventDefault(); event.stopPropagation(); const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('video/')); if (file) uploadNodeVideo(id, file) }}>
+           {resolvedVideoUrl ? <><video ref={videoElementRef} src={resolvedVideoUrl} className="video-node-thumb" playsInline preload="metadata" muted={videoMuted} onLoadedMetadata={(event) => { const duration = event.currentTarget.duration; if (Number.isFinite(duration) && duration > 0) setVideoDuration(duration) }} onDurationChange={(event) => { const duration = event.currentTarget.duration; if (Number.isFinite(duration) && duration > 0) setVideoDuration(duration) }} onTimeUpdate={(event) => setVideoCurrentTime(event.currentTarget.currentTime)} onPlay={() => setVideoPlaying(true)} onPause={() => setVideoPlaying(false)} onEnded={() => setVideoPlaying(false)} /><div className="video-node-controls nodrag nowheel" onPointerDown={(event) => event.stopPropagation()}><button type="button" title={videoPlaying ? '暂停' : '播放'} aria-label={videoPlaying ? '暂停' : '播放'} onClick={(event) => { event.stopPropagation(); const video = videoElementRef.current; if (!video) return; if (video.paused) void video.play(); else video.pause() }}>{videoPlaying ? <Pause size={13} /> : <Play size={13} />}</button><span>{formatVideoTime(videoCurrentTime)}</span><input type="range" min="0" max={Math.max(videoDuration, 0.1)} step="0.01" value={Math.min(videoCurrentTime, videoDuration || 0)} aria-label="视频播放进度" onChange={(event) => { const next = Number(event.target.value); setVideoCurrentTime(next); if (videoElementRef.current) videoElementRef.current.currentTime = next }} /><span>{formatVideoTime(videoDuration)}</span><button type="button" title={videoMuted ? '打开声音' : '静音'} aria-label={videoMuted ? '打开声音' : '静音'} onClick={(event) => { event.stopPropagation(); setVideoMuted((muted) => !muted) }}>{videoMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button><button type="button" className="video-node-fullscreen" title="全屏查看" aria-label="全屏查看" onClick={(event) => { event.stopPropagation(); openVideoPreview(id) }}><Maximize2 size={13} /></button></div>{isUploadedVideo && <label className="node-inline-replace nodrag nowheel" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><RefreshCw size={12} />替换<input type="file" accept="video/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadNodeVideo(id, file); event.target.value = '' }} /></label>}</> : data.status === '上传中' ? <div className="video-upload-progress"><i style={{ '--upload-progress': `${data.videoProgress ?? 8}%` } as React.CSSProperties} /><strong>{data.videoProgress ?? 0}%</strong></div> : isActivelyGenerating ? <LoaderCircle className="image-node-generation-icon is-spinning" size={24} /> : <Film className="image-node-generation-icon" size={27} strokeWidth={1.45} />}
         </div>
       ) : data.kind === 'image' ? (
         <div className={`image-placeholder ${data.imageUrl || data.referenceImageUrl ? 'has-reference' : ''}`}>
@@ -1988,7 +2416,11 @@ function App() {
   const [activeStudioLightId, setActiveStudioLightId] = useState('key')
   const [colorAdjustments, setColorAdjustments] = useState({ exposure: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, highlights: 0, shadows: 0 })
   const [cropRect, setCropRect] = useState({ x: 10, y: 10, width: 80, height: 80 })
+  const [imageToolView, setImageToolView] = useState({ scale: 1, x: 0, y: 0 })
+  const imageToolStageRef = useRef<HTMLDivElement | null>(null)
+  const imageToolPlaneRef = useRef<HTMLDivElement | null>(null)
   const [imageMoreMenuNodeId, setImageMoreMenuNodeId] = useState<string | null>(null)
+  const [frameCaptureMenuNodeId, setFrameCaptureMenuNodeId] = useState<string | null>(null)
   const [quickSplitGrid, setQuickSplitGrid] = useState({ columns: 3, rows: 3 })
   const [lightingView, setLightingView] = useState<'perspective' | 'front'>('front')
   const [localEditMarks, setLocalEditMarks] = useState<Array<{ id: string; x: number; y: number; prompt: string }>>([])
@@ -1998,6 +2430,7 @@ function App() {
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState | null>(null)
   const [nodeClipboard, setNodeClipboard] = useState<NodeClipboard | null>(null)
   const [savedAssets, setSavedAssets] = useState<SavedAsset[]>(readSavedAssets)
+  const [assetMediaUrls, setAssetMediaUrls] = useState<Record<string, string>>({})
   const [assetFolders, setAssetFolders] = useState<AssetFolder[]>(readAssetFolders)
   const [activeAssetFolderId, setActiveAssetFolderId] = useState<'all' | 'unfiled' | string>('all')
   const [newFolderName, setNewFolderName] = useState('')
@@ -2026,7 +2459,7 @@ function App() {
   const [imageGalleryThumbnailSize, setImageGalleryThumbnailSize] = useState(190)
   const [outputHistory, setOutputHistory] = useState<OutputHistoryRecord[]>(readOutputHistory)
   const [outputHistoryOpen, setOutputHistoryOpen] = useState(false)
-  const [outputHistoryFilter, setOutputHistoryFilter] = useState<'all' | 'text' | 'image' | 'failed' | 'ops'>('all')
+  const [outputHistoryFilter, setOutputHistoryFilter] = useState<'all' | 'text' | 'image' | 'video' | 'failed' | 'ops'>('all')
   const [outputHistorySearch, setOutputHistorySearch] = useState('')
   const [operatorUnlocked, setOperatorUnlocked] = useState(false)
   const [operatorPassDraft, setOperatorPassDraft] = useState('')
@@ -2035,10 +2468,14 @@ function App() {
   const [expandedOperatorLogId, setExpandedOperatorLogId] = useState<string | null>(null)
   const [expandedOutputErrorId, setExpandedOutputErrorId] = useState<string | null>(null)
   const [modelsLoading, setModelsLoading] = useState(false)
-  const [modelsError, setModelsError] = useState('')
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [optimizeModelMenuNodeId, setOptimizeModelMenuNodeId] = useState<string | null>(null)
+  const [optimizeTextModelKey, setOptimizeTextModelKey] = useState('')
   const [imageModelMenuOpen, setImageModelMenuOpen] = useState(false)
   const [imageParameterMenuOpen, setImageParameterMenuOpen] = useState(false)
+  const [videoParameterMenuOpen, setVideoParameterMenuOpen] = useState(false)
+  const [videoQuantityMenuOpen, setVideoQuantityMenuOpen] = useState(false)
+  const [videoModelMenuOpen, setVideoModelMenuOpen] = useState(false)
   const [customAspectRatioOpen, setCustomAspectRatioOpen] = useState(false)
   const [customAspectWidth, setCustomAspectWidth] = useState('1')
   const [customAspectHeight, setCustomAspectHeight] = useState('1')
@@ -2050,12 +2487,86 @@ function App() {
   const [textMentionQuery, setTextMentionQuery] = useState('')
   const [textMentionIndex, setTextMentionIndex] = useState(0)
   const [textMentionRange, setTextMentionRange] = useState<{ start: number; end: number } | null>(null)
+  const [videoMentionOpen, setVideoMentionOpen] = useState(false)
+  const [videoMentionQuery, setVideoMentionQuery] = useState('')
+  const [videoMentionIndex, setVideoMentionIndex] = useState(0)
+  const [videoMentionRange, setVideoMentionRange] = useState<{ start: number; end: number } | null>(null)
+
+  useEffect(() => {
+    const closeFloatingMenus = (event: PointerEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (!target) return
+      if (!target.closest('.prompt-optimize-control')) setOptimizeModelMenuNodeId(null)
+      if (!target.closest('.video-model-picker')) setVideoModelMenuOpen(false)
+      if (!target.closest('.video-parameter-control')) setVideoParameterMenuOpen(false)
+      if (!target.closest('.generation-quantity-control')) setVideoQuantityMenuOpen(false)
+      if (!target.closest('.image-model-picker')) setImageModelMenuOpen(false)
+      if (!target.closest('.image-parameter-control')) setImageParameterMenuOpen(false)
+      if (!target.closest('.welcome-model-select')) setModelMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeFloatingMenus)
+    return () => document.removeEventListener('pointerdown', closeFloatingMenus)
+  }, [])
+
+  useEffect(() => {
+    const hasFloatingMenu = optimizeModelMenuNodeId !== null
+      || videoModelMenuOpen || videoParameterMenuOpen || videoQuantityMenuOpen
+      || imageModelMenuOpen || imageParameterMenuOpen || modelMenuOpen
+      || customAspectRatioOpen || imageMentionOpen || textMentionOpen || videoMentionOpen
+    if (!hasFloatingMenu) return
+    const closeFloatingMenusWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOptimizeModelMenuNodeId(null)
+      setVideoModelMenuOpen(false)
+      setVideoParameterMenuOpen(false)
+      setVideoQuantityMenuOpen(false)
+      setImageModelMenuOpen(false)
+      setImageParameterMenuOpen(false)
+      setModelMenuOpen(false)
+      setCustomAspectRatioOpen(false)
+      setImageMentionOpen(false)
+      setTextMentionOpen(false)
+      setVideoMentionOpen(false)
+    }
+    window.addEventListener('keydown', closeFloatingMenusWithEscape)
+    return () => window.removeEventListener('keydown', closeFloatingMenusWithEscape)
+  }, [customAspectRatioOpen, imageMentionOpen, imageModelMenuOpen, imageParameterMenuOpen, modelMenuOpen, optimizeModelMenuNodeId, textMentionOpen, videoMentionOpen, videoModelMenuOpen, videoParameterMenuOpen, videoQuantityMenuOpen])
+
+  useEffect(() => {
+    let cancelled = false
+    const objectUrls: string[] = []
+    const loadVideoAssets = async () => {
+      const entries = await Promise.all(savedAssets.map(async (asset) => {
+        const mediaId = asset.data?.videoMediaId
+        if (!mediaId) return null
+        const media = await loadHistoryMedia(mediaId)
+        if (!media) return null
+        const url = URL.createObjectURL(media.blob)
+        objectUrls.push(url)
+        return [asset.id, url] as const
+      }))
+      if (cancelled) {
+        objectUrls.forEach((url) => URL.revokeObjectURL(url))
+        return
+      }
+      setAssetMediaUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))))
+    }
+    void loadVideoAssets()
+    return () => {
+      cancelled = true
+      objectUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [savedAssets])
+
   const [textReferencePreview, setTextReferencePreview] = useState<{ name: string; text: string; left: number; bottom: number } | null>(null)
   const [canvasReferencePickerNodeId, setCanvasReferencePickerNodeId] = useState<string | null>(null)
+  const [videoTextPickerNodeId, setVideoTextPickerNodeId] = useState<string | null>(null)
   const [referenceDropTargetNodeId, setReferenceDropTargetNodeId] = useState<string | null>(null)
   const [activeGenerationTaskKeys, setActiveGenerationTaskKeys] = useState<Set<string>>(new Set())
   const generationLoading = activeGenerationTaskKeys.size > 0
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [optimizingPromptNodeIds, setOptimizingPromptNodeIds] = useState<Set<string>>(new Set())
   const [transferProgress, setTransferProgress] = useState<string | null>(null)
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferScope, setTransferScope] = useState<TransferScope>('project-replace')
@@ -2073,9 +2584,98 @@ function App() {
   const [activeEditorNodeId, setActiveEditorNodeId] = useState<string | null>(null)
   const [activeImageNodeId, setActiveImageNodeId] = useState<string | null>(null)
   const [activeGenerationNodeId, setActiveGenerationNodeId] = useState<string | null>(null)
+  const [activeVideoNodeId, setActiveVideoNodeId] = useState<string | null>(null)
   const [previewImageNodeId, setPreviewImageNodeId] = useState<string | null>(null)
   const [previewImageIndex, setPreviewImageIndex] = useState(0)
   const [previewImageDirection, setPreviewImageDirection] = useState(1)
+  const [previewVideoNodeId, setPreviewVideoNodeId] = useState<string | null>(null)
+  const previewVideoRef = useRef<HTMLVideoElement>(null)
+  const [previewVideoPlaying, setPreviewVideoPlaying] = useState(false)
+  const [previewVideoMuted, setPreviewVideoMuted] = useState(false)
+  const [previewVideoCurrentTime, setPreviewVideoCurrentTime] = useState(0)
+  const [previewVideoDuration, setPreviewVideoDuration] = useState(0)
+  const [clipSession, setClipSession] = useState<{ nodeId: string; start: number; end: number; duration: number; sourceUrl: string; frames: string[]; removeAudio: boolean } | null>(null)
+  const [clipExporting, setClipExporting] = useState(false)
+  const [videoCropSession, setVideoCropSession] = useState<{ nodeId: string; sourceUrl: string; ownedUrl: boolean; sourceWidth: number; sourceHeight: number; duration: number; rect: { x: number; y: number; width: number; height: number } } | null>(null)
+  const [videoCropExporting, setVideoCropExporting] = useState(false)
+  const clipStudioLayerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!clipSession) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      setClipSession(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [clipSession])
+  useEffect(() => {
+    if (!videoCropSession) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || videoCropExporting) return
+      event.preventDefault()
+      setVideoCropSession(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [videoCropExporting, videoCropSession])
+  useEffect(() => {
+    if (!videoCropSession?.ownedUrl) return
+    const sourceUrl = videoCropSession.sourceUrl
+    return () => URL.revokeObjectURL(sourceUrl)
+  }, [videoCropSession?.ownedUrl, videoCropSession?.sourceUrl])
+  const moveClipSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!clipSession) return
+    const track = event.currentTarget.parentElement?.getBoundingClientRect()
+    if (!track) return
+    event.preventDefault(); event.stopPropagation()
+    const x = event.clientX, start = clipSession.start, length = clipSession.end - clipSession.start
+    const move = (next: PointerEvent) => { const delta = (next.clientX - x) / track.width * clipSession.duration; const nextStart = Math.max(0, Math.min(clipSession.duration - length, start + delta)); setClipSession((current) => current ? { ...current, start: nextStart, end: nextStart + length } : current) }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+  const moveClipEdge = (edge: 'start' | 'end', event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!clipSession) return
+    event.preventDefault(); event.stopPropagation()
+    const track = event.currentTarget.closest('.clip-studio-track')?.getBoundingClientRect()
+    if (!track) return
+    const move = (next: PointerEvent) => { const time = Math.max(0, Math.min(clipSession.duration, ((next.clientX - track.left) / track.width) * clipSession.duration)); setClipSession((current) => current ? edge === 'start' ? { ...current, start: Math.min(time, current.end - .1) } : { ...current, end: Math.max(time, current.start + .1) } : current) }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+  const moveVideoCropSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!videoCropSession || event.target !== event.currentTarget) return
+    const stage = event.currentTarget.closest('.video-crop-stage')?.getBoundingClientRect()
+    if (!stage) return
+    event.preventDefault(); event.stopPropagation()
+    const origin = videoCropSession.rect, startX = event.clientX, startY = event.clientY
+    const move = (next: PointerEvent) => {
+      const dx = (next.clientX - startX) / stage.width, dy = (next.clientY - startY) / stage.height
+      setVideoCropSession((current) => current ? { ...current, rect: { ...current.rect, x: Math.max(0, Math.min(1 - origin.width, origin.x + dx)), y: Math.max(0, Math.min(1 - origin.height, origin.y + dy)) } } : current)
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+  const resizeVideoCropSelection = (edge: 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw', event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!videoCropSession) return
+    const stage = event.currentTarget.closest('.video-crop-stage')?.getBoundingClientRect()
+    if (!stage) return
+    event.preventDefault(); event.stopPropagation()
+    const origin = videoCropSession.rect, startX = event.clientX, startY = event.clientY
+    const minimumWidth = Math.min(.32, Math.max(.055, 64 / Math.max(1, stage.width)))
+    const minimumHeight = Math.min(.32, Math.max(.055, 48 / Math.max(1, stage.height)))
+    const move = (next: PointerEvent) => {
+      const dx = (next.clientX - startX) / stage.width, dy = (next.clientY - startY) / stage.height
+      let left = origin.x, top = origin.y, right = origin.x + origin.width, bottom = origin.y + origin.height
+      if (edge.includes('w')) left = Math.max(0, Math.min(right - minimumWidth, origin.x + dx))
+      if (edge.includes('e')) right = Math.min(1, Math.max(left + minimumWidth, origin.x + origin.width + dx))
+      if (edge.includes('n')) top = Math.max(0, Math.min(bottom - minimumHeight, origin.y + dy))
+      if (edge.includes('s')) bottom = Math.min(1, Math.max(top + minimumHeight, origin.y + origin.height + dy))
+      setVideoCropSession((current) => current ? { ...current, rect: { x: left, y: top, width: right - left, height: bottom - top } } : current)
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
   const [imageGalleryNodeId, setImageGalleryNodeId] = useState<string | null>(null)
   const [expandedEditorNodeId, setExpandedEditorNodeId] = useState<string | null>(null)
   const [generationCount, setGenerationCount] = useState(1)
@@ -2083,6 +2683,8 @@ function App() {
   const [generationControlMenuNodeId, setGenerationControlMenuNodeId] = useState<string | null>(null)
   const [draggedImageReferenceId, setDraggedImageReferenceId] = useState<string | null>(null)
   const [imageReferenceDropTargetId, setImageReferenceDropTargetId] = useState<string | null>(null)
+  const [videoReferenceDragId, setVideoReferenceDragId] = useState<string | null>(null)
+  const [videoReferenceDropId, setVideoReferenceDropId] = useState<string | null>(null)
   const [isNodeDragging, setIsNodeDragging] = useState(false)
   const altDragDuplicateRef = useRef<{ originalId: string; duplicateId: string; originalPosition: { x: number; y: number } } | null>(null)
   const dragStartPositionsRef = useRef(new Map<string, { x: number; y: number }>())
@@ -2094,6 +2696,7 @@ function App() {
   const [groupColorMenuOpen, setGroupColorMenuOpen] = useState(false)
   const [groupIconMenuOpen, setGroupIconMenuOpen] = useState(false)
   const [apiOpen, setApiOpen] = useState(false)
+  const [apiStorageNavVisible, setApiStorageNavVisible] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectHomeOpen, setProjectHomeOpen] = useState(true)
@@ -2109,8 +2712,10 @@ function App() {
   const [projectHomeView, setProjectHomeView] = useState<'grid' | 'list'>('grid')
   const [projectHomeSort, setProjectHomeSort] = useState<{ key: 'name' | 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' }>({ key: 'updatedAt', direction: 'desc' })
   const [persistedProjectContent, setPersistedProjectContent] = useState<Record<string, { nodeCount: number; activeCanvasNodeCount: number }>>({})
+  const [latestProjectVideoById, setLatestProjectVideoById] = useState<Record<string, ProjectCoverPreview>>({})
+  const projectVideoObjectUrlsRef = useRef(new Set<string>())
 
-  const openApiSettings = useCallback((event?: React.SyntheticEvent) => {
+  const openApiSettings = useCallback((event?: React.SyntheticEvent, options?: { storageNav?: boolean }) => {
     event?.preventDefault()
     event?.stopPropagation()
     setProjectContextMenu(null)
@@ -2118,8 +2723,16 @@ function App() {
     setCreateProjectOpen(false)
     setTransferOpen(false)
     setProjectOpen(false)
+    setStorageOpen(false)
+    setApiStorageNavVisible(options?.storageNav !== false)
     setApiOpen(true)
   }, [])
+
+  const openStorageSettings = () => {
+    setApiOpen(false)
+    setStorageOpen(true)
+    void scanStorage()
+  }
 
   useEffect(() => {
     projectHomeOpenRef.current = projectHomeOpen
@@ -2156,8 +2769,15 @@ function App() {
       if (target instanceof Element && target.closest('.node-search-panel, [data-node-search-trigger]')) return
       setNodeSearchOpen(false)
     }
+    const closeNodeSearchWithEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNodeSearchOpen(false)
+    }
     document.addEventListener('pointerdown', closeNodeSearchOutside, true)
-    return () => document.removeEventListener('pointerdown', closeNodeSearchOutside, true)
+    window.addEventListener('keydown', closeNodeSearchWithEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeNodeSearchOutside, true)
+      window.removeEventListener('keydown', closeNodeSearchWithEscape)
+    }
   }, [nodeSearchOpen])
   const [projectSearch, setProjectSearch] = useState('')
   const [projectRename, setProjectRename] = useState<{ id: string; draft: string; source: 'switcher' | 'modal' | 'home' } | null>(null)
@@ -2168,19 +2788,66 @@ function App() {
   useEffect(() => {
     if (!projectHomeOpen) return
     let cancelled = false
+    const nextObjectUrls = new Set<string>()
     void Promise.all(workspaceProjects.map(async (project) => {
       const canvases = await listWorkspaceCanvases(project.id)
+      const effectiveCanvases = project.id === activeProjectId
+        ? canvases.map((canvas) => canvas.id === activeCanvasId ? { ...canvas, nodes } : canvas)
+        : canvases
+      const videoCandidates = effectiveCanvases.flatMap((canvas) => (canvas.nodes as CanvasNode[])
+        .filter((node) => node.data.kind === 'video' && Boolean(node.data.videoMediaId || (node.data.status === '已完成' && node.data.videoUrl)))
+        .map((node) => ({
+          mediaId: node.data.videoMediaId,
+          videoUrl: node.data.videoUrl,
+          generatedAt: node.data.videoGeneratedAt,
+        })))
+      const resolvedVideos: Array<ProjectCoverPreview | null> = await Promise.all(videoCandidates.map(async (candidate): Promise<ProjectCoverPreview | null> => {
+        if (candidate.mediaId) {
+          const media = await loadHistoryMedia(candidate.mediaId)
+          if (!media) return null
+          const url = URL.createObjectURL(media.blob)
+          nextObjectUrls.add(url)
+          return { kind: 'video' as const, url, createdAt: candidate.generatedAt || media.createdAt }
+        }
+        return candidate.videoUrl && candidate.generatedAt
+          ? { kind: 'video' as const, url: candidate.videoUrl, createdAt: candidate.generatedAt }
+          : null
+      }))
+      const latestVideo = resolvedVideos
+        .filter((cover): cover is ProjectCoverPreview => cover !== null)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+      resolvedVideos.forEach((cover) => {
+        if (cover && cover !== latestVideo && cover.url.startsWith('blob:')) {
+          URL.revokeObjectURL(cover.url)
+          nextObjectUrls.delete(cover.url)
+        }
+      })
       return [project.id, {
         nodeCount: canvases.reduce((total, canvas) => total + canvas.nodes.length, 0),
         activeCanvasNodeCount: canvases.find((canvas) => canvas.id === project.activeCanvasId)?.nodes.length ?? 0,
-      }] as const
+      }, latestVideo] as const
     })).then((entries) => {
-      if (!cancelled) setPersistedProjectContent(Object.fromEntries(entries))
+      if (cancelled) {
+        nextObjectUrls.forEach((url) => URL.revokeObjectURL(url))
+        return
+      }
+      projectVideoObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      projectVideoObjectUrlsRef.current = nextObjectUrls
+      setPersistedProjectContent(Object.fromEntries(entries.map(([projectId, content]) => [projectId, content])))
+      setLatestProjectVideoById(Object.fromEntries(entries.flatMap(([projectId, , cover]) => cover ? [[projectId, cover]] : [])))
     }).catch(() => {
-      if (!cancelled) setPersistedProjectContent({})
+      nextObjectUrls.forEach((url) => URL.revokeObjectURL(url))
+      if (!cancelled) {
+        setPersistedProjectContent({})
+        setLatestProjectVideoById({})
+      }
     })
     return () => { cancelled = true }
-  }, [projectHomeOpen, workspaceProjects])
+  }, [activeCanvasId, activeProjectId, nodes, projectHomeOpen, workspaceProjects])
+  useEffect(() => () => {
+    projectVideoObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    projectVideoObjectUrlsRef.current.clear()
+  }, [])
   const [projectName, setProjectName] = useState('DisyLab')
   const [canvasSwitcherOpen, setCanvasSwitcherOpen] = useState(false)
   const [projectCardScale, setProjectCardScale] = useState(1)
@@ -2195,20 +2862,29 @@ function App() {
   const [agentBusy, setAgentBusy] = useState(false)
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([])
   const [agentPlans, setAgentPlans] = useState<AgentImagePlan[]>([])
+  const [agentVideoPlans, setAgentVideoPlans] = useState<AgentVideoPlan[]>([])
   const [agentTextPlans, setAgentTextPlans] = useState<AgentTextPlan[]>([])
   const [agentReferences, setAgentReferences] = useState<AgentImageReference[]>([])
   const [agentPendingReferences, setAgentPendingReferences] = useState<AgentImageReference[]>([])
   const [agentConversationId, setAgentConversationId] = useState(() => `agent-session-${crypto.randomUUID()}`)
   const [agentConversationOptions, setAgentConversationOptions] = useState<{ id: string; title: string; updatedAt: string }[]>([])
   const [agentCanvasPicking, setAgentCanvasPicking] = useState(false)
+  const agentCanvasPickModeRef = useRef<{ mediaKind: 'image' | 'video'; videoGenerationMode?: 'text' | 'image' | 'frames' | 'reference' | 'omni' }>({ mediaKind: 'image' })
   const [agentTextModelKey, setAgentTextModelKey] = useState('')
   const [agentImageModelKey, setAgentImageModelKey] = useState('')
+  const [agentVideoModelKey, setAgentVideoModelKey] = useState('')
   const [agentImageDefaults, setAgentImageDefaults] = useState<{
     aspectRatio: ImageAspectRatio
     resolution: ImageResolution
     detail: ImageDetail
     count: number
   }>({ aspectRatio: '1:1', resolution: '1K', detail: 'medium', count: 1 })
+  const [agentVideoDefaults, setAgentVideoDefaults] = useState<{
+    aspectRatio: VideoAspectRatio
+    resolution: VideoResolution
+    duration: number
+    count: number
+  }>({ aspectRatio: '16:9', resolution: '720p', duration: 4, count: 1 })
   const [canvasName, setCanvasName] = useState('DisyLab')
   const [canvasNameDraft, setCanvasNameDraft] = useState('DisyLab')
   const [canvasNameEditing, setCanvasNameEditing] = useState(false)
@@ -2229,18 +2905,23 @@ function App() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
   const [draftModels, setDraftModels] = useState<ApiModelConfig[]>([])
   const [apiModelTab, setApiModelTab] = useState<ModelCapability>('text')
-  const [apiError, setApiError] = useState('')
   const [apiAlert, setApiAlert] = useState<string | null>(null)
   const [providerCreditsByConnection, setProviderCreditsByConnection] = useState<Record<string, ProviderCredits>>({})
+  const [pinnedCreditConnectionId, setPinnedCreditConnectionId] = useState<string | null>(null)
+  const [creditRotationIndex, setCreditRotationIndex] = useState(0)
+  const [creditsPopoverOpen, setCreditsPopoverOpen] = useState(false)
+  const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null)
+  const [storageInsights, setStorageInsights] = useState<{ localBytes: number; historyBytes: number; historyCount: number }>({ localBytes: 0, historyBytes: 0, historyCount: 0 })
+  const [storageScanning, setStorageScanning] = useState(false)
+  const [storageOpen, setStorageOpen] = useState(false)
   const [connectionHealthByConnection, setConnectionHealthByConnection] = useState<Record<string, 'checking' | 'online' | 'offline'>>({})
   const [providerPricesByConnection, setProviderPricesByConnection] = useState<Record<string, Record<string, ProviderModelPrice>>>({})
   const [creditsLoading, setCreditsLoading] = useState(false)
   const [creditsError, setCreditsError] = useState('')
+  const [usdToCnyRate, setUsdToCnyRate] = useState<CurrencyRate | null>(null)
 
   const showApiAlert = useCallback((message: string) => {
-    setApiError('')
     setCreditsError('')
-    setModelsError('')
     setApiAlert(message)
   }, [])
 
@@ -2251,6 +2932,8 @@ function App() {
   const apiKeyInputRef = useRef<HTMLInputElement>(null)
   const apiButtonRef = useRef<HTMLButtonElement>(null)
   const providerCreditsAttemptedRef = useRef(new Set<string>())
+  const creditsPopoverCloseTimerRef = useRef<number | null>(null)
+  const draftCreditKeyRef = useRef('')
   const providerCreditsSyncingRef = useRef(false)
   const providerPricesAttemptedRef = useRef(new Set<string>())
   const canvasNameInputRef = useRef<HTMLInputElement>(null)
@@ -2258,6 +2941,12 @@ function App() {
   const styleReferenceUploadTargetRef = useRef<{ presetId: string; referenceId?: string } | null>(null)
   const activeProjectIdRef = useRef(activeProjectId)
   const activeCanvasIdRef = useRef(activeCanvasId)
+  // Ignore late results when the user switches canvases repeatedly before an
+  // earlier IndexedDB read has finished. Without this guard an old canvas can
+  // be hydrated after the new one and leave the MiniMap bound to stale state.
+  const workspaceSwitchRequestRef = useRef(0)
+  const canvasViewportRef = useRef({ x: 0, y: 0, zoom: 1 })
+  const canvasViewportFrameRef = useRef<number | null>(null)
   const agentConversationIdRef = useRef(agentConversationId)
   const savedCanvasSignatureRef = useRef<string | null>(null)
   const canvasSavedRef = useRef(true)
@@ -2266,14 +2955,18 @@ function App() {
   const expandedTextareaRef = useRef<HTMLTextAreaElement>(null)
   const imagePromptEditorRef = useRef<AtomicPromptEditorHandle>(null)
   const textPromptEditorRef = useRef<AtomicPromptEditorHandle>(null)
+  const videoPromptEditorRef = useRef<AtomicPromptEditorHandle>(null)
   const overlayMeasureFrameRef = useRef<number | null>(null)
   const overlayMeasureTargetRef = useRef<string | null>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceInputRef = useRef<HTMLInputElement>(null)
   const generationReferenceNodeIdRef = useRef<string | null>(null)
+  const generationReferenceUploadModeRef = useRef<'result' | 'reference'>('reference')
+  const previewOnlyNodeUntilRef = useRef(new Map<string, number>())
   activeProjectIdRef.current = activeProjectId
   activeCanvasIdRef.current = activeCanvasId
   agentConversationIdRef.current = agentConversationId
+  draftCreditKeyRef.current = editingConnectionId === 'new' ? apiDraft.baseUrl.trim() : ''
   const assetUploadInputRef = useRef<HTMLInputElement>(null)
   const workspaceImportInputRef = useRef<HTMLInputElement>(null)
   const uploadPositionRef = useRef<{ x: number; y: number } | null>(null)
@@ -2284,6 +2977,7 @@ function App() {
   const autoModelFetchTimerRef = useRef<number | null>(null)
   const autoModelFetchKeyRef = useRef('')
   const generationTaskControllersRef = useRef(new Map<string, AbortController>())
+  const generateVideoNodeRef = useRef<(nodeId: string) => void>(() => undefined)
   const generationTaskProjectIdsRef = useRef(new Map<string, string>())
   const generationTaskStopReasonRef = useRef(new Map<string, 'paused' | 'stopped'>())
   const agentPlanLocksRef = useRef(new Set<string>())
@@ -2298,9 +2992,82 @@ function App() {
   const currentHistorySnapshotRef = useRef<CanvasHistorySnapshot | null>(null)
   const historyCaptureTimerRef = useRef<number | null>(null)
   const historyReadyRef = useRef(false)
-  const { fitView: fitCanvas, screenToFlowPosition, setCenter, zoomTo, getInternalNode, getNodes, updateNode } = useReactFlow<CanvasNode>()
+  const { fitView: fitCanvas, screenToFlowPosition, setCenter, setViewport, zoomTo, getViewport, getInternalNode, getNodes } = useReactFlow<CanvasNode>()
   const updateNodeInternals = useUpdateNodeInternals()
   const reduceMotion = useReducedMotion()
+
+  useEffect(() => {
+    let detach = () => undefined
+    const frame = window.requestAnimationFrame(() => {
+      const svg = document.querySelector<SVGSVGElement>('.disy-minimap svg')
+      if (!svg) return
+
+      let drag: {
+        pointerId: number
+        startPoint: DOMPoint
+        startCenter: { x: number; y: number }
+        zoom: number
+        inverseMatrix: DOMMatrix
+      } | null = null
+
+      const handlePointerDown = (event: PointerEvent) => {
+        if (!event.isPrimary || event.button !== 0) return
+        const inverseMatrix = svg.getScreenCTM()?.inverse()
+        if (!inverseMatrix) return
+        const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(inverseMatrix)
+        const flowRect = svg.closest('.react-flow')?.getBoundingClientRect()
+        if (!flowRect) return
+        const viewport = getViewport()
+        drag = {
+          pointerId: event.pointerId,
+          startPoint: point,
+          startCenter: {
+            x: (flowRect.width / 2 - viewport.x) / viewport.zoom,
+            y: (flowRect.height / 2 - viewport.y) / viewport.zoom,
+          },
+          zoom: viewport.zoom,
+          inverseMatrix,
+        }
+        svg.setPointerCapture(event.pointerId)
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      const handlePointerMove = (event: PointerEvent) => {
+        if (!drag || event.pointerId !== drag.pointerId) return
+        const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(drag.inverseMatrix)
+        void setCenter(
+          drag.startCenter.x + point.x - drag.startPoint.x,
+          drag.startCenter.y + point.y - drag.startPoint.y,
+          { zoom: drag.zoom, duration: 0 },
+        )
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      const finishPointerDrag = (event: PointerEvent) => {
+        if (!drag || event.pointerId !== drag.pointerId) return
+        if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId)
+        drag = null
+        event.preventDefault()
+        event.stopPropagation()
+      }
+
+      svg.addEventListener('pointerdown', handlePointerDown)
+      svg.addEventListener('pointermove', handlePointerMove)
+      svg.addEventListener('pointerup', finishPointerDrag)
+      svg.addEventListener('pointercancel', finishPointerDrag)
+      detach = () => {
+        svg.removeEventListener('pointerdown', handlePointerDown)
+        svg.removeEventListener('pointermove', handlePointerMove)
+        svg.removeEventListener('pointerup', finishPointerDrag)
+        svg.removeEventListener('pointercancel', finishPointerDrag)
+      }
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      detach()
+    }
+  }, [activeCanvasId, activeProjectId, getViewport, setCenter])
+
   const resetCanvasHistory = useCallback((nextNodes: CanvasNode[], nextEdges: Edge[]) => {
     if (historyCaptureTimerRef.current !== null) window.clearTimeout(historyCaptureTimerRef.current)
     historyCaptureTimerRef.current = null
@@ -2376,7 +3143,6 @@ function App() {
       setApiDraft({ name: '', baseUrl: '', apiKey: '', balanceToken: '' })
       setDraftModels([])
     }
-    setApiError('')
     const focusTimer = window.setTimeout(() => firstApiInputRef.current?.focus(), 40)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setApiOpen(false)
@@ -2546,6 +3312,21 @@ function App() {
   }, [outputHistoryOpen, outputHistoryFilter])
 
   useEffect(() => {
+    if (!apiAlert && !deleteConfirm && !storageOpen && !expandedEditorNodeId) return
+    const closeDismissibleSurface = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (apiAlert) setApiAlert(null)
+      else if (deleteConfirm) setDeleteConfirm(null)
+      else if (storageOpen) setStorageOpen(false)
+      else setExpandedEditorNodeId(null)
+    }
+    window.addEventListener('keydown', closeDismissibleSurface, true)
+    return () => window.removeEventListener('keydown', closeDismissibleSurface, true)
+  }, [apiAlert, deleteConfirm, expandedEditorNodeId, storageOpen])
+
+  useEffect(() => {
     try {
       if (outputHistory.length) localStorage.setItem(OUTPUT_HISTORY_KEY, JSON.stringify(outputHistory))
       else localStorage.removeItem(OUTPUT_HISTORY_KEY)
@@ -2565,6 +3346,42 @@ function App() {
       // Base64 results remain available in this session when the quota is too small.
     }
   }, [generationHistory])
+
+  useEffect(() => {
+    if (!generationHistoryOpen) return
+    let cancelled = false
+    void listWorkspaceCanvases(activeProjectId).then((canvases) => {
+      if (cancelled) return
+      const recordsByMediaId = new Map<string, GenerationRecord>()
+      const collectVideoRecords = (canvasNodes: CanvasNode[], canvasUpdatedAt?: string) => {
+        canvasNodes.forEach((node) => {
+          if (node.data.kind !== 'video' || !node.data.videoMediaId) return
+          recordsByMediaId.set(node.data.videoMediaId, {
+            id: `history-${node.data.videoMediaId}`,
+            createdAt: node.data.videoGeneratedAt || canvasUpdatedAt || new Date().toISOString(),
+            prompt: node.data.body || '',
+            model: node.data.videoModelName || node.data.videoModelId || '视频模型',
+            imageUrl: '',
+            fileName: node.data.fileName || 'disy-video.mp4',
+            projectId: activeProjectId,
+            mediaId: node.data.videoMediaId,
+            kind: 'video',
+          })
+        })
+      }
+      canvases.forEach((canvas) => collectVideoRecords(canvas.nodes as CanvasNode[], canvas.updatedAt))
+      collectVideoRecords(nodes)
+      if (!recordsByMediaId.size) return
+      setGenerationHistory((current) => {
+        const existingMediaIds = new Set(current.map((record) => record.mediaId).filter(Boolean))
+        const missing = [...recordsByMediaId.values()].filter((record) => !existingMediaIds.has(record.mediaId))
+        return missing.length ? [...current, ...missing] : current
+      })
+    }).catch(() => {
+      // History remains usable even when a canvas record cannot be inspected.
+    })
+    return () => { cancelled = true }
+  }, [activeProjectId, generationHistoryOpen, nodes])
 
   useEffect(() => {
     const missingMedia = generationHistory.filter((record) => record.mediaId && !record.imageUrl)
@@ -2655,13 +3472,16 @@ function App() {
   }, [outputHistory])
 
   useEffect(() => {
-    if (!canvasReferencePickerNodeId) return
+    if (!canvasReferencePickerNodeId && !videoTextPickerNodeId) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setCanvasReferencePickerNodeId(null)
+      if (event.key === 'Escape') {
+        setCanvasReferencePickerNodeId(null)
+        setVideoTextPickerNodeId(null)
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [canvasReferencePickerNodeId])
+  }, [canvasReferencePickerNodeId, videoTextPickerNodeId])
 
   useEffect(() => () => aspectTweenRef.current?.kill(), [])
 
@@ -2699,7 +3519,6 @@ function App() {
       setDraftModels([])
     }
     setModelsLoading(true)
-    setModelsError('')
     const requestId = ++modelFetchRequestRef.current
     try {
       await validateApiCredentials({ baseUrl: apiDraft.baseUrl.trim(), apiKey: apiDraft.apiKey.trim() })
@@ -2709,7 +3528,8 @@ function App() {
       const nextDraftModels = models.map((model) => {
         const current = draftModels
         const existing = current.find((item) => item.id === model.id)
-        return { ...model, enabled: existing ? existing.enabled : isModelAutoEnabled(model) }
+        const shouldAutoEnable = isModelAutoEnabled(model)
+        return { ...model, enabled: shouldAutoEnable || existing?.enabled === true }
       })
       setDraftModels(nextDraftModels)
       const preferredText = pickPreferredModelId(mapped, 'text')
@@ -2790,6 +3610,7 @@ function App() {
       const now = Date.now()
       if (providerCreditsSyncingRef.current || document.visibilityState === 'hidden' || now - lastSyncAt < 2_000) return
       const supportedConnections = apiSettings.connections.filter((connection) => {
+        if (!isConnectionUsable(connection)) return false
         const supportsBalance = /(?:grsaiapi\.com|grsai\.dakka\.com\.cn|api\.apiyi\.com|apiyi\.com|api\.apimart\.ai|apimart\.ai)/i.test(connection.baseUrl)
         const hasCredential = /(?:api\.apiyi\.com|apiyi\.com)/i.test(connection.baseUrl)
           ? Boolean(connection.balanceToken?.trim())
@@ -2810,9 +3631,19 @@ function App() {
         })))
         if (disposed) return
         setProviderCreditsByConnection((current) => {
-          const next = { ...current }
-          results.forEach((result) => {
-            if (result.status === 'fulfilled' && result.value.credits) next[result.value.id] = result.value.credits
+          const next: Record<string, ProviderCredits> = {}
+          const supportedIds = new Set(supportedConnections.map((connection) => connection.id))
+          Object.entries(current).forEach(([key, value]) => {
+            if (!supportedIds.has(key) && key !== draftCreditKeyRef.current) return
+            next[key] = value
+          })
+          results.forEach((result, index) => {
+            const connectionId = supportedConnections[index]?.id
+            if (result.status !== 'fulfilled' || !result.value.credits) {
+              if (connectionId) delete next[connectionId]
+              return
+            }
+            next[result.value.id] = result.value.credits
           })
           return next
         })
@@ -2832,6 +3663,24 @@ function App() {
       document.removeEventListener('visibilitychange', handleFocus)
     }
   }, [apiSettings.connections])
+
+  useEffect(() => {
+    let disposed = false
+    const refreshExchangeRate = async () => {
+      try {
+        const rate = await fetchUsdToCnyRate()
+        if (!disposed) setUsdToCnyRate(rate)
+      } catch {
+        if (!disposed) setUsdToCnyRate((current) => current && Date.now() - Date.parse(current.fetchedAt) <= 24 * 60 * 60_000 ? current : null)
+      }
+    }
+    void refreshExchangeRate()
+    const timer = window.setInterval(() => void refreshExchangeRate(), 6 * 60 * 60_000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     apiSettings.connections.forEach((connection) => {
@@ -2954,14 +3803,17 @@ function App() {
       const activeSession = sessions[0]
       setAgentConversationId(activeSession?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
       setAgentMessages(normalizeHistoricalAgentMessages((activeSession?.messages as AgentMessage[] | undefined) ?? []))
-      const storedPlans = (activeSession?.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
-      const interruptedPlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
-      setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
+      const storedPlans = (activeSession?.plans as StoredAgentPlan[] | undefined) ?? []
+      const interruptedPlans = storedPlans.filter(isAgentImagePlan)
+      const interruptedVideoPlans = storedPlans.filter(isAgentVideoPlan)
+      setAgentTextPlans(storedPlans.filter(isAgentTextPlan))
       const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
       if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
       setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成在应用关闭时中断，请在对应图像节点中手动重试。' } : plan))
+      setAgentVideoPlans(interruptedVideoPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次视频生成在应用关闭时中断，请在对应视频节点中手动重试。' } : plan))
       setAgentTextModelKey(activeSession?.selectedChatModelId ?? '')
       setAgentImageModelKey(activeSession?.selectedImageModelId ?? '')
+      setAgentVideoModelKey(typeof activeSession?.selectedVideoModelId === 'string' ? activeSession.selectedVideoModelId : '')
     })().catch(() => {
       if (!cancelled) setToastMessage('本地项目读取失败')
     })
@@ -3012,6 +3864,7 @@ function App() {
       setActiveEditorNodeId(null)
       setActiveImageNodeId(null)
       setActiveGenerationNodeId(null)
+      setActiveVideoNodeId(null)
       setExpandedEditorNodeId(null)
       setNodeOverlayRect(null)
       setNodeMenu(null)
@@ -3147,14 +4000,15 @@ function App() {
       canvasId: activeCanvasId,
       title,
       messages: agentMessages,
-      plans: [...agentPlans, ...agentTextPlans],
+      plans: [...agentPlans, ...agentVideoPlans, ...agentTextPlans],
       selectedChatModelId: agentTextModelKey,
       selectedImageModelId: agentImageModelKey,
+      selectedVideoModelId: agentVideoModelKey,
       createdAt: agentMessages[0]?.createdAt ?? now,
       updatedAt: now,
     })
     setAgentConversationOptions((current) => [{ id: agentConversationId, title, updatedAt: now }, ...current.filter((item) => item.id !== agentConversationId)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
-  }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey, agentTextPlans])
+  }, [activeCanvasId, activeProjectId, agentConversationId, agentImageModelKey, agentMessages, agentPlans, agentTextModelKey, agentTextPlans, agentVideoModelKey, agentVideoPlans])
 
   useEffect(() => {
     if (!activeProjectId || !activeCanvasId) return
@@ -3186,9 +4040,12 @@ function App() {
     }
     if (activeImageNodeId && !nodes.some((node) => node.id === activeImageNodeId)) setActiveImageNodeId(null)
     if (activeGenerationNodeId && !nodes.some((node) => node.id === activeGenerationNodeId)) setActiveGenerationNodeId(null)
+    if (activeVideoNodeId && !nodes.some((node) => node.id === activeVideoNodeId && node.data.kind === 'video')) setActiveVideoNodeId(null)
+    if (clipSession && !nodes.some((node) => node.id === clipSession.nodeId && node.data.kind === 'video')) setClipSession(null)
+    if (videoCropSession && !nodes.some((node) => node.id === videoCropSession.nodeId && node.data.kind === 'video')) setVideoCropSession(null)
     if (previewImageNodeId && !nodes.some((node) => node.id === previewImageNodeId)) setPreviewImageNodeId(null)
     if (imageGalleryNodeId && !nodes.some((node) => node.id === imageGalleryNodeId)) setImageGalleryNodeId(null)
-  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, imageGalleryNodeId, nodes, previewImageNodeId])
+  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, activeVideoNodeId, clipSession, imageGalleryNodeId, nodes, previewImageNodeId, videoCropSession])
 
   const closeNodeMenu = useCallback(() => setNodeMenu(null), [])
   const closeContextMenu = useCallback(() => setNodeContextMenu(null), [])
@@ -3198,8 +4055,21 @@ function App() {
     setGenerationControlMenuNodeId(null)
   }, [])
 
+  useEffect(() => {
+    if (!nodeMenu && !nodeContextMenu && !generationControlMenuNodeId && !groupColorMenuOpen && !groupIconMenuOpen) return
+    const closeCanvasMenusWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      closeAllMenus()
+      setGroupColorMenuOpen(false)
+      setGroupIconMenuOpen(false)
+    }
+    window.addEventListener('keydown', closeCanvasMenusWithEscape)
+    return () => window.removeEventListener('keydown', closeCanvasMenusWithEscape)
+  }, [closeAllMenus, generationControlMenuNodeId, groupColorMenuOpen, groupIconMenuOpen, nodeContextMenu, nodeMenu])
+
   const measureNodeOverlay = useCallback((nodeId?: string | null) => {
-    const targetNodeId = nodeId ?? activeImageNodeId ?? activeGenerationNodeId ?? activeEditorNodeId
+    const targetNodeId = nodeId ?? activeImageNodeId ?? activeGenerationNodeId ?? activeVideoNodeId ?? activeEditorNodeId
     if (!targetNodeId || !shellRef.current) {
       if (overlayMeasureFrameRef.current !== null) window.cancelAnimationFrame(overlayMeasureFrameRef.current)
       overlayMeasureFrameRef.current = null
@@ -3231,26 +4101,40 @@ function App() {
         height: nodeRect.height,
       })
     })
-  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId])
+  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, activeVideoNodeId])
 
   useEffect(() => {
-    const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeEditorNodeId
+    const selectedVideoNodeId = nodes.find((node) => node.selected && node.data.kind === 'video')?.id
+    const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeVideoNodeId ?? activeEditorNodeId ?? selectedVideoNodeId
     if (!activeOverlayNodeId || isNodeDragging) {
       if (!activeOverlayNodeId) setNodeOverlayRect(null)
       return
     }
     measureNodeOverlay(activeOverlayNodeId)
-  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, canvasZoom, isNodeDragging, measureNodeOverlay, nodes])
+  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, activeVideoNodeId, canvasZoom, isNodeDragging, measureNodeOverlay, nodes])
 
   useEffect(() => {
-    const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeEditorNodeId
+    const frame = window.requestAnimationFrame(() => {
+      setViewport({ x: 0, y: 0, zoom: 1 })
+      void fitCanvas({ padding: 0.2, duration: 0 })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeProjectId, activeCanvasId, fitCanvas, setViewport])
+
+  useEffect(() => () => {
+    if (canvasViewportFrameRef.current !== null) window.cancelAnimationFrame(canvasViewportFrameRef.current)
+  }, [])
+
+  useEffect(() => {
+    const selectedVideoNodeId = nodes.find((node) => node.selected && node.data.kind === 'video')?.id
+    const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeVideoNodeId ?? activeEditorNodeId ?? selectedVideoNodeId
     if (!activeOverlayNodeId || isNodeDragging) return
     const nodeElement = shellRef.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(activeOverlayNodeId)}"]`)
     if (!nodeElement || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => measureNodeOverlay(activeOverlayNodeId))
     observer.observe(nodeElement)
     return () => observer.disconnect()
-  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, isNodeDragging, measureNodeOverlay])
+  }, [activeEditorNodeId, activeGenerationNodeId, activeImageNodeId, activeVideoNodeId, isNodeDragging, measureNodeOverlay])
 
   useEffect(() => {
     if (!previewImageNodeId) return
@@ -3322,7 +4206,7 @@ function App() {
     } catch {
       setToastMessage('图片读取失败，请重新选择')
     }
-  }, [setNodes])
+  }, [measureNodeOverlay, setNodes])
 
   const addPromptCaseImage = useCallback((item: PromptLibraryCase, position?: { x: number; y: number }) => {
     const center = position || screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
@@ -3349,24 +4233,25 @@ function App() {
     const nodeSize = getImageGenerationNodeSize(imageAspectRatio)
     const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
     const id = `prompt-case-${item.id}-${Date.now()}`
-    setNodes((current) => [...current, {
-      id,
-      type: 'disy',
-      position: { x: center.x - nodeSize.width / 2, y: center.y - nodeSize.height / 2 },
+    setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), {
+        id,
+        type: 'disy',
+        selected: true,
+        position: { x: center.x - nodeSize.width / 2, y: center.y - nodeSize.height / 2 },
       style: nodeSize,
       data: {
         kind: 'image',
         title: item.title,
         body: item.prompt,
         promptText: item.prompt,
-        imageUrl: item.image,
-        fileName: imageFileName(`inspiration-${item.id}`, item.image),
         referenceImageUrl: item.image,
         referenceImageName: `案例 ${item.id} · ${item.title}`,
         imageAspectRatio,
+        status: '待生成',
       },
     }])
     setPromptLibraryOpen(false)
+    setSelectedNodeIds([id])
     setActiveGenerationNodeId(id)
     setToastMessage('案例 Prompt 与参考图已写入新的图像节点')
     window.requestAnimationFrame(() => measureNodeOverlay(id))
@@ -3377,7 +4262,6 @@ function App() {
     closeAllMenus()
     imageInputRef.current?.click()
   }, [closeAllMenus])
-
   useEffect(() => {
     const rememberCanvasPointer = (event: PointerEvent) => {
       const target = event.target
@@ -3433,6 +4317,21 @@ function App() {
         setToastMessage('该连接会形成循环引用')
         return
       }
+      if (target.data.kind === 'video' && target.data.videoGenerationMethod === 'omni') {
+        const incomingNodes = edges.filter((edge) => edge.target === target.id).flatMap((edge) => nodes.filter((node) => node.id === edge.source))
+        if ((source.data.kind === 'image' || source.data.kind === 'upload')) {
+          const imageCount = incomingNodes.filter((node) => node.data.kind === 'image' || node.data.kind === 'upload').length
+            + (target.data.videoReferenceImageUrl ? 1 : 0)
+            + (target.data.referenceImages?.length ?? 0)
+          if (imageCount >= 9) { setToastMessage('全能参考最多支持 9 张图片'); return }
+        }
+        if (source.data.kind === 'video') {
+          const videoCount = incomingNodes.filter((node) => node.data.kind === 'video').length
+            + (target.data.videoReferenceUrl ? 1 : 0)
+            + (target.data.videoReferenceVideos?.length ?? 0)
+          if (videoCount >= 3) { setToastMessage('全能参考最多支持 3 个视频'); return }
+        }
+      }
       setEdges((current) =>
         current.some((edge) => edge.source === source.id && edge.target === target.id)
           ? current
@@ -3444,7 +4343,7 @@ function App() {
       )
       closeAllMenus()
     },
-    [closeAllMenus, connectionCreatesCycle, nodes, setEdges],
+    [closeAllMenus, connectionCreatesCycle, edges, nodes, setEdges],
   )
 
   const onConnectEnd: OnConnectEnd = useCallback(
@@ -3468,6 +4367,21 @@ function App() {
         if (connectionCreatesCycle(sourceNodeId, targetNodeId)) {
           setToastMessage('该连接会形成循环引用')
           return
+        }
+        if (targetNode?.data.kind === 'video' && (targetNode.data.videoGenerationMethod || 'text') === 'omni') {
+          const incomingNodes = edges.filter((edge) => edge.target === targetNode.id).flatMap((edge) => nodes.filter((node) => node.id === edge.source))
+          if (sourceNode?.data.kind === 'video') {
+            const videoCount = incomingNodes.filter((node) => node.data.kind === 'video').length
+              + (targetNode.data.videoReferenceUrl ? 1 : 0)
+              + (targetNode.data.videoReferenceVideos?.length ?? 0)
+            if (videoCount >= 3) { setToastMessage('全能参考最多支持 3 个视频'); return }
+          }
+          if (sourceNode?.data.kind === 'image' || sourceNode?.data.kind === 'upload') {
+            const imageCount = incomingNodes.filter((node) => node.data.kind === 'image' || node.data.kind === 'upload').length
+              + (targetNode.data.videoReferenceImageUrl ? 1 : 0)
+              + (targetNode.data.referenceImages?.length ?? 0)
+            if (imageCount >= 9) { setToastMessage('全能参考最多支持 9 张图片'); return }
+          }
         }
         setEdges((current) =>
           current.some((edge) => edge.source === sourceNodeId && edge.target === targetNodeId)
@@ -3497,10 +4411,11 @@ function App() {
         flowX: flowPosition.x,
         flowY: flowPosition.y,
         connectionSourceId: connectionState.fromNode.id,
+        connectionDirection: connectionState.fromHandle.type === 'target' ? 'incoming' : 'outgoing',
       })
       closeContextMenu()
     },
-    [closeAllMenus, closeContextMenu, connectionCreatesCycle, nodes, screenToFlowPosition, setEdges],
+    [closeAllMenus, closeContextMenu, connectionCreatesCycle, edges, nodes, screenToFlowPosition, setEdges],
   )
 
   const createNode = (kind: CreatableNodeKind, positionOverride?: { x: number; y: number }) => {
@@ -3508,22 +4423,30 @@ function App() {
       text: '文本',
       image: '图像',
       upload: '新上传',
-      video: '视频（暂未开放）',
+      video: '视频',
       'svg-motion': 'SVG 动效',
     }
     const bodies: Record<CreatableNodeKind, string> = {
       text: '',
       image: '',
       upload: '上传一张参考图。',
-      video: '保留首尾帧、时长、运镜与连续性说明；视频生成能力即将开放。',
+      video: '',
       'svg-motion': '上传 SVG 或使用示例图形创建轻量动效。',
     }
     const id = `${kind}-${Date.now()}`
     const connectionSourceId = positionOverride ? undefined : nodeMenu?.connectionSourceId
+    const connectionSource = connectionSourceId ? nodes.find((node) => node.id === connectionSourceId) : undefined
+    if (nodeMenu?.connectionDirection !== 'incoming' && connectionSource?.data.kind === 'video' && kind === 'image') {
+      setToastMessage('视频节点不能直接生成图像，请连接文本或视频节点')
+      return
+    }
     // A node created from the right-hand handle is a downstream generation.
     // Keep its generation settings in lockstep with the upstream image node.
     const upstreamImageNode = connectionSourceId && nodeMenu?.connectionDirection !== 'incoming'
-      ? nodes.find((node) => node.id === connectionSourceId && node.data.kind === 'image')
+      ? nodes.find((node) => node.id === connectionSourceId && (node.data.kind === 'image' || node.data.kind === 'upload'))
+      : undefined
+    const upstreamVideoNode = connectionSourceId && nodeMenu?.connectionDirection !== 'incoming'
+      ? nodes.find((node) => node.id === connectionSourceId && node.data.kind === 'video')
       : undefined
     const inheritedImageOptions = upstreamImageNode ? {
       imageAspectRatio: upstreamImageNode.data.imageAspectRatio ?? '1:1' as ImageAspectRatio,
@@ -3537,30 +4460,49 @@ function App() {
       imageResolution: '1K' as ImageResolution,
       imageDetail: 'medium' as ImageDetail,
     }
+    const inheritedVideoOptions = upstreamVideoNode ? {
+      videoAspectRatio: upstreamVideoNode.data.videoAspectRatio ?? '16:9' as VideoAspectRatio,
+      videoDuration: upstreamVideoNode.data.videoDuration ?? 4 as VideoDuration,
+      videoResolution: upstreamVideoNode.data.videoResolution ?? '720p' as const,
+      videoGenerateAudio: upstreamVideoNode.data.videoGenerateAudio !== false,
+      ...(upstreamVideoNode.data.videoModelConnectionId ? { videoModelConnectionId: upstreamVideoNode.data.videoModelConnectionId } : {}),
+      ...(upstreamVideoNode.data.videoModelId ? { videoModelId: upstreamVideoNode.data.videoModelId } : {}),
+      ...(upstreamVideoNode.data.videoModelName ? { videoModelName: upstreamVideoNode.data.videoModelName } : {}),
+    } : {
+      videoAspectRatio: '16:9' as VideoAspectRatio,
+      videoDuration: 4 as VideoDuration,
+      videoResolution: '720p' as const,
+      videoGenerateAudio: true,
+    }
     const menuAnchor = { x: nodeMenu?.flowX ?? 360, y: nodeMenu?.flowY ?? 260 }
     const imageSize = getImageGenerationNodeSize(inheritedImageOptions.imageAspectRatio)
     const menuPosition = kind === 'text'
       ? { x: menuAnchor.x - 137.5, y: menuAnchor.y - 63 }
       : kind === 'image'
         ? { x: menuAnchor.x - imageSize.width / 2, y: menuAnchor.y - imageSize.height / 2 }
-        : kind === 'svg-motion'
-          ? { x: menuAnchor.x - 170, y: menuAnchor.y - 235 }
+          : kind === 'svg-motion'
+            ? { x: menuAnchor.x - 170, y: menuAnchor.y - 235 }
+          : kind === 'video'
+            ? { x: menuAnchor.x - 150, y: menuAnchor.y - 95 }
           : { x: menuAnchor.x - 130, y: menuAnchor.y - 110 }
 
     const focusConnectedImage = Boolean(connectionSourceId && kind === 'image')
+    const focusCreatedVideo = kind === 'video'
     setNodes((current) => [
-      ...(focusConnectedImage ? current.map((node) => ({ ...node, selected: false })) : current),
+      ...(focusConnectedImage || focusCreatedVideo ? current.map((node) => ({ ...node, selected: false })) : current),
       {
         id,
         type: 'disy',
         position: positionOverride ?? menuPosition,
-        selected: focusConnectedImage,
+        selected: focusConnectedImage || focusCreatedVideo,
         ...(kind === 'text'
           ? { style: { width: 275, height: 126 } }
           : kind === 'image'
             ? { style: imageSize }
             : kind === 'svg-motion'
               ? { style: { width: 360, height: 660 } }
+          : kind === 'video'
+                ? { style: getVideoNodeSize(inheritedVideoOptions.videoAspectRatio) }
             : {}),
         data: {
           kind,
@@ -3571,12 +4513,13 @@ function App() {
             status: '待生成',
             ...inheritedImageOptions,
           } : {}),
+          ...(kind === 'video' ? { status: '待生成', promptText: '', ...inheritedVideoOptions, videoQuality: 'professional' as const, videoGenerationMethod: upstreamImageNode ? 'image' as const : 'text' as const, videoGenerateCount: 1 as const } : {}),
           ...(kind === 'svg-motion' ? { svgMotion: DEFAULT_SVG_MOTION } : {}),
         },
       },
     ])
 
-    if (connectionSourceId && (kind === 'image' || kind === 'text')) {
+    if (connectionSourceId && (kind === 'image' || kind === 'text' || kind === 'video')) {
       const incoming = nodeMenu?.connectionDirection === 'incoming'
       setEdges((current) =>
         addEdge(
@@ -3597,7 +4540,15 @@ function App() {
       setActiveGenerationNodeId(id)
       window.requestAnimationFrame(() => measureNodeOverlay(id))
     }
+    if (focusCreatedVideo) {
+      setActiveEditorNodeId(null)
+      setActiveImageNodeId(null)
+      setActiveGenerationNodeId(null)
+      setActiveVideoNodeId(id)
+      window.requestAnimationFrame(() => measureNodeOverlay(id))
+    }
     closeNodeMenu()
+    return id
   }
 
   const createNodeFromEmptyState = (kind: CreatableNodeKind) => {
@@ -3607,11 +4558,6 @@ function App() {
       return
     }
     createNode(kind, { x: center.x - 138, y: center.y - 72 })
-  }
-
-  const showVideoGenerationUnavailable = () => {
-    closeNodeMenu()
-    setToastMessage('视频生成功能暂未开放，敬请期待')
   }
 
   const createAgentTextNode = (content: string, title = 'Agent 文本') => {
@@ -3727,6 +4673,9 @@ function App() {
               height: (node.measured?.width || Number(node.style?.width) || 280) / patch.gridAspectRatio + 36,
             },
           } : {}),
+          ...(patch.videoAspectRatio && node.data.kind === 'video' ? {
+            style: { ...node.style, ...getVideoNodeSize(patch.videoAspectRatio) },
+          } : {}),
           data: { ...node.data, ...patch },
         }
       : node))
@@ -3757,6 +4706,107 @@ function App() {
     reader.onerror = () => setToastMessage('图片读取失败，请重新选择')
     reader.readAsDataURL(file)
   }, [setNodes])
+
+  const uploadVideoToNode = useCallback((nodeId: string, file: File) => {
+    if (!file.type.startsWith('video/')) { setToastMessage('请选择 MP4、WebM 或 MOV 视频'); return }
+    const reader = new FileReader()
+    reader.onprogress = (event) => {
+      if (!event.lengthComputable) return
+      setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, status: '上传中', videoProgress: Math.round(event.loaded / event.total * 100) } } : node))
+    }
+    reader.onload = () => {
+      const videoUrl = String(reader.result)
+      setNodes((current) => current.map((node) => node.id === nodeId
+        ? { ...node, selected: true, data: { ...node.data, videoUrl, videoMediaId: undefined, videoSource: 'local-upload', fileName: file.name, status: '已上传', videoProgress: 100 } }
+        : { ...node, selected: false }))
+      setActiveVideoNodeId(null); setActiveImageNodeId(null); setActiveGenerationNodeId(null); setActiveEditorNodeId(null)
+      setSelectedNodeIds([nodeId])
+      setToastMessage(`已上传 ${file.name}`)
+    }
+    reader.onerror = () => setToastMessage('视频读取失败，请重新选择')
+    reader.readAsDataURL(file)
+  }, [setNodes])
+
+  const uploadVideoReferenceImage = useCallback((nodeId: string, file: File, slot: 'reference' | 'first' | 'last' = 'reference') => {
+    if (!file.type.startsWith('image/')) { setToastMessage('请选择图片文件'); return }
+    if (slot === 'reference') {
+      const target = nodes.find((item) => item.id === nodeId)
+      const mode = target?.data.videoGenerationMethod || 'text'
+      if (mode === 'omni') {
+        const connectedCount = edges.filter((edge) => edge.target === nodeId).reduce((count, edge) => {
+          const source = nodes.find((item) => item.id === edge.source)
+          return count + (source && (source.data.kind === 'image' || source.data.kind === 'upload') && source.data.imageUrl ? 1 : 0)
+        }, 0)
+        const localCount = (target?.data.referenceImages?.length ?? 0) + (target?.data.videoReferenceImageUrl ? 1 : 0)
+        if (connectedCount + localCount >= 9) { setToastMessage('全能参考最多支持 9 张图片'); return }
+      }
+      if (mode === 'reference') {
+        const connectedCount = edges.filter((edge) => edge.target === nodeId).reduce((count, edge) => {
+          const source = nodes.find((item) => item.id === edge.source)
+          return count + (source && (source.data.kind === 'image' || source.data.kind === 'upload') && (source.data.imageUrl || source.data.referenceImageUrl) ? 1 : 0)
+        }, 0)
+        const localCount = target?.data.referenceImages?.length ?? 0
+        if (connectedCount + localCount >= 4) { setToastMessage('图片参考模式最多支持 4 张图片'); return }
+      }
+    }
+    const connectedReferenceIds = edges
+      .filter((edge) => edge.target === nodeId)
+      .map((edge) => `connection-${edge.source}`)
+    const reader = new FileReader()
+    reader.onload = () => setNodes((current) => current.map((node) => {
+      if (node.id !== nodeId) return node
+      const knownOrder = Array.from(new Set([
+        ...(node.data.videoReferenceOrder ?? []),
+        ...connectedReferenceIds,
+        ...(node.data.videoFirstFrameUrl ? ['video-first-frame'] : []),
+        ...(node.data.videoLastFrameUrl ? ['video-last-frame'] : []),
+        ...(node.data.videoReferenceImageUrl ? ['video-reference-image'] : []),
+        ...(node.data.referenceImages ?? []).map((reference) => reference.id),
+      ]))
+      const moveTo = (id: string, index: number) => {
+        const next = knownOrder.filter((item) => item !== id)
+        next.splice(Math.min(index, next.length), 0, id)
+        return next
+      }
+      if (slot === 'first') return { ...node, data: { ...node.data, videoFirstFrameUrl: String(reader.result), videoReferenceOrder: moveTo('video-first-frame', 0) } }
+      if (slot === 'last') return { ...node, data: { ...node.data, videoLastFrameUrl: String(reader.result), videoReferenceOrder: moveTo('video-last-frame', 1) } }
+      if (node.data.videoGenerationMethod === 'omni' || node.data.videoGenerationMethod === 'reference') {
+        const reference = { id: `video-reference-image-${crypto.randomUUID()}`, name: file.name, url: String(reader.result) }
+        return { ...node, data: { ...node.data, referenceImages: [...(node.data.referenceImages ?? []), reference] } }
+      }
+      if (node.data.videoGenerationMethod === 'image' && node.data.videoReferenceImageUrl) {
+        const reference = { id: `video-reference-image-${crypto.randomUUID()}`, name: file.name, url: String(reader.result) }
+        return { ...node, data: { ...node.data, referenceImages: [...(node.data.referenceImages ?? []), reference] } }
+      }
+      return { ...node, data: { ...node.data, videoReferenceImageUrl: String(reader.result), videoReferenceImageName: file.name, videoReferenceOrder: moveTo('video-reference-image', 0) } }
+    }))
+    reader.onerror = () => setToastMessage('图片读取失败，请重新选择')
+    reader.readAsDataURL(file)
+  }, [edges, nodes, setNodes])
+
+  const uploadVideoReference = useCallback((nodeId: string, file: File) => {
+    if (!file.type.startsWith('video/')) { setToastMessage('请选择视频文件'); return }
+    const target = nodes.find((item) => item.id === nodeId)
+    if ((target?.data.videoGenerationMethod || 'text') === 'omni') {
+      const connectedCount = edges.filter((edge) => edge.target === nodeId).reduce((count, edge) => {
+        const source = nodes.find((item) => item.id === edge.source)
+        return count + (source?.data.kind === 'video' && (source.data.videoUrl || source.data.videoMediaId) ? 1 : 0)
+      }, 0)
+      const localCount = (target?.data.videoReferenceVideos?.length ?? 0) + (target?.data.videoReferenceUrl ? 1 : 0)
+      if (connectedCount + localCount >= 3) { setToastMessage('全能参考最多支持 3 个视频'); return }
+    }
+    const reader = new FileReader()
+    reader.onload = () => setNodes((current) => current.map((node) => {
+      if (node.id !== nodeId) return node
+      if (node.data.videoGenerationMethod === 'omni') {
+        const reference = { id: `video-reference-video-${crypto.randomUUID()}`, name: file.name, url: String(reader.result) }
+        return { ...node, data: { ...node.data, videoReferenceVideos: [...(node.data.videoReferenceVideos ?? []), reference] } }
+      }
+      return { ...node, data: { ...node.data, videoReferenceUrl: String(reader.result), videoReferenceFileName: file.name } }
+    }))
+    reader.onerror = () => setToastMessage('视频读取失败，请重新选择')
+    reader.readAsDataURL(file)
+  }, [edges, nodes, setNodes])
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     const removedEdgeIds = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id))
@@ -4012,6 +5062,7 @@ function App() {
       setActiveEditorNodeId(null)
       setActiveImageNodeId(null)
       setActiveGenerationNodeId(null)
+      setActiveVideoNodeId(null)
       setNodeOverlayRect(null)
     }
     window.addEventListener('keydown', onDeleteShortcut)
@@ -4058,6 +5109,220 @@ function App() {
       },
     ]
     void commitSavedAssets(nextAssets, '已加入资产库')
+  }
+
+  const downloadVideoNode = async (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId && item.data.kind === 'video')
+    if (!node || (!node.data.videoUrl && !node.data.videoMediaId)) {
+      setToastMessage('该视频暂无可下载内容')
+      return
+    }
+    try {
+      const media = node.data.videoMediaId ? await loadHistoryMedia(node.data.videoMediaId) : null
+      const blob = media?.blob ?? (node.data.videoUrl ? await fetch(node.data.videoUrl).then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.blob()
+      }) : null)
+      if (!blob) throw new Error('视频媒体读取失败')
+      const baseName = (node.data.fileName || getNodeDisplayTitle(node.data)).replace(/\.[a-z0-9]+$/i, '') || 'disy-video'
+      const extension = blob.type.split('/')[1]?.split(';')[0] || 'mp4'
+      await triggerBlobDownload(blob, `${baseName}.${extension}`)
+      setToastMessage('视频已开始下载')
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `视频下载失败：${error.message}` : '视频下载失败')
+    }
+  }
+
+  const openVideoCrop = async (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId && item.data.kind === 'video')
+    if (!node) return
+    setFrameCaptureMenuNodeId(null)
+    try {
+      const renderedVideo = shellRef.current?.querySelector<HTMLVideoElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"] video`)
+      const directUrl = renderedVideo?.currentSrc || renderedVideo?.src || node.data.videoUrl || ''
+      const media = !directUrl && node.data.videoMediaId ? await loadHistoryMedia(node.data.videoMediaId) : null
+      const sourceUrl = directUrl || (media ? URL.createObjectURL(media.blob) : '')
+      if (!sourceUrl) throw new Error('视频媒体读取失败')
+      const video = document.createElement('video')
+      video.preload = 'metadata'; video.muted = true; video.playsInline = true
+      if (/^https?:/i.test(sourceUrl)) video.crossOrigin = 'anonymous'
+      video.src = sourceUrl
+      await new Promise<void>((resolve, reject) => { video.onloadedmetadata = () => resolve(); video.onerror = () => reject(new Error('视频无法解码')) })
+      const sourceWidth = Math.max(1, video.videoWidth)
+      const sourceHeight = Math.max(1, video.videoHeight)
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : Math.max(.1, Number(node.data.videoDuration) || 4)
+      setVideoCropSession({ nodeId, sourceUrl, ownedUrl: Boolean(media), sourceWidth, sourceHeight, duration, rect: { x: .1, y: .1, width: .8, height: .8 } })
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `无法打开裁剪：${error.message}` : '无法打开视频裁剪')
+    }
+  }
+
+  const exportVideoCrop = async () => {
+    if (!videoCropSession || videoCropExporting) return
+    const source = nodes.find((node) => node.id === videoCropSession.nodeId && node.data.kind === 'video')
+    if (!source) return
+    setVideoCropExporting(true)
+    try {
+      const video = document.createElement('video')
+      video.src = videoCropSession.sourceUrl; video.preload = 'auto'; video.playsInline = true; video.muted = true
+      if (/^https?:/i.test(videoCropSession.sourceUrl)) video.crossOrigin = 'anonymous'
+      await new Promise<void>((resolve, reject) => { video.onloadeddata = () => resolve(); video.onerror = () => reject(new Error('视频无法解码')) })
+      const { rect } = videoCropSession
+      const sourceWidth = video.videoWidth || videoCropSession.sourceWidth
+      const sourceHeight = video.videoHeight || videoCropSession.sourceHeight
+      const sx = Math.round(rect.x * sourceWidth), sy = Math.round(rect.y * sourceHeight)
+      const sw = Math.max(2, Math.round(rect.width * sourceWidth)), sh = Math.max(2, Math.round(rect.height * sourceHeight))
+      const outputWidth = Math.max(2, Math.round(sw / 2) * 2), outputHeight = Math.max(2, Math.round(sh / 2) * 2)
+      const canvas = document.createElement('canvas'); canvas.width = outputWidth; canvas.height = outputHeight
+      const context = canvas.getContext('2d')
+      if (!context || !canvas.captureStream || typeof MediaRecorder === 'undefined') throw new Error('当前浏览器不支持本地视频裁剪导出')
+      const outputStream = canvas.captureStream(30)
+      const sourceStream = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.()
+      sourceStream?.getAudioTracks().forEach((track) => outputStream.addTrack(track))
+      const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type)) || ''
+      const chunks: BlobPart[] = []
+      const recorder = new MediaRecorder(outputStream, mimeType ? { mimeType } : undefined)
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data) }
+      const completed = new Promise<void>((resolve, reject) => { recorder.onstop = () => resolve(); recorder.onerror = () => reject(new Error('视频裁剪编码失败')) })
+      let animationFrame = 0
+      const draw = () => {
+        context.drawImage(video, sx, sy, sw, sh, 0, 0, outputWidth, outputHeight)
+        if (!video.ended && !video.paused) animationFrame = window.requestAnimationFrame(draw)
+      }
+      video.currentTime = 0
+      recorder.start(200)
+      await video.play()
+      draw()
+      await new Promise<void>((resolve) => { video.onended = () => resolve() })
+      if (animationFrame) window.cancelAnimationFrame(animationFrame)
+      recorder.stop(); await completed
+      outputStream.getTracks().forEach((track) => track.stop())
+      sourceStream?.getTracks().forEach((track) => track.stop())
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' })
+      if (!blob.size) throw new Error('裁剪结果为空')
+      const createdAt = new Date().toISOString(), mediaId = `video-crop-${crypto.randomUUID()}`
+      const baseName = (source.data.fileName || getNodeDisplayTitle(source.data)).replace(/\.[a-z0-9]+$/i, '')
+      const fileName = `${baseName}-crop.webm`
+      await saveHistoryMedia({ id: mediaId, blob, fileName, createdAt })
+      const id = `video-crop-node-${crypto.randomUUID()}`
+      const derived: CanvasNode = {
+        id,
+        type: 'disy',
+        selected: true,
+        position: { x: source.position.x + 360, y: source.position.y + 30 },
+        style: getVideoNodeSize(`${outputWidth}:${outputHeight}` as VideoAspectRatio),
+        data: { ...source.data, title: `${getNodeDisplayTitle(source.data)} · 裁剪`, fileName, videoMediaId: mediaId, videoUrl: undefined, videoSource: 'generated', videoGeneratedAt: createdAt, videoDuration: videoCropSession.duration, videoAspectRatio: 'auto', generationSourceNodeId: source.id, status: '已完成' },
+      }
+      setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), derived])
+      setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }])
+      setActiveVideoNodeId(id)
+      setVideoCropSession(null)
+      setToastMessage(`裁剪完成，已创建 ${outputWidth} × ${outputHeight} 视频节点`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `裁剪失败：${error.message}` : '视频裁剪失败')
+    } finally {
+      setVideoCropExporting(false)
+    }
+  }
+
+  const openClipStudio = async (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId && item.data.kind === 'video')
+    if (!node) return
+    try {
+      const renderedVideo = shellRef.current?.querySelector<HTMLVideoElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"] video`)
+      const directUrl = node.data.videoUrl || renderedVideo?.currentSrc || renderedVideo?.src || ''
+      const media = !directUrl && node.data.videoMediaId ? await loadHistoryMedia(node.data.videoMediaId) : null
+      const sourceUrl = directUrl || (media ? URL.createObjectURL(media.blob) : '')
+      if (!sourceUrl) throw new Error('视频媒体读取失败')
+      const fallbackDuration = Math.max(0.1, Number(node.data.videoDuration) || 4)
+      setClipSession({ nodeId, start: 0, end: fallbackDuration, duration: fallbackDuration, sourceUrl, frames: [], removeAudio: false })
+
+      try {
+        const video = document.createElement('video')
+        video.src = sourceUrl; video.muted = true; video.preload = 'auto'; video.playsInline = true
+        await new Promise<void>((resolve, reject) => { video.onloadedmetadata = () => resolve(); video.onerror = () => reject(new Error('视频无法解码')) })
+        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : fallbackDuration
+        setClipSession((current) => current?.nodeId === nodeId
+          ? { ...current, end: duration, duration }
+          : current)
+
+        const frames: string[] = []
+        const canvas = document.createElement('canvas'); canvas.width = 96; canvas.height = 54
+        const context = canvas.getContext('2d')
+        if (context) {
+          for (let index = 0; index < 6; index += 1) {
+            await new Promise<void>((resolve) => {
+              if ('requestIdleCallback' in window) window.requestIdleCallback(() => resolve(), { timeout: 240 })
+              else setTimeout(resolve, 24)
+            })
+            video.currentTime = Math.max(0, Math.min(duration - .01, duration * (index + .5) / 6))
+            await new Promise<void>((resolve) => {
+              const timeout = window.setTimeout(resolve, 1200)
+              video.onseeked = () => { window.clearTimeout(timeout); resolve() }
+            })
+            context.drawImage(video, 0, 0, canvas.width, canvas.height)
+            frames.push(canvas.toDataURL('image/jpeg', .56))
+          }
+          setClipSession((current) => current?.nodeId === nodeId ? { ...current, frames } : current)
+        }
+      } catch {
+        // The studio remains usable when a remote provider blocks thumbnails.
+      }
+    } catch (error) {
+      setClipSession((current) => current?.nodeId === nodeId ? null : current)
+      setToastMessage(error instanceof Error ? error.message : '无法打开视频剪辑')
+    }
+  }
+
+  const exportClipStudio = async () => {
+    if (!clipSession || clipExporting) return
+    const source = nodes.find((node) => node.id === clipSession.nodeId)
+    if (!source) return
+    setClipExporting(true)
+    try {
+      const video = document.createElement('video')
+      video.src = clipSession.sourceUrl; video.preload = 'auto'; video.playsInline = true; video.muted = true
+      await new Promise<void>((resolve, reject) => { video.onloadeddata = () => resolve(); video.onerror = () => reject(new Error('视频无法解码')) })
+      video.currentTime = clipSession.start
+      await new Promise<void>((resolve) => { video.onseeked = () => resolve() })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(2, Math.round(video.videoWidth / 2) * 2)
+      canvas.height = Math.max(2, Math.round(video.videoHeight / 2) * 2)
+      const context = canvas.getContext('2d')
+      if (!context || !canvas.captureStream || typeof MediaRecorder === 'undefined') throw new Error('当前浏览器不支持本地视频剪辑导出')
+      const recordingStream = canvas.captureStream(30)
+      const sourceCapture = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.()
+      if (!clipSession.removeAudio) sourceCapture?.getAudioTracks().forEach((track) => recordingStream.addTrack(track))
+      const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type)) || ''
+      const chunks: BlobPart[] = []
+      const recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined)
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data) }
+      const completed = new Promise<void>((resolve, reject) => { recorder.onstop = () => resolve(); recorder.onerror = () => reject(new Error('视频编码失败')) })
+      recorder.start(200); await video.play()
+      await new Promise<void>((resolve) => {
+        const tick = () => {
+          context.drawImage(video, 0, 0, canvas.width, canvas.height)
+          if (video.currentTime >= clipSession.end || video.ended) resolve()
+          else requestAnimationFrame(tick)
+        }
+        tick()
+      })
+      video.pause(); recorder.stop(); await completed
+      recordingStream.getTracks().forEach((track) => track.stop())
+      sourceCapture?.getTracks().forEach((track) => track.stop())
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' })
+      if (!blob.size) throw new Error('剪辑结果为空')
+      const createdAt = new Date().toISOString(), mediaId = `video-trim-${crypto.randomUUID()}`
+      const baseName = (source.data.fileName || getNodeDisplayTitle(source.data)).replace(/\.[a-z0-9]+$/i, '')
+      const fileName = `${baseName}-trim.webm`
+      await saveHistoryMedia({ id: mediaId, blob, fileName, createdAt })
+      const id = `video-trim-node-${crypto.randomUUID()}`
+      const derived: CanvasNode = { id, type: 'disy', selected: true, position: { x: source.position.x + 360, y: source.position.y + 30 }, style: source.style ? { ...source.style } : undefined, data: { ...source.data, title: `${getNodeDisplayTitle(source.data)} · 剪辑`, fileName, videoMediaId: mediaId, videoUrl: undefined, videoSource: 'generated', videoGeneratedAt: createdAt, videoDuration: clipSession.end - clipSession.start, videoTrimmed: true, generationSourceNodeId: source.id, status: '已完成' } }
+      setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), derived])
+      setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }])
+      setClipSession(null); setToastMessage('剪辑完成，已创建新视频节点')
+    } catch (error) { setToastMessage(error instanceof Error ? `剪辑失败：${error.message}` : '视频剪辑失败') }
+    finally { setClipExporting(false) }
   }
 
   const saveContextNodeToAssets = () => {
@@ -4141,8 +5406,6 @@ function App() {
     setApiDraft({ name: '', baseUrl: '', apiKey: '', balanceToken: '' })
     setApiKeyVisible(false)
     setDraftModels([])
-    setModelsError('')
-    setApiError('')
     setApiModelTab('text')
     window.setTimeout(() => firstApiInputRef.current?.focus(), 20)
   }
@@ -4154,8 +5417,6 @@ function App() {
     setApiDraft({ name: preset.name, baseUrl: preset.baseUrl, apiKey: '', balanceToken: '' })
     setApiKeyVisible(false)
     setDraftModels([])
-    setModelsError('')
-    setApiError('')
     window.setTimeout(() => firstApiInputRef.current?.focus(), 20)
   }
 
@@ -4166,8 +5427,6 @@ function App() {
     setApiDraft({ name: connection.name, baseUrl: connection.baseUrl, apiKey: connection.apiKey, balanceToken: connection.balanceToken ?? '' })
     setApiKeyVisible(false)
     setDraftModels(connection.models)
-    setModelsError('')
-    setApiError('')
   }
 
   const removeCurrentApiConnection = async () => {
@@ -4307,30 +5566,6 @@ function App() {
     }
   }
 
-  const persistCurrentCanvasSnapshot = async (snapshotNodes: CanvasNode[], snapshotEdges: Edge[]) => {
-    const primaryStylePreset = stylePresets.find((preset) => preset.enabled && preset.references.length)
-      ?? stylePresets.find((preset) => preset.references.length)
-      ?? stylePresets[0]
-    const legacyStyleReferences = primaryStylePreset?.references ?? []
-    await saveWorkspaceCanvas({
-      id: activeCanvasId,
-      projectId: activeProjectId,
-      name: canvasName.trim() || '未命名画布',
-      nodes: snapshotNodes,
-      edges: snapshotEdges,
-      styleReferenceName: legacyStyleReferences[0]?.name ?? '',
-      styleReferenceUrl: legacyStyleReferences[0]?.url,
-      styleReferences: legacyStyleReferences,
-      styleReferenceEnabled: primaryStylePreset?.enabled ?? false,
-      styleReferenceKeyword: primaryStylePreset?.keyword ?? 'Disy',
-      stylePresets,
-      promptSuffix: projectPromptSuffix,
-      settingsLocked: projectSettingsLocked,
-      createdAt: workspaceCanvases.find((canvas) => canvas.id === activeCanvasId)?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-  }
-
   autoSaveActionRef.current = () => {
     void saveCanvasState(canvasName, true)
   }
@@ -4367,13 +5602,14 @@ function App() {
     const sessions = await listAgentSessions(origin.canvasId)
     const session = sessions.find((item) => item.id === origin.sessionId)
     if (!session || session.projectId !== origin.projectId) return
-    const storedPlans = (session.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
-    const imagePlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
-    const textPlans = storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan)
+    const storedPlans = (session.plans as StoredAgentPlan[] | undefined) ?? []
+    const imagePlans = storedPlans.filter(isAgentImagePlan)
+    const videoPlans = storedPlans.filter(isAgentVideoPlan)
+    const textPlans = storedPlans.filter(isAgentTextPlan)
     await saveAgentSession({
       ...session,
       messages: (session.messages as AgentMessage[] | undefined) ?? [],
-      plans: [...patch(imagePlans), ...textPlans],
+      plans: [...patch(imagePlans), ...videoPlans, ...textPlans],
       updatedAt: new Date().toISOString(),
     })
   }
@@ -4391,29 +5627,52 @@ function App() {
     void saveCanvasState(canvasNameDraft)
   }
 
-  const workspaceMutationBlocked = () => agentBusy
+  const workspaceMutationBlocked = () => agentBusy || agentVideoPlans.some((plan) => plan.status === 'running')
   const destructiveWorkspaceMutationBlocked = () => generationLoading
     || agentBusy
     || agentPlanLocksRef.current.size > 0
     || agentPlans.some((plan) => plan.status === 'running')
+    || agentVideoPlans.some((plan) => plan.status === 'running')
 
   const openWorkspaceCanvas = async (canvasId: string, projectId = activeProjectId, skipCurrentSave = false) => {
     if (!skipCurrentSave && workspaceMutationBlocked()) {
       setToastMessage('正在生成内容，完成后才能切换画布')
       throw new Error('Generation in progress')
     }
+    const requestId = workspaceSwitchRequestRef.current + 1
+    workspaceSwitchRequestRef.current = requestId
     if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
     agentSaveTimerRef.current = null
+    // Clear transient drag/overlay state before the asynchronous load starts;
+    // otherwise a pointer released during the switch can leave the old canvas
+    // interaction state attached to the newly mounted ReactFlow surface.
+    stopLiveOverlapTilt()
+    dragStartPositionsRef.current.clear()
+    altDragDuplicateRef.current = null
+    setIsNodeDragging(false)
+    setSelectedNodeIds([])
+    setActiveEditorNodeId(null)
+    setActiveImageNodeId(null)
+    setActiveGenerationNodeId(null)
+    setActiveVideoNodeId(null)
+    setNodeOverlayRect(null)
+    if (canvasViewportFrameRef.current !== null) window.cancelAnimationFrame(canvasViewportFrameRef.current)
+    canvasViewportFrameRef.current = null
+    canvasViewportRef.current = { x: 0, y: 0, zoom: 1 }
+    setCanvasZoom(1)
+    setCanvasViewport({ x: 0, y: 0 })
     if (!skipCurrentSave) {
       await saveCanvasState(canvasName, true)
       await persistCurrentAgentConversation()
     }
+    if (workspaceSwitchRequestRef.current !== requestId) return
     const [canvas, project, canvases, sessions] = await Promise.all([
       loadWorkspaceCanvas(canvasId),
       listWorkspaceProjects().then((items) => items.find((item) => item.id === projectId)),
       listWorkspaceCanvases(projectId),
       listAgentSessions(canvasId),
     ])
+    if (workspaceSwitchRequestRef.current !== requestId) return
     if (!canvas || !project) throw new Error('画布不存在')
     const restoredNodes = (canvas.nodes as CanvasNode[]).map((node) => node.data.kind === 'image'
       ? { ...node, style: { ...node.style, ...getImageGenerationNodeSize(node.data.imageAspectRatio ?? '1:1') } }
@@ -4436,19 +5695,22 @@ function App() {
     setAgentConversationOptions(sessions.map((item) => ({ id: item.id, title: item.title || 'Disy 对话', updatedAt: item.updatedAt })))
     setAgentConversationId(session?.id ?? `${canvas.id}--agent-${crypto.randomUUID()}`)
     setAgentMessages(normalizeHistoricalAgentMessages((session?.messages as AgentMessage[] | undefined) ?? []))
-    const storedPlans = (session?.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
-    const interruptedPlans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
-    setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
+    const storedPlans = (session?.plans as StoredAgentPlan[] | undefined) ?? []
+    const interruptedPlans = storedPlans.filter(isAgentImagePlan)
+    const interruptedVideoPlans = storedPlans.filter(isAgentVideoPlan)
+    setAgentTextPlans(storedPlans.filter(isAgentTextPlan))
     const interruptedNodeIds = new Set(interruptedPlans.filter((plan) => plan.status === 'running' && plan.nodeId).map((plan) => plan.nodeId))
     if (interruptedNodeIds.size) setNodes((current) => current.map((node) => interruptedNodeIds.has(node.id) ? { ...node, data: { ...node.data, status: '生成失败' } } : node))
     setAgentPlans(interruptedPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+    setAgentVideoPlans(interruptedVideoPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次视频生成已中断，请在对应视频节点中手动重试。' } : plan))
     setAgentTextModelKey(session?.selectedChatModelId ?? agentTextModelKey)
     setAgentImageModelKey(session?.selectedImageModelId ?? agentImageModelKey)
-    setActiveEditorNodeId(null)
-    setActiveImageNodeId(null)
+    setAgentVideoModelKey(typeof session?.selectedVideoModelId === 'string' ? session.selectedVideoModelId : agentVideoModelKey)
     setCanvasSwitcherOpen(false)
+    if (workspaceSwitchRequestRef.current !== requestId) return
     const nextProject = { ...project, activeCanvasId: canvas.id, updatedAt: new Date().toISOString() }
     await saveWorkspaceProject(nextProject)
+    if (workspaceSwitchRequestRef.current !== requestId) return
     setWorkspaceProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item))
     savedCanvasSignatureRef.current = buildCanvasSignature(restoredNodes, canvas.edges as Edge[], canvas.name, restoredStylePresets, canvas.promptSuffix, canvas.settingsLocked)
     setCanvasSaved(true)
@@ -4468,8 +5730,8 @@ function App() {
   }
 
   const beginNewAgentConversation = async () => {
-    if (agentBusy) {
-      setToastMessage('Agent 正在回复，完成后再新建对话')
+    if (agentBusy || agentVideoPlans.some((plan) => plan.status === 'running')) {
+      setToastMessage('Agent 正在处理，完成后再新建对话')
       return
     }
     if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
@@ -4480,6 +5742,7 @@ function App() {
     setAgentConversationId(id)
     setAgentMessages([])
     setAgentPlans([])
+    setAgentVideoPlans([])
     setAgentTextPlans([])
     setAgentReferences([])
     setAgentPendingReferences([])
@@ -4489,8 +5752,8 @@ function App() {
 
   const selectAgentConversation = async (id: string) => {
     if (id === agentConversationId) return
-    if (agentBusy) {
-      setToastMessage('Agent 正在回复，完成后再切换对话')
+    if (agentBusy || agentVideoPlans.some((plan) => plan.status === 'running')) {
+      setToastMessage('Agent 正在处理，完成后再切换对话')
       return
     }
     if (agentSaveTimerRef.current !== null) window.clearTimeout(agentSaveTimerRef.current)
@@ -4501,17 +5764,20 @@ function App() {
     if (!session) return
     setAgentConversationId(session.id)
     setAgentMessages(normalizeHistoricalAgentMessages((session.messages as AgentMessage[] | undefined) ?? []))
-    const storedPlans = (session.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
-    const plans = storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan)
+    const storedPlans = (session.plans as StoredAgentPlan[] | undefined) ?? []
+    const plans = storedPlans.filter(isAgentImagePlan)
+    const videoPlans = storedPlans.filter(isAgentVideoPlan)
     setAgentPlans(plans.map((plan) => plan.status === 'running'
       ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' }
       : plan))
-    setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
+    setAgentTextPlans(storedPlans.filter(isAgentTextPlan))
+    setAgentVideoPlans(videoPlans.map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次视频生成已中断，请在对应视频节点中手动重试。' } : plan))
     setAgentReferences([])
     setAgentPendingReferences([])
     setAgentCanvasPicking(false)
     setAgentTextModelKey(session.selectedChatModelId ?? agentTextModelKey)
     setAgentImageModelKey(session.selectedImageModelId ?? agentImageModelKey)
+    setAgentVideoModelKey(typeof session.selectedVideoModelId === 'string' ? session.selectedVideoModelId : agentVideoModelKey)
   }
 
   const deleteCurrentAgentConversation = async () => {
@@ -4529,16 +5795,19 @@ function App() {
     if (next) {
       setAgentConversationId(next.id)
       setAgentMessages(normalizeHistoricalAgentMessages((next.messages as AgentMessage[] | undefined) ?? []))
-      const storedPlans = (next.plans as Array<AgentImagePlan | AgentTextPlan> | undefined) ?? []
-      setAgentPlans(storedPlans.filter((plan): plan is AgentImagePlan => 'prompt' in plan).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
-      setAgentTextPlans(storedPlans.filter((plan): plan is AgentTextPlan => 'content' in plan))
+      const storedPlans = (next.plans as StoredAgentPlan[] | undefined) ?? []
+      setAgentPlans(storedPlans.filter(isAgentImagePlan).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次生成已中断，请在对应图像节点中手动重试。' } : plan))
+      setAgentVideoPlans(storedPlans.filter(isAgentVideoPlan).map((plan) => plan.status === 'running' ? { ...plan, status: 'failed', error: '上次视频生成已中断，请在对应视频节点中手动重试。' } : plan))
+      setAgentTextPlans(storedPlans.filter(isAgentTextPlan))
       setAgentTextModelKey(next.selectedChatModelId ?? agentTextModelKey)
       setAgentImageModelKey(next.selectedImageModelId ?? agentImageModelKey)
+      setAgentVideoModelKey(typeof next.selectedVideoModelId === 'string' ? next.selectedVideoModelId : agentVideoModelKey)
     } else {
       const id = `${activeProjectId}--${activeCanvasId}--agent-${crypto.randomUUID()}`
       setAgentConversationId(id)
       setAgentMessages([])
       setAgentPlans([])
+      setAgentVideoPlans([])
       setAgentTextPlans([])
       setAgentConversationOptions([{ id, title: '新的对话', updatedAt: new Date().toISOString() }])
     }
@@ -4581,9 +5850,10 @@ function App() {
       canvasId: activeCanvasId,
       title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
       messages: agentMessages,
-      plans: [...agentPlans, ...agentTextPlans],
+      plans: [...agentPlans, ...agentVideoPlans, ...agentTextPlans],
       selectedChatModelId: agentTextModelKey,
       selectedImageModelId: agentImageModelKey,
+      selectedVideoModelId: agentVideoModelKey,
       createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
@@ -4805,9 +6075,10 @@ function App() {
         canvasId: activeCanvasId,
         title: agentMessages[0]?.content.slice(0, 36) || 'Disy 对话',
         messages: agentMessages,
-        plans: [...agentPlans, ...agentTextPlans],
+        plans: [...agentPlans, ...agentVideoPlans, ...agentTextPlans],
         selectedChatModelId: agentTextModelKey,
         selectedImageModelId: agentImageModelKey,
+        selectedVideoModelId: agentVideoModelKey,
         createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       })
@@ -5081,10 +6352,142 @@ function App() {
   const activeGenerationNode = nodes.find(
     (node) => node.id === activeGenerationNodeId && node.data.kind === 'image',
   )
+  const activeVideoNode = nodes.find(
+    (node) => node.id === activeVideoNodeId && node.data.kind === 'video',
+  )
+  const selectedLocalVideoNode = nodes.find((node) => node.selected && node.data.kind === 'video' && (
+    node.data.videoSource === 'local-upload'
+    || (node.data.status === '已上传' && Boolean(node.data.videoUrl) && !node.data.videoMediaId && !node.data.videoGeneratedAt)
+  ))
+  const videoToolbarNode = activeVideoNode ?? selectedLocalVideoNode
+  useEffect(() => {
+    // Menus belong to the currently active node; never carry an open menu to a
+    // different video node selected on the canvas.
+    setVideoParameterMenuOpen(false)
+    setVideoQuantityMenuOpen(false)
+    setVideoModelMenuOpen(false)
+  }, [activeVideoNodeId])
+  const activeVideoIncomingNodes = useMemo(() => activeVideoNode
+    ? edges.filter((edge) => edge.target === activeVideoNode.id).flatMap((edge) => {
+      const node = nodes.find((item) => item.id === edge.source)
+      return node ? [node] : []
+    })
+    : [], [activeVideoNode, edges, nodes])
+  const activeVideoReferences = useMemo<ActiveNodeReference[]>(() => {
+    if (!activeVideoNode) return []
+    const promptText = activeVideoNode.data.body
+    const connected = activeVideoIncomingNodes.flatMap<ActiveNodeReference>((sourceNode): ActiveNodeReference[] => {
+      const edge = edges.find((item) => item.source === sourceNode.id && item.target === activeVideoNode.id)
+      const mention = getConnectedReferenceMention(sourceNode)
+      const base = {
+        id: `connection-${sourceNode.id}`,
+        source: 'connection' as const,
+        sourceNodeId: sourceNode.id,
+        selected: Boolean((edge?.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || promptText.includes(mention),
+        name: getNodeDisplayTitle(sourceNode.data),
+        mention,
+      }
+      if (sourceNode.data.kind === 'text') return [{ ...base, kind: 'text', text: sourceNode.data.body }]
+      if (sourceNode.data.kind === 'image' || sourceNode.data.kind === 'upload') {
+        const url = sourceNode.data.imageUrl || sourceNode.data.referenceImageUrl
+        return [{ ...base, kind: 'image', url, available: Boolean(url) }]
+      }
+      if (sourceNode.data.kind === 'video') return [{
+        ...base,
+        kind: 'video',
+        available: Boolean(sourceNode.data.videoUrl || sourceNode.data.videoMediaId),
+        url: sourceNode.data.videoUrl,
+        mediaId: sourceNode.data.videoMediaId,
+      }]
+      return []
+    })
+    const manual: ActiveNodeReference[] = []
+    const addManual = (id: string, name: string, kind: 'image' | 'video', url?: string) => {
+      if (!url) return
+      manual.push({ id, source: 'manual', selected: true, name, mention: getReferenceMention(name), kind, available: true, url })
+    }
+    const mode = activeVideoNode.data.videoGenerationMethod || 'text'
+    if (mode === 'frames') {
+      addManual('video-first-frame', '首帧', 'image', activeVideoNode.data.videoFirstFrameUrl)
+      addManual('video-last-frame', '尾帧', 'image', activeVideoNode.data.videoLastFrameUrl)
+    } else if (mode !== 'text') {
+      addManual('video-reference-image', mode === 'image' ? '首帧' : (activeVideoNode.data.videoReferenceImageName || '参考图'), 'image', activeVideoNode.data.videoReferenceImageUrl)
+      if (mode === 'omni') addManual('video-reference-video', activeVideoNode.data.videoReferenceFileName || '参考视频', 'video', activeVideoNode.data.videoReferenceUrl)
+    }
+    if (mode === 'image' || mode === 'omni' || mode === 'reference') {
+      ;(activeVideoNode.data.referenceImages ?? []).forEach((reference) => addManual(reference.id, reference.name, 'image', reference.url))
+    }
+    if (mode === 'omni') {
+      ;(activeVideoNode.data.videoReferenceVideos ?? []).forEach((reference) => addManual(reference.id, reference.name, 'video', reference.url))
+    }
+    const references = [...connected, ...manual]
+    const persistedOrder = activeVideoNode.data.videoReferenceOrder ?? []
+    if (persistedOrder.length) {
+      const order = new Map(persistedOrder.map((id, index) => [id, index]))
+      references.sort((left, right) => (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+    }
+    let imageIndex = 0
+    const constrained = references.map((reference) => {
+      const hasContent = reference.kind === 'text' ? Boolean(reference.text?.trim()) : reference.available !== false
+      let disabledReason = reference.disabledReason
+      if (!hasContent) {
+        disabledReason = reference.kind === 'text' ? '来源文本暂无内容' : reference.kind === 'video' ? '来源视频尚未生成' : '来源图片尚未生成'
+      } else if (mode === 'text' && reference.kind !== 'text') {
+        disabledReason = '文生视频只允许文本节点作为参考'
+      } else if (mode === 'image' && reference.kind === 'video') {
+        disabledReason = '图生视频只允许图片作为首帧'
+      } else if (mode === 'image' && reference.kind === 'image' && imageIndex > 0) {
+        disabledReason = '图生视频只使用排序第一张图片作为首帧，可拖拽到第一位'
+      } else if (mode === 'frames' && reference.kind === 'video') {
+        disabledReason = '首尾帧模式只允许图片作为首尾帧'
+      } else if (mode === 'frames' && reference.kind === 'image' && imageIndex > 1) {
+        disabledReason = '首尾帧模式只使用排序前两张图片，可拖拽调整顺序'
+      } else if (mode === 'reference' && reference.kind === 'video') {
+        disabledReason = '图片参考模式只允许图片素材'
+      } else if (mode === 'reference' && reference.kind === 'image' && imageIndex > 3) {
+        disabledReason = '图片参考模式最多使用 4 张图片，可拖拽调整顺序'
+      }
+      if (reference.kind === 'image') imageIndex += 1
+      return {
+        ...reference,
+        selected: disabledReason ? false : reference.selected,
+        available: disabledReason ? false : reference.available,
+        disabledReason,
+      }
+    })
+    if (mode === 'frames') {
+      let imageIndex = 0
+      return constrained.map((reference) => {
+        if (reference.kind !== 'image') return reference
+        const name = imageIndex === 0 ? '首帧' : imageIndex === 1 ? '尾帧' : `参考帧 ${imageIndex + 1}`
+        imageIndex += 1
+        return { ...reference, name }
+      })
+    }
+    return constrained
+  }, [activeVideoIncomingNodes, activeVideoNode, edges])
+  const filteredVideoMentionReferences = activeVideoReferences.filter((reference) => {
+    const query = videoMentionQuery.trim().toLowerCase()
+    return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
+  })
+  useEffect(() => {
+    if (!activeVideoNodeId || !nodes.some((node) => node.id === activeVideoNodeId && node.data.kind === 'video')) return
+    const frame = window.requestAnimationFrame(() => measureNodeOverlay(activeVideoNodeId))
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeVideoNodeId, activeVideoNode?.data.videoUrl, activeVideoNode?.data.videoMediaId, nodes, measureNodeOverlay])
+  useEffect(() => {
+    // Migrate only genuinely old video nodes. Do not infer the ratio from the
+    // current node dimensions: portrait and square selections are intentionally
+    // narrower than 16:9 and must remain selectable.
+    if (!nodes.some((node) => node.data.kind === 'video' && (!node.data.videoAspectRatio || node.data.title === '视频生成'))) return
+    setNodes((current) => current.map((node) => node.data.kind === 'video' && (!node.data.videoAspectRatio || node.data.title === '视频生成')
+      ? { ...node, style: { ...node.style, ...getVideoNodeSize('16:9') }, data: { ...node.data, videoAspectRatio: '16:9' as VideoAspectRatio, ...(node.data.title === '视频生成' ? { title: '视频' } : {}) } }
+      : node))
+  }, [nodes, setNodes])
   const activeGeneratingNodeIds = useMemo(() => new Set(Array.from(activeGenerationTaskKeys)
-    .filter((taskKey) => taskKey.startsWith('image:'))
-    .map((taskKey) => taskKey.slice('image:'.length))), [activeGenerationTaskKeys])
+    .flatMap((taskKey) => taskKey.startsWith('image:') ? [taskKey.slice('image:'.length)] : nodes.some((node) => node.id === taskKey && node.data.kind === 'video') ? [taskKey] : [])), [activeGenerationTaskKeys, nodes])
   const activeImageGenerationRunning = Boolean(activeGenerationNode && activeGeneratingNodeIds.has(activeGenerationNode.id))
+  const activeVideoGenerationRunning = Boolean(activeVideoNode && activeGeneratingNodeIds.has(activeVideoNode.id))
   const activeTextGenerationRunning = Boolean(activeTextNode && activeGenerationTaskKeys.has(`text:${activeTextNode.id}`))
   const activeTextReferences = useMemo<ActiveNodeReference[]>(() => {
     if (!activeEditorNodeId) return []
@@ -5119,6 +6522,20 @@ function App() {
           mention,
           kind: 'image' as const,
           url: sourceNode.data.imageUrl,
+        }]
+      }
+      if (sourceNode.data.kind === 'video') {
+        return [{
+          id: `connection-${sourceNode.id}`,
+          source: 'connection' as const,
+          sourceNodeId: sourceNode.id,
+          selected: Boolean((edge.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || promptText.includes(mention),
+          name,
+          mention,
+          kind: 'video' as const,
+          available: Boolean(sourceNode.data.videoUrl || sourceNode.data.videoMediaId),
+          url: sourceNode.data.videoUrl,
+          mediaId: sourceNode.data.videoMediaId,
         }]
       }
       return []
@@ -5293,6 +6710,81 @@ function App() {
     setDraggedImageReferenceId(null)
     setImageReferenceDropTargetId(null)
   }
+  const reorderVideoReferences = (sourceId: string, targetId: string) => {
+    if (!activeVideoNode || sourceId === targetId) return
+    const nextOrder = activeVideoReferences.map((reference) => reference.id)
+    const sourceIndex = nextOrder.indexOf(sourceId)
+    const targetIndex = nextOrder.indexOf(targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [moved] = nextOrder.splice(sourceIndex, 1)
+    nextOrder.splice(targetIndex, 0, moved)
+    setNodes((current) => current.map((node) => node.id === activeVideoNode.id
+      ? { ...node, data: { ...node.data, videoReferenceOrder: nextOrder } }
+      : node))
+    setVideoReferenceDragId(null)
+    setVideoReferenceDropId(null)
+  }
+  const removeVideoReference = (reference: ActiveNodeReference) => {
+    if (!activeVideoNode) return
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.filter((edge) => !(edge.source === reference.sourceNodeId && edge.target === activeVideoNode.id)))
+    }
+    setNodes((current) => current.map((node) => {
+      if (node.id !== activeVideoNode.id) return node
+      const body = node.data.body.replaceAll(reference.mention, '').replace(/[ \t]{2,}/g, ' ').trimStart()
+      const data = {
+        ...node.data,
+        body,
+        videoReferenceOrder: (node.data.videoReferenceOrder ?? []).filter((id) => id !== reference.id),
+        referenceImages: (node.data.referenceImages ?? []).filter((item) => item.id !== reference.id),
+        videoReferenceVideos: (node.data.videoReferenceVideos ?? []).filter((item) => item.id !== reference.id),
+        ...(reference.id === 'video-first-frame' ? { videoFirstFrameUrl: undefined } : {}),
+        ...(reference.id === 'video-last-frame' ? { videoLastFrameUrl: undefined } : {}),
+        ...(reference.id === 'video-reference-image' ? { videoReferenceImageUrl: undefined, videoReferenceImageName: undefined } : {}),
+        ...(reference.id === 'video-reference-video' ? { videoReferenceUrl: undefined, videoReferenceFileName: undefined } : {}),
+      }
+      return { ...node, data }
+    }))
+  }
+  const handleVideoReferenceDrop = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!activeVideoNode) return
+    const files = Array.from(event.dataTransfer.files)
+    if (!files.length) return
+    const mode = activeVideoNode.data.videoGenerationMethod || 'text'
+    const images = files.filter((file) => file.type.startsWith('image/'))
+    const videos = files.filter((file) => file.type.startsWith('video/'))
+    if (mode === 'text') {
+      setToastMessage('文生视频只允许文本节点作为参考，请通过文本连线或 @ 引用')
+      return
+    }
+    if (mode === 'frames') {
+      const existingCount = activeVideoReferences.filter((reference) => reference.kind === 'image' && reference.available !== false).length
+      images.slice(0, Math.max(0, 2 - existingCount)).forEach((file, index) => {
+        uploadVideoReferenceImage(activeVideoNode.id, file, existingCount + index === 0 ? 'first' : 'last')
+      })
+      if (existingCount >= 2 || images.length > 2 - existingCount) setToastMessage('首尾帧模式最多使用前两张图片')
+      return
+    }
+    if (mode === 'omni') {
+      const imageCount = activeVideoReferences.filter((reference) => reference.kind === 'image' && reference.available !== false).length
+      const videoCount = activeVideoReferences.filter((reference) => reference.kind === 'video' && reference.available !== false).length
+      images.slice(0, Math.max(0, 9 - imageCount)).forEach((file) => uploadVideoReferenceImage(activeVideoNode.id, file))
+      videos.slice(0, Math.max(0, 3 - videoCount)).forEach((file) => uploadVideoReference(activeVideoNode.id, file))
+      if (images.length > 9 - imageCount || videos.length > 3 - videoCount) setToastMessage('全能参考最多支持 9 张图片和 3 个视频')
+      return
+    }
+    if (mode === 'reference') {
+      const imageCount = activeVideoReferences.filter((reference) => reference.kind === 'image').length
+      const remaining = Math.max(0, 4 - imageCount)
+      images.slice(0, remaining).forEach((file) => uploadVideoReferenceImage(activeVideoNode.id, file, 'reference'))
+      if (videos.length || images.length > remaining) setToastMessage('图片参考模式只支持图片，最多 4 张')
+      return
+    }
+    images.forEach((file) => uploadVideoReferenceImage(activeVideoNode.id, file, 'reference'))
+    if (images.length > 1 || videos.length) setToastMessage('图生视频只使用排序第一张图片作为首帧，其余图片可拖拽调整')
+  }
   const activeImageAspectRatio = activeGenerationNode?.data.imageAspectRatio ?? '1:1'
   const activeImageResolution = activeGenerationNode?.data.imageResolution ?? '1K'
   const activeImageDetail = activeGenerationNode?.data.imageDetail ?? 'medium'
@@ -5430,6 +6922,59 @@ function App() {
       setImageMentionRange(null)
     }
   }
+  const selectVideoMention = (reference: ActiveNodeReference) => {
+    if (!activeVideoNode) return
+    if (reference.disabledReason) {
+      setToastMessage(reference.disabledReason)
+      return
+    }
+    if (reference.kind === 'text' && !reference.text?.trim()) {
+      setToastMessage('来源文本暂无内容')
+      return
+    }
+    if (reference.kind === 'image' && !reference.url) {
+      setToastMessage('来源图片尚未生成')
+      return
+    }
+    if (reference.kind === 'video' && !reference.available) {
+      setToastMessage('来源视频尚未生成')
+      return
+    }
+    const body = activeVideoNode.data.body
+    const caret = videoPromptEditorRef.current?.getCaret() ?? body.length
+    const range = videoMentionRange ?? { start: caret, end: caret }
+    const nextBody = `${body.slice(0, range.start)}${reference.mention} ${body.slice(range.end)}`
+    setNodes((current) => current.map((node) => node.id === activeVideoNode.id
+      ? { ...node, data: { ...node.data, promptText: undefined, body: nextBody } }
+      : node))
+    if (reference.source === 'connection' && reference.sourceNodeId) {
+      setEdges((current) => current.map((edge) => edge.source === reference.sourceNodeId && edge.target === activeVideoNode.id
+        ? { ...edge, data: { ...edge.data, referenceSelected: true } }
+        : edge))
+    }
+    setVideoMentionOpen(false)
+    setVideoMentionQuery('')
+    setVideoMentionRange(null)
+    window.requestAnimationFrame(() => videoPromptEditorRef.current?.focusAt(range.start + reference.mention.length + 1))
+  }
+  const handleVideoPromptChange = (value: string, cursor: number) => {
+    if (!activeVideoNode) return
+    setNodes((current) => current.map((node) => node.id === activeVideoNode.id
+      ? { ...node, data: { ...node.data, promptText: undefined, body: value } }
+      : node))
+    const beforeCursor = value.slice(0, cursor)
+    const match = beforeCursor.match(/@(?:\[([^\]]*)\]|([^@\s]*))$/)
+    const matchedExistingReference = match && activeVideoReferences.some((reference) => reference.mention === match[0])
+    if (match && !matchedExistingReference && activeVideoReferences.length) {
+      setVideoMentionRange({ start: cursor - match[0].length, end: cursor })
+      setVideoMentionQuery(match[1] ?? match[2] ?? '')
+      setVideoMentionIndex(0)
+      setVideoMentionOpen(true)
+    } else {
+      setVideoMentionOpen(false)
+      setVideoMentionRange(null)
+    }
+  }
   const filteredTextMentionReferences = activeTextReferences.filter((reference) => {
     const query = textMentionQuery.trim().toLowerCase()
     return !query || `${reference.name} ${reference.mention}`.toLowerCase().includes(query)
@@ -5437,6 +6982,68 @@ function App() {
   const selectedTextNodeReferences = activeTextReferences.filter((reference) => (
     reference.selected || (activeTextNode?.data.promptText ?? '').includes(reference.mention)
   ))
+  const captureVideoReferenceFrames = async (reference: ActiveNodeReference, signal?: AbortSignal) => {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    const sourceNode = reference.sourceNodeId ? nodes.find((node) => node.id === reference.sourceNodeId) : undefined
+    const directUrl = sourceNode?.data.videoUrl || reference.url
+    let objectUrl = ''
+    try {
+      let videoSource = directUrl
+      if (!videoSource && sourceNode?.data.videoMediaId) {
+        const media = await loadHistoryMedia(sourceNode.data.videoMediaId)
+        if (media) {
+          objectUrl = URL.createObjectURL(media.blob)
+          videoSource = objectUrl
+        }
+      }
+      if (!videoSource) return []
+      const video = document.createElement('video')
+      video.muted = true
+      video.playsInline = true
+      video.preload = 'auto'
+      video.src = videoSource
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { video.removeEventListener('loadedmetadata', onReady); video.removeEventListener('error', onError); signal?.removeEventListener('abort', onAbort) }
+        const onReady = () => { cleanup(); resolve() }
+        const onError = () => { cleanup(); reject(new Error('视频关键帧读取失败')) }
+        const onAbort = () => { cleanup(); reject(new DOMException('Aborted', 'AbortError')) }
+        video.addEventListener('loadedmetadata', onReady, { once: true })
+        video.addEventListener('error', onError, { once: true })
+        signal?.addEventListener('abort', onAbort, { once: true })
+        video.load()
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.min(960, video.videoWidth || 960)
+      canvas.height = Math.max(1, Math.round(canvas.width * (video.videoHeight || 540) / Math.max(1, video.videoWidth || 960)))
+      const context = canvas.getContext('2d')
+      if (!context) return []
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0
+      const frameTimes = duration > .2
+        ? [.05, .34, .66, .94].map((position) => Math.min(Math.max(.01, duration * position), Math.max(.01, duration - .01)))
+        : [0]
+      const frames: string[] = []
+      for (const time of frameTimes) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+        if (Math.abs(video.currentTime - time) > .01) {
+          await new Promise<void>((resolve, reject) => {
+            const cleanup = () => { video.removeEventListener('seeked', onSeeked); video.removeEventListener('error', onError); signal?.removeEventListener('abort', onAbort) }
+            const onSeeked = () => { cleanup(); resolve() }
+            const onError = () => { cleanup(); reject(new Error('视频关键帧定位失败')) }
+            const onAbort = () => { cleanup(); reject(new DOMException('Aborted', 'AbortError')) }
+            video.addEventListener('seeked', onSeeked, { once: true })
+            video.addEventListener('error', onError, { once: true })
+            signal?.addEventListener('abort', onAbort, { once: true })
+            video.currentTime = time
+          })
+        }
+        context.drawImage(video, 0, 0, canvas.width, canvas.height)
+        frames.push(canvas.toDataURL('image/jpeg', .78))
+      }
+      return frames
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }
   const addReferenceFilesToNode = async (nodeId: string, incomingFiles: File[]) => {
     const imageFiles = incomingFiles.filter((file) => SUPPORTED_REFERENCE_IMAGE_TYPES.has(file.type))
     const rejectedCount = incomingFiles.length - imageFiles.length
@@ -5490,6 +7097,26 @@ function App() {
       setReferenceDropTargetNodeId(null)
     }
   }
+
+  const uploadImageResultToGenerationNode = async (nodeId: string, file: File) => {
+    if (!SUPPORTED_REFERENCE_IMAGE_TYPES.has(file.type)) { setToastMessage('仅支持 PNG、JPG/JPEG 和 WebP 图片'); return }
+    try {
+      const image = await readReferenceImage(file)
+      previewOnlyNodeUntilRef.current.set(nodeId, Date.now() + 500)
+      setNodes((current) => current.map((node) => node.id === nodeId
+        ? { ...node, selected: true, data: { ...node.data, imageUrl: image.url, referenceImageUrl: undefined, referenceImageName: undefined, referenceImages: [], fileName: file.name, status: '已完成', generationError: undefined } }
+        : { ...node, selected: false }))
+      setSelectedNodeIds([nodeId])
+    } catch {
+      setToastMessage('图片读取失败，请重新选择')
+      return
+    }
+    setActiveGenerationNodeId(null)
+    setActiveImageNodeId(null)
+    setActiveVideoNodeId(null)
+    setActiveEditorNodeId(null)
+    setToastMessage(`已上传 ${file.name}`)
+  }
   const handleReferenceDragOver = (event: React.DragEvent<HTMLElement>, nodeId: string) => {
     if (!Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return
     event.preventDefault()
@@ -5506,8 +7133,13 @@ function App() {
   }
   const selectTextMention = (reference: ActiveNodeReference) => {
     if (!activeTextNode) return
-    if (reference.kind === 'text' ? !reference.text?.trim() : !reference.url) {
-      setToastMessage(reference.kind === 'text' ? '来源文本暂无内容' : '来源图片尚未生成')
+    const unavailable = reference.kind === 'text'
+      ? !reference.text?.trim()
+      : reference.kind === 'video'
+        ? reference.available === false
+        : !reference.url
+    if (unavailable) {
+      setToastMessage(reference.kind === 'text' ? '来源文本暂无内容' : reference.kind === 'video' ? '来源视频尚未生成' : '来源图片尚未生成')
       return
     }
     const promptText = activeTextNode.data.promptText ?? ''
@@ -5601,6 +7233,69 @@ function App() {
     setPreviewImageDirection(1)
     setPreviewImageNodeId(nodeId)
   }, [nodes])
+  const openNodeVideoPreview = useCallback((nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId)
+    if (!node || node.data.kind !== 'video' || (!node.data.videoUrl && !node.data.videoMediaId)) return
+    setPreviewVideoPlaying(false)
+    setPreviewVideoCurrentTime(0)
+    setPreviewVideoDuration(Number.isFinite(Number(node.data.videoDuration)) ? Math.max(0, Number(node.data.videoDuration)) : 0)
+    setPreviewVideoNodeId(nodeId)
+  }, [nodes])
+  const previewVideoNode = nodes.find((node) => node.id === previewVideoNodeId && node.data.kind === 'video')
+  const storedPreviewVideoDuration = Math.max(0, Number(previewVideoNode?.data.videoDuration) || 0)
+  const effectivePreviewVideoDuration = Math.max(
+    Number.isFinite(previewVideoDuration) ? previewVideoDuration : 0,
+    storedPreviewVideoDuration,
+    previewVideoCurrentTime,
+  )
+  const readPreviewVideoDuration = (video: HTMLVideoElement) => {
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      setPreviewVideoDuration(video.duration)
+      return
+    }
+    // MediaRecorder WebM files may initially report Infinity. Seeking far past
+    // the end makes Chromium resolve the final timestamp without playing it.
+    const restoreTime = Number.isFinite(video.currentTime) ? video.currentTime : 0
+    const recoverDuration = () => {
+      const recovered = video.currentTime
+      if (Number.isFinite(recovered) && recovered > 0) setPreviewVideoDuration(recovered)
+      video.currentTime = Math.min(restoreTime, Math.max(0, recovered || storedPreviewVideoDuration))
+    }
+    video.addEventListener('timeupdate', recoverDuration, { once: true })
+    try { video.currentTime = Number.MAX_SAFE_INTEGER } catch { setPreviewVideoDuration(storedPreviewVideoDuration) }
+  }
+  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | undefined>()
+  useEffect(() => {
+    if (!previewVideoNode) { setPreviewVideoUrl(undefined); return }
+    if (previewVideoNode.data.videoUrl) { setPreviewVideoUrl(previewVideoNode.data.videoUrl); return }
+    if (!previewVideoNode.data.videoMediaId) { setPreviewVideoUrl(undefined); return }
+    let disposed = false
+    let objectUrl = ''
+    void loadHistoryMedia(previewVideoNode.data.videoMediaId).then((record) => {
+      if (!record || disposed) return
+      objectUrl = URL.createObjectURL(record.blob)
+      setPreviewVideoUrl(objectUrl)
+    })
+    return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [previewVideoNode?.data.videoMediaId, previewVideoNode?.data.videoUrl])
+
+  useEffect(() => {
+    if (!previewVideoNodeId) return
+    const handleStageClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target.closest('.video-preview-stage') || target.closest('.video-preview-controls')) return
+      const video = previewVideoRef.current
+      if (!video) return
+      if (video.paused) void video.play()
+      else video.pause()
+    }
+    document.addEventListener('click', handleStageClick)
+    return () => document.removeEventListener('click', handleStageClick)
+  }, [previewVideoNodeId])
+
+  useEffect(() => {
+    document.querySelector('.video-preview-stage')?.classList.toggle('is-playing', previewVideoPlaying)
+  }, [previewVideoPlaying])
 
   const openImageTool = useCallback((nodeId: string, mode: ImageToolMode) => {
     const node = nodes.find((item) => item.id === nodeId)
@@ -5620,9 +7315,64 @@ function App() {
     if (mode === 'local-edit') setLocalEditMarks([])
     if (mode === 'color') setColorAdjustments({ exposure: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, highlights: 0, shadows: 0 })
     if (mode === 'crop') setCropRect({ x: 10, y: 10, width: 80, height: 80 })
+    setImageToolView({ scale: 1, x: 0, y: 0 })
     setImageMoreMenuNodeId(null)
     setImageTool({ nodeId, mode })
   }, [nodes])
+
+  const imageToolZoomable = imageTool?.mode === 'crop' || imageTool?.mode === 'expand'
+  const imageToolViewRef = useRef(imageToolView)
+  useEffect(() => { imageToolViewRef.current = imageToolView }, [imageToolView])
+
+  useEffect(() => {
+    const stage = imageToolStageRef.current
+    if (!stage || !imageToolZoomable) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const rect = stage.getBoundingClientRect()
+      const cx = event.clientX - rect.left - rect.width / 2
+      const cy = event.clientY - rect.top - rect.height / 2
+      const factor = Math.exp(-event.deltaY * 0.0015)
+      setImageToolView((view) => {
+        const scale = Math.min(6, Math.max(0.2, view.scale * factor))
+        const k = scale / view.scale
+        return { scale, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k }
+      })
+    }
+    stage.addEventListener('wheel', onWheel, { passive: false })
+    return () => stage.removeEventListener('wheel', onWheel)
+  }, [imageToolZoomable, imageTool])
+
+  const zoomImageToolView = useCallback((factor: number) => {
+    setImageToolView((view) => {
+      const scale = Math.min(6, Math.max(0.2, view.scale * factor))
+      const k = scale / view.scale
+      return { scale, x: view.x * k, y: view.y * k }
+    })
+  }, [])
+
+  const resetImageToolView = useCallback(() => setImageToolView({ scale: 1, x: 0, y: 0 }), [])
+
+  const showImageToolActualSize = useCallback(() => {
+    const plane = imageToolPlaneRef.current
+    if (!plane) return
+    const unscaledWidth = plane.getBoundingClientRect().width / imageToolView.scale
+    if (!unscaledWidth) return
+    const scale = Math.min(6, Math.max(0.2, imageToolSourceSize.width / unscaledWidth))
+    setImageToolView({ scale, x: 0, y: 0 })
+  }, [imageToolSourceSize.width, imageToolView.scale])
+
+  const startImageToolPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('.crop-selection i, .expand-handle, .image-tool-view-toolbar')) return
+    event.preventDefault()
+    const startX = event.clientX, startY = event.clientY, start = { ...imageToolViewRef.current }
+    const move = (moveEvent: PointerEvent) => setImageToolView((view) => ({ ...view, x: start.x + moveEvent.clientX - startX, y: start.y + moveEvent.clientY - startY }))
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+  }, [])
 
   const createDerivedImage = useCallback((sourceId: string, imageUrl: string, title: string, suffix: string) => {
     const source = nodes.find((node) => node.id === sourceId)
@@ -5637,6 +7387,63 @@ function App() {
     setNodes((current) => [...current, derived])
     setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: sourceId, target: id, type: 'luminous' }])
   }, [nodes, setEdges, setNodes])
+
+  const captureVideoFrame = useCallback(async (nodeId: string, frame: 'current' | 'first' | 'last') => {
+    setFrameCaptureMenuNodeId(null)
+    const source = nodes.find((node) => node.id === nodeId && node.data.kind === 'video')
+    if (!source) return
+    let ownedObjectUrl = ''
+    try {
+      const renderedVideo = shellRef.current?.querySelector<HTMLVideoElement>(`.react-flow__node[data-id="${CSS.escape(nodeId)}"] video`)
+      const directUrl = renderedVideo?.currentSrc || renderedVideo?.src || source.data.videoUrl || ''
+      const media = !directUrl && source.data.videoMediaId ? await loadHistoryMedia(source.data.videoMediaId) : null
+      ownedObjectUrl = media ? URL.createObjectURL(media.blob) : ''
+      const sourceUrl = directUrl || ownedObjectUrl
+      if (!sourceUrl) throw new Error('视频媒体读取失败')
+
+      const video = document.createElement('video')
+      video.muted = true
+      video.preload = 'auto'
+      video.playsInline = true
+      if (/^https?:/i.test(sourceUrl)) video.crossOrigin = 'anonymous'
+      video.src = sourceUrl
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve()
+        video.onerror = () => reject(new Error('视频无法解码'))
+      })
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : Math.max(.1, Number(source.data.videoDuration) || 4)
+      const currentTime = renderedVideo && Number.isFinite(renderedVideo.currentTime) ? renderedVideo.currentTime : 0
+      const targetTime = frame === 'first' ? 0 : frame === 'last' ? Math.max(0, duration - .04) : Math.max(0, Math.min(duration - .01, currentTime))
+      if (Math.abs(video.currentTime - targetTime) > .002) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(resolve, 2400)
+          video.onseeked = () => { window.clearTimeout(timeout); resolve() }
+          video.onerror = () => { window.clearTimeout(timeout); reject(new Error('无法定位到所选画面')) }
+          video.currentTime = targetTime
+        })
+      }
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(resolve, 1800)
+          video.onloadeddata = () => { window.clearTimeout(timeout); resolve() }
+          video.onerror = () => { window.clearTimeout(timeout); reject(new Error('视频画面读取失败')) }
+        })
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, video.videoWidth)
+      canvas.height = Math.max(1, video.videoHeight)
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('浏览器不支持视频截帧')
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const label = frame === 'first' ? '首帧' : frame === 'last' ? '尾帧' : '当前帧'
+      createDerivedImage(source.id, canvas.toDataURL('image/png'), `${getNodeDisplayTitle(source.data)} · ${label}`, `frame-${frame}`)
+      setToastMessage(`已截取${label}并创建图片节点`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `截帧失败：${error.message}` : '视频截帧失败')
+    } finally {
+      if (ownedObjectUrl) URL.revokeObjectURL(ownedObjectUrl)
+    }
+  }, [createDerivedImage, nodes])
 
   const cropImageToDataUrl = useCallback(async (source: string, x: number, y: number, width: number, height: number) => {
     const image = new Image()
@@ -5824,6 +7631,56 @@ function App() {
     return () => window.removeEventListener('keydown', onPreviewKeyDown)
   }, [movePreviewImage, previewImageNodeId])
 
+  useEffect(() => {
+    if (!imageTool) return
+    const closeImageToolWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || (cutoutProgress && !cutoutProgress.failed)) return
+      event.preventDefault()
+      event.stopPropagation()
+      setImageTool(null)
+    }
+    window.addEventListener('keydown', closeImageToolWithEscape, true)
+    return () => window.removeEventListener('keydown', closeImageToolWithEscape, true)
+  }, [cutoutProgress, imageTool])
+
+  useEffect(() => {
+    if (!imageMoreMenuNodeId) return
+    const closeImageMoreMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.image-more-wrap')) return
+      setImageMoreMenuNodeId(null)
+    }
+    const closeImageMoreMenuWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setImageMoreMenuNodeId(null)
+    }
+    window.addEventListener('pointerdown', closeImageMoreMenu, true)
+    window.addEventListener('keydown', closeImageMoreMenuWithEscape, true)
+    return () => {
+      window.removeEventListener('pointerdown', closeImageMoreMenu, true)
+      window.removeEventListener('keydown', closeImageMoreMenuWithEscape, true)
+    }
+  }, [imageMoreMenuNodeId])
+
+  useEffect(() => {
+    if (!frameCaptureMenuNodeId) return
+    const closeFrameCaptureMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.video-frame-capture-wrap')) return
+      setFrameCaptureMenuNodeId(null)
+    }
+    const closeFrameCaptureMenuWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setFrameCaptureMenuNodeId(null)
+    }
+    window.addEventListener('pointerdown', closeFrameCaptureMenu, true)
+    window.addEventListener('keydown', closeFrameCaptureMenuWithEscape, true)
+    return () => {
+      window.removeEventListener('pointerdown', closeFrameCaptureMenu, true)
+      window.removeEventListener('keydown', closeFrameCaptureMenuWithEscape, true)
+    }
+  }, [frameCaptureMenuNodeId])
+
   const copyActiveText = async () => {
     if (!activeTextNode) return
     try {
@@ -5894,9 +7751,9 @@ function App() {
     })
   }
 
-  const enabledTextModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
+  const enabledTextModels = useMemo(() => apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'text')
-    .map((model) => ({ connection, model })))
+    .map((model) => ({ connection, model }))), [apiSettings.connections])
   const selectedTextModel = enabledTextModels.find(({ connection, model }) => (
     connection.id === apiSettings.selectedTextModel?.connectionId
     && model.id === apiSettings.selectedTextModel?.modelId
@@ -5970,11 +7827,103 @@ function App() {
       throw error
     }
   }
-  const enabledImageModels = apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
+  const enabledImageModels = useMemo(() => apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
     .filter((model) => model.enabled && model.capability === 'image')
-    .map((model) => ({ connection, model })))
+    .map((model) => ({ connection, model }))), [apiSettings.connections])
+  const enabledVideoModels = useMemo(() => apiSettings.connections.filter(isConnectionUsable).flatMap((connection) => connection.models
+    .filter((model) => model.enabled && model.capability === 'video')
+    .map((model) => ({ connection, model }))), [apiSettings.connections])
+
+  const optimizeNodePrompt = useCallback(async (nodeId: string, textModelKey?: string) => {
+    const node = nodes.find((item) => item.id === nodeId)
+    if (!node || !['text', 'image', 'video'].includes(node.data.kind)) return
+    const source = (node.data.promptText ?? node.data.body).trim()
+    if (!source) { setToastMessage('请先输入需要优化的提示词'); return }
+    const [connectionId, modelId] = (textModelKey || optimizeTextModelKey).split('::')
+    const textModel = enabledTextModels.find(({ connection, model }) => connection.id === connectionId && model.id === modelId)
+      ?? selectedTextModel
+      ?? enabledTextModels[0]
+    if (!textModel) { setToastMessage('请先从 API 获取并启用一个文本模型'); setApiOpen(true); return }
+    setOptimizingPromptNodeIds((current) => new Set(current).add(nodeId))
+    const kindGuide = node.data.kind === 'video'
+      ? '视频生成提示词。强化主体动作、场景变化、镜头运动、节奏、光线与连续性，避免堆砌互相冲突的动作。'
+      : node.data.kind === 'image'
+        ? '图像生成提示词。强化主体、构图、环境、光线、材质、镜头与风格，同时保留用户的硬性要求。'
+        : '文本生成提示词。明确任务、背景、约束、输出结构和验收标准。'
+    try {
+      const optimized = await generateRemoteText({ baseUrl: textModel.connection.baseUrl, apiKey: textModel.connection.apiKey, model: textModel.model.id }, `你是专业提示词导演。请优化下面这段${kindGuide}\n要求：保留原意和所有明确约束；不要解释；不要使用 Markdown 代码块；只输出可直接使用的最终提示词。\n\n原提示词：\n${source}`)
+      const clean = optimized.replace(/^```[^\n]*\n?|```$/g, '').trim()
+      setNodes((current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, promptOptimizationBackup: source, promptOptimizedAt: new Date().toISOString(), promptText: clean, body: clean } } : item))
+      setToastMessage('提示词已优化，可随时撤回')
+    } catch (error) {
+      setToastMessage(normalizeGenerationError(error).message)
+    } finally {
+      setOptimizingPromptNodeIds((current) => { const next = new Set(current); next.delete(nodeId); return next })
+    }
+  }, [enabledTextModels, nodes, optimizeTextModelKey, selectedTextModel, setNodes])
+
+  const effectiveOptimizeTextModel = (() => {
+    const [connectionId, modelId] = optimizeTextModelKey.split('::')
+    return enabledTextModels.find(({ connection, model }) => connection.id === connectionId && model.id === modelId)
+      ?? selectedTextModel
+      ?? enabledTextModels[0]
+  })()
+
+  const renderPromptOptimizeControl = (nodeId: string) => {
+    const loading = optimizingPromptNodeIds.has(nodeId)
+    return <div className="prompt-optimize-control">
+      <button
+        type="button"
+        className="prompt-optimize-button"
+        title={effectiveOptimizeTextModel ? `使用 ${formatModelDisplayName(effectiveOptimizeTextModel.model.name)} 优化提示词` : '选择文本模型后优化提示词'}
+        disabled={loading}
+        onClick={() => void optimizeNodePrompt(nodeId)}
+      >
+        {loading ? <LoaderCircle className="is-spinning" size={14} /> : <WandSparkles size={14} />}
+        <span>优化</span>
+      </button>
+      <button
+        type="button"
+        className={`prompt-optimize-model-trigger ${optimizeModelMenuNodeId === nodeId ? 'is-open' : ''}`}
+        title={effectiveOptimizeTextModel ? `优化模型：${formatModelDisplayName(effectiveOptimizeTextModel.model.name)}` : '选择优化文本模型'}
+        aria-label="选择优化文本模型"
+        aria-expanded={optimizeModelMenuNodeId === nodeId}
+        onClick={() => setOptimizeModelMenuNodeId((current) => current === nodeId ? null : nodeId)}
+      ><ChevronDown size={12} /></button>
+      {optimizeModelMenuNodeId === nodeId && <div className="prompt-optimize-model-menu">
+        <header><span>优化文本模型</span><small>{enabledTextModels.length} 个可用</small></header>
+        {enabledTextModels.map(({ connection, model }) => {
+          const key = `${connection.id}::${model.id}`
+          const selected = effectiveOptimizeTextModel?.connection.id === connection.id && effectiveOptimizeTextModel.model.id === model.id
+          return <button type="button" className={selected ? 'is-selected' : ''} key={key} onClick={() => { setOptimizeTextModelKey(key); setOptimizeModelMenuNodeId(null) }}>
+            <ModelBrandBadge name={formatModelDisplayName(model.name)} />
+            <span><strong>{formatModelDisplayName(model.name)}</strong><small>{connection.name}</small></span>
+            {selected && <Check size={13} />}
+          </button>
+        })}
+        {!enabledTextModels.length && <button type="button" className="is-empty" onClick={() => { setOptimizeModelMenuNodeId(null); openApiSettings() }}><Settings2 size={13} /><span>配置文本模型</span></button>}
+      </div>}
+    </div>
+  }
+
+  const undoNodePromptOptimization = useCallback((nodeId: string) => {
+    setNodes((current) => current.map((item) => item.id === nodeId && item.data.promptOptimizationBackup !== undefined ? { ...item, data: { ...item.data, promptText: item.data.promptOptimizationBackup, body: item.data.promptOptimizationBackup, promptOptimizationBackup: undefined, promptOptimizedAt: undefined } } : item))
+    setToastMessage('已撤回提示词优化')
+  }, [setNodes])
   const groupTextModelsByProvider = new Set(enabledTextModels.map(({ connection }) => connection.id)).size > 1
   const groupImageModelsByProvider = new Set(enabledImageModels.map(({ connection }) => connection.id)).size > 1
+  const videoModelProviderGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; items: typeof enabledVideoModels }>()
+    enabledVideoModels.forEach((item) => {
+      const label = getVideoModelProviderLabel(item.connection.baseUrl)
+      const key = label.trim().toLowerCase()
+      const existing = groups.get(key)
+      if (existing) existing.items.push(item)
+      else groups.set(key, { key, label, items: [item] })
+    })
+    return Array.from(groups.values())
+  }, [enabledVideoModels])
+  const groupVideoModelsByProvider = new Set(enabledVideoModels.map(({ connection }) => connection.id)).size > 1
   const selectedImageModel = enabledImageModels.find(({ connection, model }) => (
     connection.id === apiSettings.selectedImageModel?.connectionId
     && model.id === apiSettings.selectedImageModel?.modelId
@@ -5996,12 +7945,235 @@ function App() {
   const hasCatalogTextModels = apiSettings.connections.filter(isConnectionUsable).some((connection) => connection.models.some((model) => model.capability === 'text'))
   const hasCatalogImageModels = apiSettings.connections.filter(isConnectionUsable).some((connection) => connection.models.some((model) => model.capability === 'image'))
 
+  const cancelVideoGeneration = useCallback((nodeId: string) => {
+    const controller = generationTaskControllersRef.current.get(nodeId)
+    if (!controller) return
+    generationTaskStopReasonRef.current.set(nodeId, 'stopped')
+    controller.abort()
+  }, [])
+
+  const generateVideoNode = useCallback(async (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId && item.data.kind === 'video')
+    if (!node) return
+    const selected = enabledVideoModels.find(({ connection, model }) => connection.id === node.data.videoModelConnectionId && model.id === node.data.videoModelId)
+      ?? enabledVideoModels[0]
+    if (!selected) {
+      setToastMessage('请先从 API 获取并启用一个视频模型')
+      setApiOpen(true)
+      return
+    }
+    const rawPrompt = (node.data.promptText ?? node.data.body).trim()
+    if (!rawPrompt) {
+      setToastMessage('请先描述视频主体动作与镜头运动')
+      return
+    }
+    const styleInvocation = resolveStylePresets(stylePresets, rawPrompt)
+    const styleReferenceEntries = styleInvocation.references.map((reference) => ({
+      id: `style-${reference.id}`,
+      url: reference.url,
+    }))
+    const mode = node.data.videoGenerationMethod ?? 'text'
+    const modeApi = ({ text: 'text2video', image: 'image2video', frames: 'first_last_frame', reference: 'image_reference', omni: 'all_reference' } as const)[mode]
+    const incomingVideoNodes = edges
+      .filter((edge) => edge.target === node.id)
+      .flatMap((edge) => nodes.filter((item) => item.id === edge.source))
+    const connectedImageEntries = incomingVideoNodes.flatMap((item) => {
+      if (item.data.kind !== 'image' && item.data.kind !== 'upload') return []
+      const url = item.data.imageUrl || item.data.referenceImageUrl
+      return url ? [{ id: `connection-${item.id}`, url }] : []
+    })
+    const localImageEntries = mode === 'frames'
+      ? [{ id: 'video-first-frame', url: node.data.videoFirstFrameUrl }, { id: 'video-last-frame', url: node.data.videoLastFrameUrl }]
+      : [
+          { id: 'video-reference-image', url: node.data.videoReferenceImageUrl || node.data.imageUrl || node.data.referenceImageUrl },
+          ...(node.data.referenceImages ?? []).map((reference) => ({ id: reference.id, url: reference.url })),
+        ]
+    // First/last-frame inputs are structural inputs. Keep style preset images
+    // out of those slots so invoking a style can never replace a user's frame.
+    const structuralImageEntries = [...connectedImageEntries, ...localImageEntries].filter((entry): entry is { id: string; url: string } => Boolean(entry.url))
+    const imageEntries = [
+      ...structuralImageEntries,
+      ...(mode === 'text' || mode === 'reference' || mode === 'omni' ? styleReferenceEntries : []),
+    ]
+    const persistedOrder = new Map((node.data.videoReferenceOrder ?? []).map((id, index) => [id, index]))
+    imageEntries.sort((left, right) => (persistedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (persistedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+    const uniqueImageEntries = Array.from(new Map(imageEntries.map((entry) => [entry.url, entry])).values())
+    const imageLimit = mode === 'image' ? 1 : mode === 'frames' ? 2 : mode === 'reference' ? 4 : mode === 'omni' ? 9 : 0
+    const imageReferences = uniqueImageEntries.slice(0, imageLimit).map((entry) => entry.url)
+    const ignoredImageIds = new Set(uniqueImageEntries.slice(imageLimit).map((entry) => entry.id))
+    const ignoredIncomingMentions = incomingVideoNodes
+      .filter((item) => (mode === 'text' && item.data.kind !== 'text') || ((mode === 'image' || mode === 'frames' || mode === 'reference') && item.data.kind === 'video') || ignoredImageIds.has(`connection-${item.id}`))
+      .map((item) => getConnectedReferenceMention(item))
+    const prompt = ignoredIncomingMentions.reduce((value, mention) => value.replaceAll(mention, ''), rawPrompt).replace(/[ \t]{2,}/g, ' ').trim()
+    if (!prompt) {
+      setToastMessage('请先描述视频主体动作与镜头运动')
+      return
+    }
+    const selectedIncomingVideoNodes = incomingVideoNodes.filter((item) => {
+      if (item.data.kind !== 'video' || !(item.data.videoUrl || item.data.videoMediaId) || mode !== 'omni') return false
+      const edge = edges.find((candidate) => candidate.source === item.id && candidate.target === node.id)
+      return Boolean((edge?.data as { referenceSelected?: boolean } | undefined)?.referenceSelected) || node.data.body.includes(getConnectedReferenceMention(item))
+    })
+    const connectedVideoCount = selectedIncomingVideoNodes.length
+    const localVideoEntries = [
+      { id: 'video-reference-video', url: node.data.videoReferenceUrl },
+      ...(node.data.videoReferenceVideos ?? []).map((reference) => ({ id: reference.id, url: reference.url })),
+    ].filter((entry): entry is { id: string; url: string } => Boolean(entry.url))
+    const localVideoReferences = Array.from(new Set(localVideoEntries.map((entry) => entry.url)))
+    const videoReferenceCount = connectedVideoCount + localVideoReferences.length
+    const availableImageCount = uniqueImageEntries.length
+    if (mode === 'omni' && availableImageCount > 9) { setToastMessage('全能参考最多支持 9 张图片'); return }
+    if (mode === 'omni' && videoReferenceCount > 3) { setToastMessage('全能参考最多支持 3 个视频'); return }
+    if (mode === 'image' && !imageReferences.length) { setToastMessage('图生视频需要至少 1 张首帧图片'); return }
+    if (mode === 'frames' && imageReferences.length < 2) { setToastMessage('首尾帧模式需要首帧和尾帧两张图片'); return }
+    if (mode === 'reference' && !imageReferences.length) { setToastMessage('图片参考模式需要至少 1 张参考图'); return }
+    if (mode === 'omni' && !imageReferences.length && !videoReferenceCount) { setToastMessage('全能参考模式请先连接或上传参考图片/视频'); return }
+    const controller = beginGenerationTask(nodeId)
+    if (!controller) return
+    const origin = { projectId: activeProjectId, canvasId: activeCanvasId }
+    const referenceImage = imageReferences[0]
+    const referenceVideoObjectUrls: string[] = []
+    setNodes((current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, status: '排队中', videoProgress: 0, generationError: undefined, videoModelConnectionId: selected.connection.id, videoModelId: selected.model.id, videoModelName: selected.model.name } } : item))
+    try {
+      const connectedVideoEntries: Array<{ id: string; url: string }> = []
+      for (const item of selectedIncomingVideoNodes) {
+        if (item.data.kind !== 'video') continue
+        if (item.data.videoUrl) connectedVideoEntries.push({ id: `connection-${item.id}`, url: item.data.videoUrl })
+        else if (item.data.videoMediaId) {
+          const media = await loadHistoryMedia(item.data.videoMediaId)
+          if (media) {
+            const objectUrl = URL.createObjectURL(media.blob)
+            referenceVideoObjectUrls.push(objectUrl)
+            connectedVideoEntries.push({ id: `connection-${item.id}`, url: objectUrl })
+          }
+        }
+      }
+      const orderedVideoEntries = [...connectedVideoEntries, ...localVideoEntries]
+        .sort((left, right) => (persistedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (persistedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+      const referenceVideos = Array.from(new Set(orderedVideoEntries.map((entry) => entry.url))).slice(0, 3)
+      // Style references use the same project-level presets as image
+      // generation. In text/reference modes they are visual guidance; frame
+      // modes keep their first/last-frame contract unchanged.
+      const styleReferenceUrls = Array.from(new Set(styleReferenceEntries.map((entry) => entry.url)))
+      const requestReferenceImages = mode === 'text'
+        ? styleReferenceUrls
+        : mode === 'reference' || mode === 'omni'
+          ? imageReferences
+          : undefined
+      const ratio = node.data.videoAspectRatio ?? '16:9'
+      const resolution = node.data.videoResolution ?? '720p'
+      const ratioOption = VIDEO_ASPECT_OPTIONS.find((item) => item.value === ratio)
+      const ratioNumber = ratioOption && ratio !== 'auto' ? ratioOption.width / ratioOption.height : 16 / 9
+      const baseHeight = resolution === '4k' ? 2160 : resolution === '1080p' ? 1080 : resolution === '720p' ? 720 : 480
+      const size = `${Math.round(ratioNumber * baseHeight)}x${baseHeight}`
+      const generateCount = node.data.videoGenerateCount ?? 1
+      let lastTaskId: string | undefined
+      let lastMediaId = ''
+      let lastFileName = ''
+      for (let index = 0; index < generateCount; index += 1) {
+        const result = await generateRemoteVideo({ baseUrl: selected.connection.baseUrl, apiKey: selected.connection.apiKey, model: selected.model.id }, {
+          prompt,
+          seconds: node.data.videoDuration ?? 4,
+          size,
+          mode: modeApi,
+          referenceImages: requestReferenceImages,
+          firstFrame: mode === 'image' ? (node.data.videoReferenceImageUrl || imageReferences[0]) : mode === 'frames' ? imageReferences[0] : undefined,
+          lastFrame: mode === 'frames' ? imageReferences[1] : undefined,
+          referenceVideos: mode === 'omni' ? referenceVideos : undefined,
+          referenceImage: mode === 'image' ? referenceImage : undefined,
+          generateAudio: node.data.videoGenerateAudio !== false,
+          signal: controller.signal,
+          captureAdminLog: (log) => captureGenerationAdminLog(log, {
+            prompt,
+            modelName: selected.model.name,
+            connectionName: selected.connection.name,
+            projectId: origin.projectId,
+          }),
+          onTaskId: (taskId) => {
+            void patchCanvasNodesAtOrigin(origin, (current) => current.map((item) => item.id === nodeId
+              ? { ...item, data: { ...item.data, videoTaskId: taskId } }
+              : item))
+          },
+          onProgress: (progress, status) => {
+            const label = status === 'queued' ? '排队中' : status === 'completed' ? '下载完成' : generateCount > 1 ? `生成中 ${index + 1}/${generateCount}` : '生成中'
+            setNodes((current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, status: label, videoProgress: Math.max(0, Math.min(100, progress)) } } : item))
+          },
+        })
+        lastTaskId = result.taskId
+        lastMediaId = `video-media-${crypto.randomUUID()}`
+        lastFileName = `disy-video-${Date.now()}-${index + 1}.mp4`
+        const createdAt = new Date().toISOString()
+        await saveHistoryMedia({ id: lastMediaId, blob: result.blob, fileName: lastFileName, createdAt })
+        setGenerationHistory((current) => [...current, {
+          id: `history-${lastMediaId}`,
+          createdAt,
+          prompt,
+          model: selected.model.name,
+          imageUrl: '',
+          fileName: lastFileName,
+          projectId: origin.projectId,
+          mediaId: lastMediaId,
+          kind: 'video',
+        }])
+      }
+      await patchCanvasNodesAtOrigin(origin, (current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, status: '已完成', videoProgress: 100, videoMediaId: lastMediaId, videoGeneratedAt: new Date().toISOString(), videoUrl: undefined, videoTaskId: lastTaskId, fileName: lastFileName, generationError: undefined } } : item))
+      setToastMessage(generateCount > 1 ? `视频生成完成，共 ${generateCount} 份已保存到本地项目` : '视频生成完成，已保存到本地项目')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        await patchCanvasNodesAtOrigin(origin, (current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, status: '已停止' } } : item))
+      } else {
+        const normalized = normalizeGenerationError(error)
+        await patchCanvasNodesAtOrigin(origin, (current) => current.map((item) => item.id === nodeId ? { ...item, data: { ...item.data, status: '生成失败', generationError: normalized.message } } : item))
+        setToastMessage(normalized.message)
+      }
+    } finally {
+      referenceVideoObjectUrls.forEach((url) => URL.revokeObjectURL(url))
+      finishGenerationTask(nodeId)
+    }
+  }, [activeCanvasId, activeProjectId, edges, enabledVideoModels, nodes, patchCanvasNodesAtOrigin, setNodes, stylePresets])
+  generateVideoNodeRef.current = (nodeId) => { void generateVideoNode(nodeId) }
+
+  useEffect(() => {
+    const runningPlans = agentVideoPlans.filter((plan) => plan.status === 'running' && plan.nodeId)
+    if (!runningPlans.length) return
+    let changed = false
+    const nextPlans = agentVideoPlans.map((plan) => {
+      if (plan.status !== 'running' || !plan.nodeId) return plan
+      const node = nodes.find((item) => item.id === plan.nodeId && item.data.kind === 'video')
+      if (!node) return plan
+      if (node.data.status === '已完成') {
+        changed = true
+        agentPlanLocksRef.current.delete(plan.id)
+        return { ...plan, status: 'completed' as const, error: undefined }
+      }
+      if (node.data.status === '生成失败') {
+        changed = true
+        agentPlanLocksRef.current.delete(plan.id)
+        return { ...plan, status: 'failed' as const, error: node.data.generationError || '视频生成失败' }
+      }
+      if (node.data.status === '已停止' || node.data.status === '已暂停') {
+        changed = true
+        agentPlanLocksRef.current.delete(plan.id)
+        return { ...plan, status: 'cancelled' as const }
+      }
+      return plan
+    })
+    if (changed) setAgentVideoPlans(nextPlans)
+  }, [agentVideoPlans, nodes])
+  const videoGenerationContextValue = useMemo(() => ({
+    models: enabledVideoModels.map(({ connection, model }) => ({ connectionId: connection.id, modelId: model.id, name: model.name, connectionName: connection.name })),
+    generate: (nodeId: string) => generateVideoNodeRef.current(nodeId),
+    cancel: cancelVideoGeneration,
+  }), [cancelVideoGeneration, enabledVideoModels])
+
   useEffect(() => {
     const validTextKeys = new Set(enabledTextModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
     const validImageKeys = new Set(enabledImageModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
+    const validVideoKeys = new Set(enabledVideoModels.map(({ connection, model }) => `${connection.id}::${model.id}`))
     if (!validTextKeys.has(agentTextModelKey)) setAgentTextModelKey(enabledTextModels[0] ? `${enabledTextModels[0].connection.id}::${enabledTextModels[0].model.id}` : '')
     if (agentImageModelKey && !validImageKeys.has(agentImageModelKey)) setAgentImageModelKey('')
-  }, [agentImageModelKey, agentTextModelKey, enabledImageModels, enabledTextModels])
+    if (agentVideoModelKey && !validVideoKeys.has(agentVideoModelKey)) setAgentVideoModelKey('')
+  }, [agentImageModelKey, agentTextModelKey, agentVideoModelKey, enabledImageModels, enabledTextModels, enabledVideoModels])
 
   const appendOutputHistory = (record: Omit<OutputHistoryRecord, 'id' | 'createdAt' | 'projectId'>, projectId = activeProjectId) => {
     const nextRecord: OutputHistoryRecord = {
@@ -6042,6 +8214,32 @@ function App() {
       resultUrls: log.resultUrls ?? [],
       createdAt: log.finishedAt,
     })
+    // Every provider log is also visible in the ordinary output history. The
+    // operator view remains the detailed, protected record; this entry is the
+    // user-facing audit trail for successful and failed outputs alike.
+    // Image/text callers already append their user-facing result record with
+    // richer context (count, references, recovery actions). Video has no other
+    // output-history path, so its provider log becomes the canonical record.
+    if (log.kind === 'video') {
+      const isSuccess = log.resultType === 'success'
+      appendOutputHistory({
+        kind: 'video',
+        status: isSuccess ? 'success' : 'failed',
+        prompt: meta.prompt,
+        modelId: log.model,
+        modelName: meta.modelName || log.model,
+        connectionName: meta.connectionName || log.provider || 'Custom API',
+        requestedCount: 1,
+        outputCount: isSuccess ? 1 : 0,
+        preview: isSuccess ? '视频任务完成 · 已保存到本地项目' : '视频任务失败 · 已保留厂商错误日志',
+        error: isSuccess ? undefined : {
+          category: 'api',
+          summary: /no available channels|没有可用通道/i.test(log.resultJson) ? '当前 API 分组没有可用通道' : 'API 服务暂时不可用',
+          detail: log.resultJson,
+          requestId: log.taskId,
+        },
+      }, meta.projectId)
+    }
     if (operatorUnlocked) setOperatorLogs(listOperatorRecoveryLogs(activeProjectId))
   }
 
@@ -6198,13 +8396,17 @@ function App() {
     }
     const rawPromptText = activeTextNode.data.promptText ?? ''
     const promptText = activeTextReferences.reduce((value, reference) => {
-      const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
+      const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : reference.kind === 'video' ? reference.available !== false : Boolean(reference.url)
       return value.replaceAll(reference.mention, available ? `@${reference.name}` : '')
     }, rawPromptText).replace(/@\[node:[^\]]+\]/g, '').trim()
     const selectedTextReferences = selectedTextNodeReferences.filter((reference) => reference.kind === 'text' && reference.text?.trim())
     const selectedVisualReferences = selectedTextNodeReferences.filter((reference) => reference.kind === 'image' && reference.url)
+    const selectedVideoReferences = selectedTextNodeReferences.filter((reference) => reference.kind === 'video' && reference.available !== false)
     const textReferenceGuide = selectedTextReferences.length
       ? `参考文本：\n${selectedTextReferences.map((reference) => `@${reference.name}\n${reference.text}`).join('\n\n')}`
+      : ''
+    const videoReferenceGuide = selectedVideoReferences.length
+      ? `参考视频：\n${selectedVideoReferences.map((reference) => `@${reference.name}\n系统会按时间顺序附上该视频的关键帧。请结合连续帧分析画面、镜头、动作、角色与时间变化，并据此完成任务。`).join('\n\n')}`
       : ''
     const imageReferenceGuide = shouldAppendReferenceGuide({
       modelId: selectedTextModel.model.id,
@@ -6216,7 +8418,7 @@ function App() {
         url: reference.url!,
       })))
       : ''
-    const prompt = [promptText, textReferenceGuide, imageReferenceGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
+    const prompt = [promptText, textReferenceGuide, videoReferenceGuide, imageReferenceGuide, projectPromptSuffix.trim()].filter(Boolean).join('\n\n')
     if (!prompt) {
       setToastMessage('请先输入文本提示词')
       return
@@ -6243,7 +8445,9 @@ function App() {
     const textGenerationOrigin = { projectId: activeProjectId, canvasId: activeCanvasId }
     const textGenerationNodeId = activeTextNode.id
     try {
-      const referenceImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!, controller.signal)))
+      const visualImages = await Promise.all(selectedVisualReferences.map((reference) => prepareReferenceImageForRequest(reference.url!, controller.signal)))
+      const videoFrames = (await Promise.all(selectedVideoReferences.map((reference) => captureVideoReferenceFrames(reference, controller.signal)))).flat()
+      const referenceImages = [...visualImages, ...videoFrames]
       const output = await generateRemoteText({
         baseUrl: selectedTextModel.connection.baseUrl,
         apiKey: selectedTextModel.connection.apiKey,
@@ -6259,7 +8463,7 @@ function App() {
         }),
       })
       await patchCanvasNodesAtOrigin(textGenerationOrigin, (current) => current.map((node) => node.id === textGenerationNodeId
-        ? { ...node, data: { ...node.data, body: output, status: selectedTextModel.model.name } }
+        ? { ...node, data: { ...node.data, body: output, status: formatModelDisplayName(selectedTextModel.model.name) } }
         : node))
       appendOutputHistory({
         kind: 'text',
@@ -6538,15 +8742,21 @@ function App() {
     void generateFromActiveImageNode()
   }, [autoGenerateNodeId, activeGenerationNode?.id])
 
-  const agentImageCandidates: AgentImageReference[] = nodes.flatMap((node) => {
-    if ((node.data.kind !== 'image' && node.data.kind !== 'upload') || !node.data.imageUrl) return []
-    return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl }]
+  const agentImageCandidates: AgentImageReference[] = nodes.flatMap((node): AgentImageReference[] => {
+    if ((node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl) {
+      return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url: node.data.imageUrl, kind: 'image' as const }]
+    }
+    if (node.data.kind === 'video') {
+      const url = node.data.videoUrl || (node.data.videoMediaId ? historyMediaObjectUrlsRef.current.get(node.data.videoMediaId) : undefined)
+      if (url) return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), url, kind: 'video' as const }]
+    }
+    return []
   })
 
   const resolveAgentContextReferences = (content: string, explicitReferences: AgentImageReference[]) => {
     const explicitContexts: AgentContextReference[] = explicitReferences.map((reference) => ({
       ...reference,
-      kind: 'image',
+      kind: reference.kind ?? 'image',
     }))
     const hasContextualPointer = /(?:上面|前面|刚才|之前|上一(?:张|段|个|版)|那个|这个|它|其|图\s*\d+|图片\s*\d+|参考图\s*\d+|logo|标志|图标|海报|文案|文字|标题|脚本|提案)/i.test(content)
     if (!hasContextualPointer) return { imageReferences: explicitReferences, contextReferences: explicitContexts }
@@ -6554,6 +8764,10 @@ function App() {
     const nodeContexts = [...nodes].reverse().flatMap((node): AgentContextReference[] => {
       if ((node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl) {
         return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), kind: 'image', url: node.data.imageUrl }]
+      }
+      if (node.data.kind === 'video') {
+        const url = node.data.videoUrl || (node.data.videoMediaId ? historyMediaObjectUrlsRef.current.get(node.data.videoMediaId) : undefined)
+        if (url) return [{ nodeId: node.id, name: getNodeDisplayTitle(node.data), kind: 'video', url }]
       }
       if (node.data.kind === 'text') {
         const text = (node.data.body || node.data.promptText || '').trim()
@@ -6575,7 +8789,7 @@ function App() {
         ?? [...agentPlans].reverse().find((plan) => plan.references?.length)?.references
       const match = numberedSource?.[index]
       if (match) {
-        resolved = { ...match, kind: 'image' }
+        resolved = { ...match, kind: match.kind ?? 'image' }
         reason = `匹配“${ordinal[0]}”`
       }
     }
@@ -6593,7 +8807,7 @@ function App() {
     if (!resolved && /(?:图|图片|海报|上一张)/i.test(content)) {
       const match = orderedImages[0]
       if (match) {
-        resolved = { ...match, kind: 'image' }
+        resolved = { ...match, kind: match.kind ?? 'image' }
         reason = '匹配最近提及的图片'
       }
     }
@@ -6602,7 +8816,7 @@ function App() {
       resolved = selectedContexts.length === 1
         ? selectedContexts[0]
         : recentReferencedImage
-          ? { ...recentReferencedImage, kind: 'image' }
+          ? { ...recentReferencedImage, kind: recentReferencedImage.kind ?? 'image' }
           : nodeContexts.length === 1
             ? nodeContexts[0]
             : undefined
@@ -6643,13 +8857,16 @@ function App() {
       id: nodeId,
       type: 'disy',
       position: { x: center.x - 130, y: center.y - 110 },
-      data: { kind: 'upload', title: reference.name, body: '', fileName: reference.name, imageUrl: reference.url },
+      ...(reference.kind === 'video' ? { style: getVideoNodeSize('16:9') } : {}),
+      data: reference.kind === 'video'
+        ? { kind: 'video', title: reference.name, body: '', fileName: reference.name, videoUrl: reference.url, videoSource: 'local-upload', status: '已上传' }
+        : { kind: 'upload', title: reference.name, body: '', fileName: reference.name, imageUrl: reference.url },
     }])
-    setToastMessage('参考图已加入画布和 Agent 对话')
+    setToastMessage(reference.kind === 'video' ? '参考视频已加入画布和 Agent 对话' : '参考图已加入画布和 Agent 对话')
     return { ...reference, nodeId }
   }
 
-  const sendAgentMessage = async (content: string, invocationText = content, messageReferences = agentReferences) => {
+  const sendAgentMessage = async (content: string, invocationText = content, messageReferences = agentReferences, videoGenerationMode?: 'text' | 'image' | 'frames' | 'reference' | 'omni') => {
     const [connectionId, modelId] = agentTextModelKey.split('::')
     const selection = enabledTextModels.find((item) => item.connection.id === connectionId && item.model.id === modelId)
     if (!selection) {
@@ -6687,8 +8904,9 @@ function App() {
       || agentMessages.slice(-6).some((message) => Boolean(message.references?.length))
       || agentPlans.some((plan) => plan.status === 'proposed' || plan.status === 'ready')
     const requestedPlanCount = explicitPlanCount ?? (directImagePlanRequested ? 1 : 3)
+    const expectsVideoPlans = messageExpectsVideoPlans(invocationText)
     const expectsImagePlans = messageExpectsImagePlans(invocationText)
-      || (directImagePlanRequested && hasImageConversationContext)
+      || (directImagePlanRequested && hasImageConversationContext && !expectsVideoPlans)
     const availableStyleKeywords = stylePresets
       .filter((preset) => preset.enabled && preset.references.length && preset.keyword.trim())
       .map((preset) => `${preset.name}：“${preset.keyword.trim()}”`)
@@ -6701,7 +8919,11 @@ function App() {
     setAgentMessages(nextMessages)
     setAgentBusy(true)
     try {
-      const images = await Promise.all(sentReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
+      const imageReferences = sentReferences.filter((reference) => reference.kind !== 'video')
+      const videoReferences = sentReferences.filter((reference) => reference.kind === 'video')
+      const images = await Promise.all(imageReferences.map((reference) => prepareReferenceImageForRequest(reference.url, controller.signal)))
+      const videoFrames = (await Promise.all(videoReferences.map((reference) => captureVideoReferenceFrames({ id: reference.nodeId, source: 'connection', sourceNodeId: reference.nodeId, selected: true, name: reference.name, mention: `@[node:${reference.nodeId}]`, kind: 'video', available: true, url: reference.url }, controller.signal)))).flat()
+      images.push(...videoFrames)
       const transcript = nextMessages.slice(-12).map((message) => `${message.role === 'user' ? '用户' : 'Disy'}：${message.role === 'assistant' ? normalizeAgentMessageContent(message.content) : message.content}`).join('\n')
       const resolvedContextGuide = resolvedContextReferences.length
         ? `系统已为本轮解析出这些上下文对象：${resolvedContextReferences.map((reference) => `${reference.kind === 'image' ? '图片' : '文本'}“${reference.name}”${reference.excerpt ? `（内容摘要：${reference.excerpt}）` : ''}${reference.autoResolved ? `，自动关联依据：${reference.resolutionReason}` : ''}`).join('；')}。必须按这些对象理解用户指代；如语义仍不唯一，在 reply 中追问，不要自行替换成其他对象。`
@@ -6715,22 +8937,25 @@ function App() {
         : ''
       const numberedUserRequest = numberAgentReferenceMentions(content, sentReferences)
       const referenceUsageGuide = sentReferences.length
-        ? `本次多图任务的用户原始要求如下，必须逐字理解图像角色，并把关系明确写入每个 imagePlans.prompt；不得把待修复主体、风格参考、构图参考或其他用途互换：\n${numberedUserRequest}`
+        ? `本次媒体任务的用户原始要求如下，必须逐字理解图像角色，并把关系明确写入每个 imagePlans.prompt 或 videoPlans.prompt；不得把待修复主体、风格参考、构图参考或其他用途互换：\n${numberedUserRequest}`
         : ''
-      const orchestrationGuide = `你不是只负责生图的助手，而是创作流程的总控。先识别用户的目标属于脚本/文案、设计提案、图像、视频或混合任务。只要缺少会影响结果的关键信息，先用 1 到 3 个简洁问题逐步澄清：目标受众、交付物、风格、素材、时长/规格与优先级；不要一次抛出冗长问卷。用户说“写脚本”时，先确认题材、平台、时长、人物和结构，再给大纲，确认后再给分场/镜头/台词；用户说“设计提案”时，先确认品牌目标、受众、场景与约束，再给可选方向；用户说“视频”时，先确认时长、平台、画幅、节奏与素材，再规划脚本、分镜、画面与声音。信息已足够时，按内容类型给出明确下一步：文本内容应结构化、可直接放入文本节点；图像才提出 imagePlans；视频先拆为脚本、分镜、素材和生成任务，暂不假装视频已生成。不要为了凑方案而在信息不足时直接生成。`
+      const orchestrationGuide = `你不是只负责生图的助手，而是创作流程的总控。先识别用户的目标属于脚本/文案、设计提案、图像、视频或混合任务。只要缺少会影响结果的关键信息，先用 1 到 3 个简洁问题逐步澄清：目标受众、交付物、风格、素材、时长/规格与优先级；不要一次抛出冗长问卷。用户说“写脚本”时，先确认题材、平台、时长、人物和结构，再给大纲，确认后再给分场/镜头/台词；用户说“设计提案”时，先确认品牌目标、受众、场景与约束，再给可选方向；用户说“视频”时，信息足够后提出 videoPlans，由用户在确认卡中检查比例、清晰度、时长和数量再生成。信息已足够时，文本内容应结构化、可直接放入文本节点；图像提出 imagePlans；视频提出 videoPlans。不要为了凑方案而在信息不足时直接生成。`
       const textNodeGuide = `文本节点有严格门槛：需求澄清、创作方向、大纲提案、用户尚未确认的草稿都只能放在 reply 中，绝对不要返回 textNode。只有用户已经明确选择或确认方向，并且你已产出一份完整、整合、可直接交付的最终脚本/文案/提案正文时，才返回 textNode。textNode 只能有一个，content 必须是完整交付物，不能是追问、方案列表或解释。`
       const directPlanGuide = directImagePlanRequested
-        ? '用户本次明确不要再选择多个方案。若上下文中的画面目标已经足够清楚，直接把用户要求整合成唯一一项 imagePlans，供界面创建待确认卡；不要再追问创作方向，也不要返回多个备选。仍然不得直接声称已经生图。'
+        ? '用户本次明确不要再选择多个方案。若上下文中的媒体目标已经足够清楚，直接把用户要求整合成唯一一项对应的 imagePlans 或 videoPlans，供界面创建待确认卡；不要再追问创作方向，也不要返回多个备选。仍然不得直接声称已经生成。'
         : '用户未明确跳过方案选择时，按正常流程提出可选方向。'
-      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成图像，也禁止声称图片已经生成；用户明确表达想生成图像时，必须先提出 imagePlans，等待用户在界面选择方案并逐一点击确认后才能生图。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"方案一","prompt":"只描述这个方向、可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}]}。不满足最终文本交付条件时必须省略 textNode。本次如果需要生图，imagePlans 必须恰好返回 ${requestedPlanCount} 项：用户明确要求了方案数量时严格遵循；${directImagePlanRequested ? '用户要求跳过多方案时只返回一个可确认方案' : '未明确数量时默认三个方案'}。每个方向必须是独立项目，禁止把多个方向的关键词合并进同一个 prompt。count 只表示同一方案生成几张变体，不表示方案数量。如果不需要生图，省略 imagePlans。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。${resolvedContextGuide}${referenceUsageGuide ? `\n\n${referenceUsageGuide}` : ''}\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
+      const instruction = `你是 Disy 创意画布助手。请和用户中文对话、脑暴。${orchestrationGuide} ${textNodeGuide} ${directPlanGuide} 禁止直接生成媒体，也禁止声称图片或视频已经生成；必须先提出对应确认方案。严格只返回 JSON，不要 Markdown：{"reply":"自然对话回复；文本/脚本请用清晰标题、列表与可复制内容组织","textNode":{"title":"仅最终交付物标题","content":"仅最终整合正文"},"imagePlans":[{"label":"图像方案一","prompt":"可直接用于生图的完整中文提示词","aspectRatio":"1:1","resolution":"1K","detail":"medium","count":1}],"videoPlans":[{"label":"视频方案一","prompt":"包含主体动作、镜头运动、场景和节奏的完整中文视频提示词","aspectRatio":"16:9","resolution":"720p","duration":4,"count":1}]}。只返回任务需要的字段；不满足最终文本交付条件时省略 textNode；不需要图像时省略 imagePlans，不需要视频时省略 videoPlans。需要图像或视频时，对应 plans 必须恰好返回 ${requestedPlanCount} 项。每个方向必须是独立项目，禁止把多个方向合并进同一个 prompt。count 只表示同一方案生成几份结果，不表示方案数量。用户提到图1、图片1或参考图1时，都表示下方编号中的同一张图片；每份方案必须保留用户指定的图片编号及其用途，不得交换顺序。${resolvedContextGuide}${referenceUsageGuide ? `\n\n${referenceUsageGuide}` : ''}\n\n${agentReferenceGuide || '本次对话没有参考图。'}\n\n${styleInvocationWords.length ? `用户本次已调用风格预设：${invokedStylePresets.map((preset) => `${preset.name}（${preset.keyword}）`).join('、')}，确认卡会自动附带对应风格图。` : availableStyleKeywords.length ? `可用风格预设为：${availableStyleKeywords.join('；')}。仅当用户本次消息包含对应调用词时才附带风格图。` : '项目未设置可用的风格调用词。'}\n\n${transcript}`
       let raw = await generateRemoteText({ baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id }, instruction, { referenceImages: images, signal: controller.signal })
       if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
       let parsed = parseAgentReply(raw)
       let parsedPlans = parsed.imagePlans ?? (parsed.imagePlan ? [parsed.imagePlan] : [])
-      if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
+      let parsedVideoPlans = parsed.videoPlans ?? (parsed.videoPlan ? [parsed.videoPlan] : [])
+      const planCountsInvalid = () => ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount)
+        || ((expectsVideoPlans || parsedVideoPlans.length > 0) && parsedVideoPlans.length !== requestedPlanCount)
+      if (planCountsInvalid()) {
         raw = await generateRemoteText(
           { baseUrl: selection.connection.baseUrl, apiKey: selection.connection.apiKey, model: selection.model.id },
-          `${instruction}\n\n你上一次返回了 ${parsedPlans.length} 个方案，数量不符合要求。请重新返回恰好 ${requestedPlanCount} 个彼此独立的 imagePlans。`,
+          `${instruction}\n\n你上一次返回的方案数量不符合要求。请为本次实际需要的每种媒体重新返回恰好 ${requestedPlanCount} 个彼此独立的 plans。`,
           { referenceImages: images, signal: controller.signal },
         )
         if (controller.signal.aborted || requestVersion !== agentRequestVersionRef.current) return
@@ -6738,8 +8963,9 @@ function App() {
         const correctedPlans = corrected.imagePlans ?? (corrected.imagePlan ? [corrected.imagePlan] : [])
         parsed = corrected
         parsedPlans = correctedPlans
+        parsedVideoPlans = corrected.videoPlans ?? (corrected.videoPlan ? [corrected.videoPlan] : [])
       }
-      if ((expectsImagePlans || parsedPlans.length > 0) && parsedPlans.length !== requestedPlanCount) {
+      if (planCountsInvalid()) {
         throw new Error(`Agent 未能返回要求的 ${requestedPlanCount} 个方案，请重试一次`)
       }
       const assistantMessage: AgentMessage = {
@@ -6774,6 +9000,36 @@ function App() {
           count: agentImageDefaults.count,
           imageConnectionId,
           imageModelId,
+          assistantMessageId: assistantMessage.id,
+          createdAt,
+        }))])
+      }
+      parsedVideoPlans = parsedVideoPlans.slice(0, requestedPlanCount).map((draft) => ({
+        ...draft,
+        prompt: ensureAgentPlanReferenceContext(draft.prompt, numberedUserRequest, sentReferences),
+      }))
+      if (parsedVideoPlans.length) {
+        const [videoConnectionId, videoModelId] = agentVideoModelKey.split('::')
+        const createdAt = new Date().toISOString()
+        setAgentVideoPlans((current) => [...current, ...parsedVideoPlans.map((draft, index): AgentVideoPlan => ({
+          id: `agent-video-plan-${crypto.randomUUID()}`,
+          mediaKind: 'video',
+          status: 'ready',
+          label: draft.label || `视频方案${index + 1}`,
+          prompt: draft.prompt,
+          referenceNodeIds: sentReferences.map((item) => item.nodeId),
+          references: sentReferences,
+          contextReferences: resolvedContextReferences,
+          invokedStyleReferences,
+          styleInvocationWord: styleInvocationWords.length ? styleInvocationWords.join('、') : undefined,
+          invokedStylePresets,
+          aspectRatio: agentVideoDefaults.aspectRatio,
+          resolution: agentVideoDefaults.resolution,
+          duration: agentVideoDefaults.duration,
+          count: agentVideoDefaults.count,
+          generationMode: videoGenerationMode ?? (sentReferences.some((reference) => reference.kind === 'video') ? 'omni' : sentReferences.length ? 'reference' : 'text'),
+          videoConnectionId,
+          videoModelId,
           assistantMessageId: assistantMessage.id,
           createdAt,
         }))])
@@ -6834,6 +9090,89 @@ function App() {
       return { ...plan, status: selectedSet.has(plan.id) ? 'ready' as const : 'proposed' as const }
     }))
     setToastMessage(selectedPlanIds.length > 1 ? `已展开 ${selectedPlanIds.length} 个独立方案，请分别确认` : '方案已展开，请确认后生成')
+  }
+
+  const confirmAgentVideoPlan = async (planId: string) => {
+    if (agentPlanLocksRef.current.has(planId)) return
+    const plan = agentVideoPlans.find((item) => item.id === planId)
+    if (!plan || plan.status !== 'ready' || !plan.prompt.trim()) return
+    const model = enabledVideoModels.find((item) => item.connection.id === plan.videoConnectionId && item.model.id === plan.videoModelId)
+    if (!model) {
+      setToastMessage('这份方案的视频模型不可用，请重新选择')
+      return
+    }
+    const capabilities = getVideoModelCapabilities(`${model.model.id} ${model.model.name}`)
+    const aspectRatio = capabilities.ratios.includes(plan.aspectRatio as VideoAspectRatio) ? plan.aspectRatio as VideoAspectRatio : capabilities.ratios[0] ?? '16:9'
+    const resolution = capabilities.resolutions.includes(plan.resolution as VideoResolution) ? plan.resolution as VideoResolution : capabilities.resolutions[0] ?? '720p'
+    const savedReferences = new Map((plan.references ?? []).map((reference) => [reference.nodeId, reference]))
+    const references = plan.referenceNodeIds
+      .map((nodeId) => savedReferences.get(nodeId) ?? agentImageCandidates.find((item) => item.nodeId === nodeId))
+      .filter((item): item is AgentImageReference => Boolean(item))
+    if (references.length !== plan.referenceNodeIds.length) {
+      setToastMessage('部分参考图已被删除或失效，请重新发起方案')
+      return
+    }
+    const generationMode = plan.generationMode ?? (references.some((reference) => reference.kind === 'video') ? 'omni' : references.length ? 'reference' : 'text')
+    const imageReferences = references.filter((reference) => reference.kind !== 'video')
+    const videoReferences = references.filter((reference) => reference.kind === 'video')
+    if (generationMode === 'text' && references.length) {
+      setToastMessage('文生视频不接收参考素材，请移除引用或切换生成模式')
+      return
+    }
+    if (generationMode !== 'omni' && videoReferences.length) {
+      setToastMessage('当前生成模式不接收参考视频，请切换到全能参考')
+      return
+    }
+    const styleReferences = uniqueNamedImageReferences((plan.invokedStyleReferences ?? []).map((reference) => ({ id: reference.id, name: reference.name, url: reference.url })))
+    const referenceImages = uniqueNamedImageReferences([
+      ...imageReferences.map((reference) => ({ id: reference.nodeId, name: reference.name, url: reference.url })),
+      ...styleReferences,
+    ]).slice(0, 4)
+    const nodeId = `agent-video-${crypto.randomUUID()}`
+    const flowPosition = screenToFlowPosition({ x: Math.max(360, window.innerWidth - (agentOpen ? 720 : 420)), y: 230 })
+    const generatedNode: CanvasNode = {
+      id: nodeId,
+      type: 'disy',
+      position: flowPosition,
+      style: getVideoNodeSize(aspectRatio),
+      data: {
+        kind: 'video',
+        title: '视频',
+        body: plan.prompt.trim(),
+        promptText: plan.prompt.trim(),
+        status: '待生成',
+        videoAspectRatio: aspectRatio,
+        videoResolution: resolution,
+        videoDuration: Math.min(15, Math.max(4, plan.duration || 4)),
+        videoGenerateCount: Math.min(4, Math.max(1, plan.count || 1)) as 1 | 2 | 3 | 4,
+        videoGenerateAudio: true,
+        videoQuality: 'professional',
+        videoGenerationMethod: generationMode,
+        videoReferenceImageUrl: generationMode === 'image' ? referenceImages[0]?.url : undefined,
+        videoReferenceImageName: generationMode === 'image' ? referenceImages[0]?.name : undefined,
+        videoFirstFrameUrl: generationMode === 'frames' ? referenceImages[0]?.url : undefined,
+        videoLastFrameUrl: generationMode === 'frames' ? referenceImages[1]?.url : undefined,
+        referenceImages,
+        videoReferenceVideos: generationMode === 'omni' ? videoReferences.slice(0, 3).map((reference) => ({ id: reference.nodeId, name: reference.name, url: reference.url })) : undefined,
+        videoReferenceOrder: [...referenceImages.map((reference) => reference.id), ...videoReferences.slice(0, 3).map((reference) => reference.nodeId)],
+        videoModelConnectionId: model.connection.id,
+        videoModelId: model.model.id,
+        videoModelName: model.model.name,
+      },
+    }
+    const canvasReferenceIds = new Set(nodes.map((node) => node.id))
+    const createdEdges: Edge[] = references
+      .filter((reference) => canvasReferenceIds.has(reference.nodeId))
+      .map((reference) => ({ id: `agent-video-reference-${reference.nodeId}-${nodeId}`, source: reference.nodeId, target: nodeId, type: 'luminous', data: { referenceSelected: true } }))
+    agentPlanLocksRef.current.add(planId)
+    setAgentVideoPlans((current) => current.map((item) => item.id === planId ? { ...item, status: 'running', nodeId, aspectRatio, resolution } : item))
+    setNodes((current) => current.some((node) => node.id === nodeId) ? current : [...current, generatedNode])
+    setEdges((current) => [...current, ...createdEdges.filter((edge) => !current.some((item) => item.id === edge.id))])
+    setActiveVideoNodeId(nodeId)
+    window.requestAnimationFrame(() => {
+      updateNodeInternals(nodeId)
+      window.setTimeout(() => generateVideoNodeRef.current(nodeId), 0)
+    })
   }
 
   const confirmAgentPlan = async (planId: string) => {
@@ -6927,6 +9266,7 @@ function App() {
           plans: nextPlans,
           selectedChatModelId: agentTextModelKey,
           selectedImageModelId: agentImageModelKey,
+          selectedVideoModelId: agentVideoModelKey,
           createdAt: agentMessages[0]?.createdAt ?? new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         })
@@ -7064,7 +9404,7 @@ function App() {
 
   const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth
   const nodeCenterX = nodeOverlayRect ? nodeOverlayRect.left + nodeOverlayRect.width / 2 : shellWidth / 2
-  const nodeEditorWidth = Math.max(260, Math.min(680, shellWidth - 32))
+  const nodeEditorWidth = Math.max(260, Math.min(760, shellWidth - 32))
   const nodeEditorCenterX = Math.max(
     16 + nodeEditorWidth / 2,
     Math.min(nodeCenterX, shellWidth - 16 - nodeEditorWidth / 2),
@@ -7096,10 +9436,18 @@ function App() {
       : { key, direction: key === 'name' ? 'asc' : 'desc' })
   }
   const latestProjectCoverById = useMemo(() => {
-    const result = new Map<string, GenerationRecord>()
-    generationHistory.forEach((record) => { const projectId = record.projectId ?? CURRENT_PROJECT_ID; const current = result.get(projectId); if (!current || record.createdAt > current.createdAt) result.set(projectId, record) })
+    const result = new Map<string, ProjectCoverPreview>()
+    generationHistory.forEach((record) => {
+      const projectId = record.projectId ?? CURRENT_PROJECT_ID
+      const current = result.get(projectId)
+      if (!current || record.createdAt > current.createdAt) result.set(projectId, { kind: 'image', url: record.imageUrl, createdAt: record.createdAt })
+    })
+    Object.entries(latestProjectVideoById).forEach(([projectId, cover]) => {
+      const current = result.get(projectId)
+      if (!current || cover.createdAt > current.createdAt) result.set(projectId, cover)
+    })
     return result
-  }, [generationHistory])
+  }, [generationHistory, latestProjectVideoById])
   const activeTaskCountByProjectId = useMemo(() => {
     const result = new Map<string, number>()
     activeGenerationTaskKeys.forEach((taskKey) => { const projectId = generationTaskProjectIdsRef.current.get(taskKey); if (projectId) result.set(projectId, (result.get(projectId) ?? 0) + 1) })
@@ -7144,18 +9492,57 @@ function App() {
     const collapsedGroupIds = new Set(nodes
       .filter((node) => node.data.kind === 'group' && node.data.groupCollapsed)
       .map((node) => node.id))
-    const hiddenChildIds = new Set(nodes
+    const collapsedParentByChildId = new Map(nodes
       .filter((node) => node.parentId && collapsedGroupIds.has(node.parentId))
-      .map((node) => node.id))
-    if (!groupIds.size && !hiddenChildIds.size) return edges
-    // A folder is layout-only. Hide child relationships while it is collapsed;
-    // restore the exact original node-to-node edges when it expands.
-    return edges.filter((edge) => (
-      !groupIds.has(edge.source)
-      && !groupIds.has(edge.target)
-      && !hiddenChildIds.has(edge.source)
-      && !hiddenChildIds.has(edge.target)
-    ))
+      .map((node) => [node.id, node.parentId!] as const))
+    if (!groupIds.size && !collapsedParentByChildId.size) return edges
+
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const getNodeCenter = (nodeId: string) => {
+      const node = nodeById.get(nodeId)
+      if (!node) return { x: 0, y: 0 }
+      const styleWidth = typeof node.style?.width === 'number' ? node.style.width : Number.parseFloat(String(node.style?.width ?? ''))
+      const styleHeight = typeof node.style?.height === 'number' ? node.style.height : Number.parseFloat(String(node.style?.height ?? ''))
+      const width = node.measured?.width || (Number.isFinite(styleWidth) ? styleWidth : 275)
+      const height = node.measured?.height || (Number.isFinite(styleHeight) ? styleHeight : 126)
+      return { x: node.position.x + width / 2, y: node.position.y + height / 2 }
+    }
+    const getFacingSide = (groupId: string, otherNodeId: string) => {
+      const groupCenter = getNodeCenter(groupId)
+      const otherCenter = getNodeCenter(otherNodeId)
+      const deltaX = otherCenter.x - groupCenter.x
+      const deltaY = otherCenter.y - groupCenter.y
+      if (Math.abs(deltaX) >= Math.abs(deltaY)) return deltaX >= 0 ? 'right' : 'left'
+      return deltaY >= 0 ? 'bottom' : 'top'
+    }
+
+    // Groups are layout-only. While collapsed, crossing edges terminate on the
+    // folder shell; canonical child-to-node edges stay untouched for expansion.
+    return edges.flatMap((edge) => {
+      if (groupIds.has(edge.source) || groupIds.has(edge.target)) return []
+      const collapsedSourceGroupId = collapsedParentByChildId.get(edge.source)
+      const collapsedTargetGroupId = collapsedParentByChildId.get(edge.target)
+      if (!collapsedSourceGroupId && !collapsedTargetGroupId) return [edge]
+      if (collapsedSourceGroupId && collapsedSourceGroupId === collapsedTargetGroupId) return []
+
+      const source = collapsedSourceGroupId ?? edge.source
+      const target = collapsedTargetGroupId ?? edge.target
+      return [{
+        ...edge,
+        id: `collapsed-proxy:${edge.id}`,
+        source,
+        target,
+        sourceHandle: collapsedSourceGroupId
+          ? `group-source-${getFacingSide(collapsedSourceGroupId, target)}`
+          : edge.sourceHandle,
+        targetHandle: collapsedTargetGroupId
+          ? `group-target-${getFacingSide(collapsedTargetGroupId, source)}`
+          : edge.targetHandle,
+        selected: false,
+        selectable: false,
+        deletable: false,
+      }]
+    })
   }, [edges, nodes])
 
   const groupNodeIdKey = useMemo(() => nodes
@@ -7184,6 +9571,7 @@ function App() {
       setActiveEditorNodeId(null)
       setActiveImageNodeId(null)
       setActiveGenerationNodeId(null)
+      setActiveVideoNodeId(null)
       setExpandedEditorNodeId(null)
     }
     if (!selectedNodes.some((node) => node.data.kind === 'group')) {
@@ -7204,7 +9592,8 @@ function App() {
 
   const multipleNodeToolbarAllowed = marqueeSelectionCommitted && selectedNodeIds.length > 1
   const selectionToolbarAllowed = multipleNodeToolbarAllowed || Boolean(selectedGroupNode)
-  const automaticPerformanceMode = nodes.length >= 20 || edges.length >= 36
+  // Enable the lightweight canvas path before dense workflows become janky.
+  const automaticPerformanceMode = nodes.length >= 16 || edges.length >= 28
   const dragOverlapFrameRef = useRef<number | null>(null)
   const draggingOverlapNodeRef = useRef<CanvasNode | null>(null)
   const tiltedNodeIdsRef = useRef<Set<string>>(new Set())
@@ -7337,69 +9726,6 @@ function App() {
     nodeReturnTweensRef.current.clear()
     tiltedNodeIdsRef.current.forEach((nodeId) => gsap.killTweensOf(getNodeCardElements(nodeId)))
   }, [])
-
-  const resolveNodeOverlap = (nodeId: string) => {
-    const liveNodes = getNodes()
-    const movingNode = liveNodes.find((node) => node.id === nodeId)
-    if (!movingNode || movingNode.parentId) return false
-    const movingSize = getNodeSize(movingNode)
-    const gap = 28
-    const occupied = liveNodes
-      .filter((node) => node.id !== nodeId && !node.parentId)
-      .map((node) => {
-        const size = getNodeSize(node)
-        return {
-          id: node.id,
-          left: node.position.x,
-          top: node.position.y,
-          right: node.position.x + size.width,
-          bottom: node.position.y + size.height,
-        }
-      })
-    const collides = (position: { x: number; y: number }) => occupied.some((rect) => !(
-      position.x + movingSize.width + gap <= rect.left
-      || position.x - gap >= rect.right
-      || position.y + movingSize.height + gap <= rect.top
-      || position.y - gap >= rect.bottom
-    ))
-    if (!collides(movingNode!.position)) {
-      dragStartPositionsRef.current.delete(nodeId)
-      return false
-    }
-
-    const originalPosition = dragStartPositionsRef.current.get(nodeId)
-    if (!originalPosition) return false
-    // Keep the canvas intentional: dropping onto another top-level node restores
-    // the dragged node to where the drag began instead of inventing a new slot.
-    dragStartPositionsRef.current.delete(nodeId)
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    nodeReturnTweensRef.current.get(nodeId)?.kill()
-    if (reducedMotion) {
-      updateNode(nodeId, { position: originalPosition, dragging: false })
-      setToastMessage('节点重叠，已回到原位置')
-      return true
-    }
-    const animatedPosition = { ...movingNode.position }
-    updateNode(nodeId, { dragging: false })
-    const returnTween = gsap.to(animatedPosition, {
-      x: originalPosition.x,
-      y: originalPosition.y,
-      duration: .5,
-      ease: 'back.out(1.12)',
-      overwrite: 'auto',
-      onUpdate: () => updateNode(nodeId, {
-        position: { x: animatedPosition.x, y: animatedPosition.y },
-        dragging: false,
-      }),
-      onComplete: () => {
-        updateNode(nodeId, { position: originalPosition, dragging: false })
-        nodeReturnTweensRef.current.delete(nodeId)
-        setToastMessage('节点重叠，已平滑回到原位置')
-      },
-    })
-    nodeReturnTweensRef.current.set(nodeId, returnTween)
-    return true
-  }
 
   const confirmAgentTextPlan = (planId: string) => {
     const plan = agentTextPlans.find((item) => item.id === planId)
@@ -7627,6 +9953,22 @@ function App() {
         .filter((node) => (node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl)
         .map((node) => node.data.imageUrl as string)))
         .slice(0, 3)
+      const seenPreviewMedia = new Set<string>()
+      const previewMedia = children.flatMap<NonNullable<CanvasNode['data']['groupPreviewMedia']>[number]>((node) => {
+        if ((node.data.kind === 'image' || node.data.kind === 'upload') && node.data.imageUrl) {
+          const key = `image:${node.data.imageUrl}`
+          if (seenPreviewMedia.has(key)) return []
+          seenPreviewMedia.add(key)
+          return [{ kind: 'image', url: node.data.imageUrl }]
+        }
+        if (node.data.kind === 'video' && (node.data.videoUrl || node.data.videoMediaId)) {
+          const key = `video:${node.data.videoMediaId || node.data.videoUrl}`
+          if (seenPreviewMedia.has(key)) return []
+          seenPreviewMedia.add(key)
+          return [{ kind: 'video', url: node.data.videoUrl, mediaId: node.data.videoMediaId }]
+        }
+        return []
+      }).slice(0, 3)
       return current.map((node) => {
         if (node.id === groupId) {
           return {
@@ -7648,6 +9990,7 @@ function App() {
               groupAccentColor: node.data.groupAccentColor || '#78b7ef',
               groupNodeCount: children.length,
               groupPreviewUrls: collapsed ? previewUrls : node.data.groupPreviewUrls,
+              groupPreviewMedia: collapsed ? previewMedia : node.data.groupPreviewMedia,
               ...(collapsed ? {
                 groupExpandedWidth: currentSize.width,
                 groupExpandedHeight: currentSize.height,
@@ -7775,6 +10118,24 @@ function App() {
     await downloadSelectedImages([node])
   }
 
+  const downloadGenerationRecord = async (record: GenerationRecord) => {
+    try {
+      const blob = record.mediaId
+        ? (await loadHistoryMedia(record.mediaId))?.blob
+        : record.imageUrl
+          ? await fetch(record.imageUrl).then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            return response.blob()
+          })
+          : undefined
+      if (!blob) throw new Error('媒体不存在')
+      await triggerBlobDownload(blob, record.fileName || (record.kind === 'video' ? 'disy-video.mp4' : 'disy-image.png'))
+      setToastMessage('已开始下载')
+    } catch (error) {
+      setToastMessage(error instanceof Error ? `下载失败：${error.message}` : '下载失败')
+    }
+  }
+
   const saveImageUrlToAssets = (imageUrl: string, fileName: string, title = fileName) => {
     const node: CanvasNode = {
       id: `preview-asset-${crypto.randomUUID()}`,
@@ -7786,6 +10147,17 @@ function App() {
   }
 
   const downloadAsset = async (asset: SavedAsset) => {
+    if (asset.data?.kind === 'video' && (asset.data.videoMediaId || asset.data.videoUrl)) {
+      try {
+        const media = asset.data.videoMediaId ? await loadHistoryMedia(asset.data.videoMediaId) : null
+        const blob = media?.blob ?? (asset.data.videoUrl ? await fetch(asset.data.videoUrl).then((response) => response.blob()) : null)
+        if (!blob) throw new Error('视频媒体不存在')
+        await triggerBlobDownload(blob, asset.data.fileName || asset.title || 'disy-video.mp4')
+      } catch (error) {
+        setToastMessage(error instanceof Error ? `视频下载失败：${error.message}` : '视频下载失败')
+      }
+      return
+    }
     if (asset.nodes?.some((node) => node.data.imageUrl)) {
       await downloadSelectedImages(asset.nodes)
       return
@@ -7852,9 +10224,15 @@ function App() {
   }
 
   const downloadAssetBatch = async (assetIds: string[]) => {
+    const selectedAssets = assetIds.flatMap((assetId) => {
+      const asset = savedAssets.find((item) => item.id === assetId)
+      return asset ? [asset] : []
+    })
+    const videoAssets = selectedAssets.filter((asset) => asset.data?.kind === 'video')
+    for (const asset of videoAssets) await downloadAsset(asset)
     const imageNodes = assetIds.flatMap((assetId, assetIndex) => {
       const asset = savedAssets.find((item) => item.id === assetId)
-      if (!asset) return []
+      if (!asset || asset.data?.kind === 'video') return []
       const nestedImages = asset.nodes?.filter((node) => Boolean(node.data.imageUrl)) ?? []
       if (nestedImages.length) return nestedImages
       const imageUrl = getAssetPreviewUrl(asset)
@@ -7872,24 +10250,18 @@ function App() {
         },
       }]
     })
-    if (!imageNodes.length) {
+    if (!imageNodes.length && !videoAssets.length) {
       setToastMessage('选中的资产中没有可下载图片')
       return
     }
-    await downloadSelectedImages(imageNodes)
+    if (imageNodes.length) await downloadSelectedImages(imageNodes)
   }
 
   const downloadHistoryBatch = async (recordIds: string[]) => {
-    const imageNodes: CanvasNode[] = recordIds.flatMap((recordId) => {
+    await Promise.all(recordIds.map((recordId) => {
       const record = generationHistory.find((item) => item.id === recordId)
-      return record ? [{
-        id: `history-download-${record.id}`,
-        type: 'disy',
-        position: { x: 0, y: 0 },
-        data: { kind: 'image', title: record.fileName, body: record.prompt, imageUrl: record.imageUrl, fileName: record.fileName },
-      }] : []
-    })
-    if (imageNodes.length) await downloadSelectedImages(imageNodes)
+      return record ? downloadGenerationRecord(record) : undefined
+    }))
   }
 
   const deleteAssetBatch = (assetIds: string[]) => {
@@ -8108,6 +10480,8 @@ function App() {
   }, new Map<string, SavedAsset[]>()).entries()).reverse()
 
   const getAssetPreviewUrl = (asset: SavedAsset) => asset.data?.imageUrl
+    || asset.data?.videoUrl
+    || assetMediaUrls[asset.id]
     || asset.nodes?.find((node) => Boolean(node.data.imageUrl))?.data.imageUrl
 
   const currentGenerationHistory = generationHistory.filter((record) => record.projectId ? record.projectId === activeProjectId : activeProjectId === CURRENT_PROJECT_ID)
@@ -8144,6 +10518,7 @@ function App() {
     if (outputHistoryFilter === 'failed' && record.status !== 'failed') return false
     if (outputHistoryFilter === 'text' && record.kind !== 'text') return false
     if (outputHistoryFilter === 'image' && record.kind !== 'image') return false
+    if (outputHistoryFilter === 'video' && record.kind !== 'video') return false
     const query = outputHistorySearch.trim().toLowerCase()
     if (!query) return true
     return `${record.prompt} ${record.modelName} ${record.modelId} ${record.error?.summary ?? ''} ${record.error?.detail ?? ''}`.toLowerCase().includes(query)
@@ -8156,6 +10531,9 @@ function App() {
       url,
       alt: asset.title || asset.data?.fileName || '资产预览',
       fileName: asset.title || asset.data?.fileName || 'disy-asset.png',
+      kind: asset.data?.kind === 'video' ? 'video' as const : 'image' as const,
+      record: undefined,
+      asset,
     }] : []
   })
   const historyPreviewItems = groupedHistory.flatMap(([, records]) => records).map((record) => ({
@@ -8163,6 +10541,9 @@ function App() {
     url: record.imageUrl,
     alt: record.fileName || record.prompt || '生成图片预览',
     fileName: record.fileName,
+    kind: record.kind ?? 'image' as const,
+    record,
+    asset: undefined,
   }))
   const libraryPreviewItems = libraryPreview?.kind === 'asset' ? assetPreviewItems : historyPreviewItems
   const libraryPreviewIndex = libraryPreview
@@ -8213,32 +10594,182 @@ function App() {
             ? 'online'
             : 'checking'
   const cachedCurrentProviderCredits = providerCreditsByConnection[currentCreditKey] ?? null
-  const currentProviderCredits = cachedCurrentProviderCredits && cachedCurrentProviderCredits.amount >= 0 ? cachedCurrentProviderCredits : null
-  const creditsTooltip = currentProviderCredits
-    ? `${currentProviderCredits.provider}：${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)} ${currentProviderCredits.unit}\n每 15 秒自动刷新`
+  const currentProviderCredits = cachedCurrentProviderCredits && typeof cachedCurrentProviderCredits.amount === 'number' && cachedCurrentProviderCredits.amount >= 0 ? cachedCurrentProviderCredits : null
+  const formatProviderCreditView = (credits: ProviderCredits) => {
+    const isUsd = /^(?:usd|美元|\$)$/i.test(credits.unit.trim())
+    const originalAmount = credits.amount === Number.POSITIVE_INFINITY
+      ? '无限'
+      : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(credits.amount)
+    if (isUsd && usdToCnyRate && Number.isFinite(credits.amount)) {
+      return {
+        amount: `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(credits.amount * usdToCnyRate.rate)}`,
+        unit: '',
+        original: `${originalAmount} USD`,
+      }
+    }
+    return { amount: originalAmount, unit: credits.unit, original: '' }
+  }
+  const formatProviderCreditAmount = (credits: ProviderCredits) => formatProviderCreditView(credits).amount
+  const formatProviderCreditUnit = (credits: ProviderCredits) => formatProviderCreditView(credits).unit
+  const scanStorage = async () => {
+    setStorageScanning(true)
+    try {
+      const localBytes = Object.keys(localStorage).reduce((total, key) => total + key.length + (localStorage.getItem(key)?.length ?? 0), 0) * 2
+      const historyRecords = await listHistoryMedia().catch(() => [])
+      const historyBytes = historyRecords.reduce((total, record) => total + (record.blob?.size ?? 0), 0)
+      setStorageInsights({ localBytes, historyBytes, historyCount: historyRecords.length })
+      if (navigator.storage?.estimate) {
+        const estimate = await navigator.storage.estimate()
+        setStorageUsage({ usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 })
+      } else {
+        setStorageUsage({ usage: localBytes + historyBytes, quota: 0 })
+      }
+    } finally {
+      setStorageScanning(false)
+    }
+  }
+  const formatStorageBytes = (bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    if (bytes < 1024) return `${Math.round(bytes)} B`
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+  }
+  const availableProviderCredits = (() => {
+    const byCredential = new Map<string, {
+      key: string
+      connectionId: string
+      connectionName: string
+      credits: ProviderCredits
+      connectionNames: string[]
+    }>()
+    apiSettings.connections.filter(isConnectionUsable).forEach((connection) => {
+      const credits = providerCreditsByConnection[connection.id]
+      if (!credits || typeof credits.amount !== 'number' || credits.amount < 0) return
+      // The same personal token can be saved under multiple endpoint aliases.
+      // Keep one balance row and expose the linked connection names in its tooltip.
+      const balanceToken = connection.balanceToken?.trim() || ''
+      const credential = balanceToken ? `balance:${balanceToken}` : `key:${connection.apiKey.trim()}`
+      const key = credential === '|' ? connection.id : credential
+      const existing = byCredential.get(key)
+      if (existing) {
+        if (!existing.connectionNames.includes(connection.name)) existing.connectionNames.push(connection.name)
+        existing.connectionName = existing.connectionNames.join(' / ')
+      } else {
+        byCredential.set(key, { key: connection.id, connectionId: connection.id, connectionName: connection.name, connectionNames: [connection.name], credits })
+      }
+    })
+    if (editingConnectionId === 'new' && currentCreditKey && currentProviderCredits) {
+      byCredential.set(`draft:${currentCreditKey}`, { key: currentCreditKey, connectionId: '', connectionName: apiDraft.name.trim() || '当前连接', connectionNames: [apiDraft.name.trim() || '当前连接'], credits: currentProviderCredits })
+    }
+    return [...byCredential.values()]
+  })()
+  const availableProviderCreditKeys = availableProviderCredits.map((entry) => entry.key).join('|')
+  const displayedProviderCreditEntry = availableProviderCredits.find((entry) => entry.key === pinnedCreditConnectionId)
+    ?? availableProviderCredits[creditRotationIndex % Math.max(1, availableProviderCredits.length)]
+    ?? availableProviderCredits[0]
+  const displayedProviderCredits = displayedProviderCreditEntry?.credits ?? null
+  const creditsTooltip = availableProviderCredits.length
+    ? availableProviderCredits.map(({ credits, connectionName }) => {
+        const view = formatProviderCreditView(credits)
+        const rateNote = view.original && usdToCnyRate ? `（${view.original}，汇率 ${usdToCnyRate.rate.toFixed(4)}，${usdToCnyRate.date}）` : ''
+        return `${credits.provider} · ${connectionName}：${view.amount}${view.unit ? ` ${view.unit}` : ''}${rateNote}`
+      }).join('\n')
     : ''
+
+  const apiConnectionGroups = (() => {
+    const groups = new Map<string, ApiConnection[]>()
+    apiSettings.connections.forEach((connection) => {
+      const token = connection.apiKey.trim()
+      const key = token ? `token:${token}` : `connection:${connection.id}`
+      const group = groups.get(key)
+      if (group) group.push(connection)
+      else groups.set(key, [connection])
+    })
+    return [...groups.values()]
+  })()
+
+  useEffect(() => {
+    if (!availableProviderCredits.length) {
+      if (pinnedCreditConnectionId !== null) setPinnedCreditConnectionId(null)
+      return
+    }
+    if (!pinnedCreditConnectionId || !availableProviderCredits.some((entry) => entry.key === pinnedCreditConnectionId)) {
+      setPinnedCreditConnectionId(availableProviderCredits[0].key)
+    }
+  }, [availableProviderCreditKeys, pinnedCreditConnectionId])
+
+  useEffect(() => {
+    if (pinnedCreditConnectionId || availableProviderCredits.length < 2) return
+    const timer = window.setInterval(() => setCreditRotationIndex((index) => index + 1), 8_000)
+    return () => window.clearInterval(timer)
+  }, [availableProviderCredits.length, pinnedCreditConnectionId])
   const activeImagePrice = displayedActiveNodeImageModel
     ? providerPricesByConnection[displayedActiveNodeImageModel.connection.id]?.[displayedActiveNodeImageModel.model.id]
     : undefined
   const activeImageCostLabel = activeImagePrice
-    ? activeImagePrice.billing === 'fixed'
-      ? `${activeImagePrice.credits * generationCount} 积分`
-      : '按 Token'
+    ? formatProviderModelCost(activeImagePrice, generationCount, usdToCnyRate?.rate)
     : null
   const activeTextPrice = selectedTextModel
     ? providerPricesByConnection[selectedTextModel.connection.id]?.[selectedTextModel.model.id]
     : undefined
   const activeTextCostLabel = activeTextPrice
-    ? activeTextPrice.billing === 'fixed'
-      ? `${activeTextPrice.credits * generationCount} 积分`
-      : '按 Token'
+    ? formatProviderModelCost(activeTextPrice, generationCount, usdToCnyRate?.rate)
     : null
   const [agentPriceConnectionId, agentPriceModelId] = agentImageModelKey.split('::')
   const agentImagePrice = providerPricesByConnection[agentPriceConnectionId]?.[agentPriceModelId]
   const getAgentImagePlanCostLabel = (plan: AgentImagePlan) => agentImagePrice
-    ? agentImagePrice.billing === 'fixed'
-      ? `${agentImagePrice.credits * normalizeImageGenerationOptions(plan).count} 积分`
-      : '按 Token'
+    ? formatProviderModelCost(agentImagePrice, normalizeImageGenerationOptions(plan).count, usdToCnyRate?.rate)
+    : null
+  const [agentVideoConnectionId, agentVideoModelId] = agentVideoModelKey.split('::')
+  const selectedAgentVideoModel = enabledVideoModels.find(({ connection, model }) => connection.id === agentVideoConnectionId && model.id === agentVideoModelId)
+    ?? enabledVideoModels[0]
+  const agentVideoCapabilities = getVideoModelCapabilities(`${selectedAgentVideoModel?.model.id ?? ''} ${selectedAgentVideoModel?.model.name ?? ''}`)
+  const activeVideoModel = activeVideoNode
+    ? enabledVideoModels.find(({ connection, model }) => connection.id === activeVideoNode.data.videoModelConnectionId && model.id === activeVideoNode.data.videoModelId) ?? enabledVideoModels[0]
+    : undefined
+  const activeVideoCapabilities = useMemo(
+    () => getVideoModelCapabilities(activeVideoModel?.model.id || activeVideoModel?.model.name || activeVideoNode?.data.videoModelName || ''),
+    [activeVideoModel?.model.id, activeVideoModel?.model.name, activeVideoNode?.data.videoModelName],
+  )
+  useEffect(() => {
+    if (!activeVideoNode) return
+    const currentResolution = activeVideoNode.data.videoResolution ?? '720p'
+    const currentRatio = activeVideoNode.data.videoAspectRatio ?? '16:9'
+    const patch: Partial<CanvasNode['data']> = {}
+    if (!activeVideoCapabilities.resolutions.includes(currentResolution)) patch.videoResolution = activeVideoCapabilities.resolutions[0]
+    if (!activeVideoCapabilities.ratios.includes(currentRatio)) patch.videoAspectRatio = activeVideoCapabilities.ratios[0]
+    if (Object.keys(patch).length) updateNodeData(activeVideoNode.id, patch)
+  }, [activeVideoCapabilities, activeVideoNode, updateNodeData])
+  const activeVideoPrice = activeVideoModel
+    ? providerPricesByConnection[activeVideoModel.connection.id]?.[activeVideoModel.model.id]
+    : undefined
+  const activeVideoGenerateCount = activeVideoNode?.data.videoGenerateCount ?? 1
+  const activeVideoHasInputVideo = activeVideoNode?.data.videoGenerationMethod === 'omni'
+    && activeVideoReferences.some((reference) => reference.kind === 'video' && !reference.disabledReason && reference.available !== false)
+  const activeVideoDocumentEstimate = activeVideoModel && /api\.apiyi\.com|apiyi\.com/i.test(activeVideoModel.connection.baseUrl)
+    ? estimateApiYiVideoCost(activeVideoModel.model.id, activeVideoNode?.data.videoResolution ?? '720p', activeVideoNode?.data.videoDuration ?? 4, activeVideoGenerateCount, Boolean(activeVideoHasInputVideo))
+    : null
+  const activeVideoCost = activeVideoDocumentEstimate
+    ?? (activeVideoPrice
+      ? activeVideoPrice.billing === 'fixed'
+        ? {
+            label: formatProviderModelCost(activeVideoPrice, activeVideoGenerateCount, usdToCnyRate?.rate),
+            title: `${formatProviderPriceTooltip(activeVideoPrice, usdToCnyRate?.rate)} · 实际以调用日志为准`,
+          }
+        : {
+            label: '按用量计费',
+            title: '该模型按 Token 计费，实际用量以厂商调用日志为准',
+          }
+      : activeVideoModel
+        ? { label: '按厂商计费', title: '该模型暂未提供公开价格，实际费用以厂商调用日志为准' }
+        : null)
+  const displayedVideoCost = activeVideoCost
+    ? {
+        ...activeVideoCost,
+        label: convertUsdLabelToCny(activeVideoCost.label, usdToCnyRate?.rate),
+        title: `${activeVideoCost.title}${(activeVideoCost.label.includes('$') || /\bUSD\b/i.test(activeVideoCost.label)) && usdToCnyRate ? ` · 当前汇率：1 USD = ${usdToCnyRate.rate.toFixed(4)} CNY（${usdToCnyRate.date}）` : ''}`,
+      }
     : null
 
   return (
@@ -8262,7 +10793,7 @@ function App() {
                 <button className="project-home-icon project-home-transfer" onClick={() => openTransferDialog('workspace-append')} aria-label="导入/导出项目" title="导入/导出"><ArrowUpDown size={18} /></button>
                 <button
                   className={`project-home-api ${apiConfigured ? 'is-configured' : ''}`}
-                  onClick={openApiSettings}
+                  onClick={(event) => openApiSettings(event, { storageNav: false })}
                   aria-label={apiConfigured ? '管理 API 配置' : '配置 API'}
                   title={apiConfigured ? '管理 API 配置' : '配置 API'}
                 >
@@ -8312,7 +10843,7 @@ function App() {
                     <button className="project-home-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
                     <button className="project-home-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
                     <div className={`project-home-cover cover-${index % 4}`}>
-                      {cover ? <img src={cover.imageUrl} alt="" /> : <div className="cover-orbit"><i /><i /><i /></div>}
+                      {cover ? <ProjectCoverMedia cover={cover} alt={`${project.name} 最新生成预览`} /> : <div className="cover-orbit"><i /><i /><i /></div>}
                       {(nodeCount > 0 || processCount > 0) && <div className="project-home-statuses">
                         {processCount > 0 && <span className="project-status-badge is-running"><i />进行中{processCount > 1 ? ` ${processCount}` : ''}</span>}
                         {nodeCount > 0 && <span className="project-status-badge is-content"><Box size={11} />{nodeCount} 个节点</span>}
@@ -8344,7 +10875,7 @@ function App() {
                     })
                   }}>
                     {projectHomeSelectionMode && <button className="project-home-list-select" aria-label={`${isSelected ? '取消选择' : '选择'}项目 ${project.name}`} onClick={(event) => { event.stopPropagation(); setSelectedProjectIds((current) => current.includes(project.id) ? current.filter((id) => id !== project.id) : [...current, project.id]) }}>{isSelected && <Check size={13} />}</button>}
-                    <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <img src={cover.imageUrl} alt="" /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span className="project-home-list-content">{processCount > 0 && <span className="project-status-badge is-running"><i />进行中{processCount > 1 ? ` ${processCount}` : ''}</span>}{nodeCount > 0 ? <span className="project-status-badge is-content"><Box size={11} />{nodeCount} 个节点</span> : <em>空项目</em>}</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
+                    <span className={`project-home-list-preview cover-${index % 4}`}>{cover ? <ProjectCoverMedia cover={cover} alt={`${project.name} 最新生成预览`} /> : <span className="project-list-orbit" />}</span>{isRenaming ? <input className="project-home-list-rename-input" autoFocus value={projectRename.draft} maxLength={48} onClick={(event) => event.stopPropagation()} onChange={(event) => setProjectRename({ ...projectRename, draft: event.target.value })} onBlur={() => void commitProjectRename(project.id, projectRename.draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setProjectRename(null) }} /> : <strong>{project.name}</strong>}<span>项目</span><span className="project-home-list-content">{processCount > 0 && <span className="project-status-badge is-running"><i />进行中{processCount > 1 ? ` ${processCount}` : ''}</span>}{nodeCount > 0 ? <span className="project-status-badge is-content"><Box size={11} />{nodeCount} 个节点</span> : <em>空项目</em>}</span><time>{formatProjectDate(project.createdAt)}</time><span>编辑于 {formatRelativeTime(project.updatedAt)}</span>
                     <button className="project-home-list-rename" aria-label={`重命名项目 ${project.name}`} title="重命名项目" onClick={(event) => { event.stopPropagation(); setProjectRename({ id: project.id, draft: project.name, source: 'home' }) }}><Pencil size={14} /></button>
                     <button className="project-home-list-delete" aria-label={`删除项目 ${project.name}`} title="删除项目" onClick={(event) => { event.stopPropagation(); void removeProject(project.id) }}><Trash2 size={15} /></button>
                   </div>
@@ -8356,6 +10887,14 @@ function App() {
         )}
       </AnimatePresence>
       <AnimatePresence>
+        {storageOpen && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setStorageOpen(false)}>
+          <motion.div className="api-modal storage-modal" role="dialog" aria-modal="true" aria-labelledby="storage-dialog-title" initial={{ y: 18, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 18, opacity: 0, scale: .98 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-heading api-manager-heading"><div><span className="eyebrow">设置</span><h2 id="storage-dialog-title">存储空间</h2><p>检查项目的存储占用与可优化空间。</p></div><button aria-label="关闭存储空间" className="modal-close" onClick={() => setStorageOpen(false)}><X size={18} /></button></div>
+            <div className="settings-shell storage-settings-shell"><aside className="settings-sidebar" aria-label="设置分类"><button type="button" onClick={openApiSettings}><KeyRound size={14} />API 设置</button><button type="button" className="is-active"><HardDrive size={14} />存储空间</button></aside><section className="storage-health-panel"><div className="storage-panel-heading"><div className="storage-panel-title"><span className="storage-panel-icon"><HardDrive size={17} /></span><span><strong>存储健康中心</strong><small>检测项目的存储占用与可优化空间</small></span></div><button type="button" className="storage-scan-button" onClick={() => void scanStorage()} disabled={storageScanning}>{storageScanning ? <LoaderCircle size={14} className="is-spinning" /> : <RefreshCw size={14} />}{storageScanning ? '扫描中' : '重新扫描'}</button></div>{storageUsage ? <><div className="storage-health-result"><div className="storage-total"><HardDrive size={30} /><strong>{formatStorageBytes(storageUsage.usage)}</strong><span>{storageUsage.quota ? `占浏览器配额 ${Math.round(storageUsage.usage / storageUsage.quota * 100)}%` : '当前浏览器未提供容量上限'}</span></div>{storageUsage.quota > 0 && <div className="storage-usage-track"><i style={{ width: `${Math.min(100, Math.max(2, storageUsage.usage / storageUsage.quota * 100))}%` }} /></div>}</div><div className="storage-breakdown"><div><span><i className="storage-dot is-project" />浏览器本地数据</span><strong>{formatStorageBytes(storageInsights.localBytes)}</strong></div><div><span><i className="storage-dot is-history" />历史媒体 · {storageInsights.historyCount} 条</span><strong>{formatStorageBytes(storageInsights.historyBytes)}</strong></div></div><div className="storage-optimization"><div className="storage-optimization-heading"><span><Lightbulb size={15} /><strong>优化建议</strong></span><b>可优化空间 {formatStorageBytes(storageInsights.historyBytes)}</b></div><p>{storageInsights.historyBytes > 0 ? '历史媒体通常占用最多空间。删除不再需要的输出记录后，浏览器会回收对应文件。' : '当前没有发现可直接清理的历史媒体，继续保持定期导出与清理即可。'}</p><button type="button" onClick={() => { setStorageOpen(false); setOutputHistoryOpen(true) }}><History size={14} />管理历史媒体</button></div></> : <div className="storage-health-empty"><HardDrive size={34} /><strong>还没有扫描数据</strong><span>扫描后查看占用明细、优化建议和可释放空间。</span><button type="button" onClick={() => void scanStorage()}><RefreshCw size={14} />开始扫描</button></div>}<div className="storage-health-note"><Info size={14} /><span>项目数据保存在当前浏览器本地。导出项目包可用于备份或迁移到其他设备。</span></div></section></div>
+          </motion.div>
+        </motion.div>}
+      </AnimatePresence>
+      <AnimatePresence>
         {transferProgress && <motion.div className="transfer-progress-hud" role="status" aria-live="polite" initial={{ opacity: 0, y: 18, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }}>
           <div className="transfer-progress-icon"><LoaderCircle size={18} className="is-spinning" /></div>
           <div><strong>项目数据处理中</strong><span>{transferProgress}</span><div className="transfer-progress-track"><i /></div></div>
@@ -8364,16 +10903,20 @@ function App() {
       </AnimatePresence>
       <main className="canvas-area">
         <ActiveGenerationNodesContext.Provider value={activeGeneratingNodeIds}>
+        <VideoGenerationContext.Provider value={videoGenerationContextValue}>
         <ImagePreviewOpenContext.Provider value={openNodeImagePreview}>
+        <VideoPreviewOpenContext.Provider value={openNodeVideoPreview}>
           <ImageToolOpenContext.Provider value={openImageTool}>
           <ImageGalleryOpenContext.Provider value={setImageGalleryNodeId}>
             <NodeTextUpdateContext.Provider value={updateNodeBody}>
               <NodeTitleUpdateContext.Provider value={updateNodeTitle}>
               <NodeDataUpdateContext.Provider value={updateNodeData}>
               <NodeImageUploadContext.Provider value={uploadImageToNode}>
+              <NodeVideoUploadContext.Provider value={uploadVideoToNode}>
               <GroupCollapseContext.Provider value={setGroupCollapsed}>
               <NodeExtensionMenuContext.Provider value={openNodeExtensionMenu}>
           <ReactFlow
+          key={`canvas-${activeProjectId}-${activeCanvasId}`}
           nodes={nodes}
           edges={renderedEdges}
           nodeTypes={nodeTypes}
@@ -8388,14 +10931,40 @@ function App() {
           connectionLineType={ConnectionLineType.Bezier}
           onNodeClick={(_, node) => {
             if (agentCanvasPicking) {
+              const pickMode = agentCanvasPickModeRef.current
               const imageUrl = (node.data.kind === 'image' || node.data.kind === 'upload') ? node.data.imageUrl : undefined
-              if (!imageUrl) {
-                setToastMessage('请选择已经生成或上传完成的图片')
+              const videoUrl = node.data.kind === 'video'
+                ? node.data.videoUrl || (node.data.videoMediaId ? historyMediaObjectUrlsRef.current.get(node.data.videoMediaId) : undefined)
+                : undefined
+              const acceptsVideo = pickMode.mediaKind === 'video' && pickMode.videoGenerationMode === 'omni'
+              const url = imageUrl || (acceptsVideo ? videoUrl : undefined)
+              if (!url) {
+                setToastMessage(acceptsVideo ? '请选择可用的图片或视频节点' : '当前模式仅可选择已经生成或上传完成的图片')
                 return
               }
-              const reference = { nodeId: node.id, name: getNodeDisplayTitle(node.data), url: imageUrl }
+              const reference: AgentImageReference = { nodeId: node.id, name: getNodeDisplayTitle(node.data), url, kind: videoUrl ? 'video' : 'image' }
               setAgentPendingReferences([reference])
               setAgentCanvasPicking(false)
+              return
+            }
+            if (videoTextPickerNodeId) {
+              if (node.id === videoTextPickerNodeId) {
+                setToastMessage('请选择其他文本节点作为视频提示词来源')
+                return
+              }
+              if (node.data.kind !== 'text' || !node.data.body.trim()) {
+                setToastMessage('文生视频只能选择有内容的文本节点')
+                return
+              }
+              setEdges((current) => current.some((edge) => edge.source === node.id && edge.target === videoTextPickerNodeId)
+                ? current
+                : [...current, { id: `reference-${node.id}-${videoTextPickerNodeId}-${crypto.randomUUID()}`, source: node.id, target: videoTextPickerNodeId, type: 'luminous', data: { referenceSelected: true } }])
+              const mention = getConnectedReferenceMention(node)
+              setNodes((current) => current.map((item) => item.id === videoTextPickerNodeId && !item.data.body.includes(mention)
+                ? { ...item, data: { ...item.data, body: `${item.data.body.trimEnd()}${item.data.body.trim() ? ' ' : ''}${mention} ` } }
+                : item))
+              setVideoTextPickerNodeId(null)
+              setToastMessage('已连接文本节点，可在提示词中引用')
               return
             }
             if (canvasReferencePickerNodeId) {
@@ -8436,14 +11005,22 @@ function App() {
             setQuantityMenuOpen(false)
             setExpandedEditorNodeId(null)
             setIsNodeDragging(false)
+            // Trimming belongs to one video only. Selecting a different node
+            // must not keep the old trim state hiding the new node's UI.
+            setClipSession((current) => current?.nodeId === node.id ? current : null)
             setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })))
             setSelectedNodeIds([node.id])
+            const keepUploadedPreview = (previewOnlyNodeUntilRef.current.get(node.id) ?? 0) > Date.now()
+            previewOnlyNodeUntilRef.current.delete(node.id)
             setActiveEditorNodeId(node.data.kind === 'text' ? node.id : null)
-            setActiveImageNodeId(node.data.kind === 'upload' && node.data.imageUrl ? node.id : null)
-            setActiveGenerationNodeId(node.data.kind === 'image' ? node.id : null)
+            setActiveImageNodeId(!keepUploadedPreview && node.data.kind === 'upload' && node.data.imageUrl ? node.id : null)
+            setActiveGenerationNodeId(!keepUploadedPreview && node.data.kind === 'image' ? node.id : null)
+            const isLocalVideoAsset = node.data.kind === 'video' && (node.data.videoSource === 'local-upload' || (node.data.status === '已上传' && Boolean(node.data.videoUrl) && !node.data.videoMediaId && !node.data.videoGeneratedAt))
+            setActiveVideoNodeId(!keepUploadedPreview && node.data.kind === 'video' && !isLocalVideoAsset ? node.id : null)
             window.requestAnimationFrame(() => measureNodeOverlay(node.id))
           }}
           onNodeDragStart={(event, node) => {
+            setClipSession(null)
             nodeReturnTweensRef.current.get(node.id)?.kill()
             nodeReturnTweensRef.current.delete(node.id)
             autoPlacementTweenRef.current?.kill()
@@ -8488,15 +11065,13 @@ function App() {
               setExpandedEditorNodeId(null)
               altDragDuplicateRef.current = null
               window.requestAnimationFrame(() => measureNodeOverlay(altDuplicate.duplicateId))
-              window.requestAnimationFrame(() => resolveNodeOverlap(altDuplicate.duplicateId))
               setToastMessage('已通过 Alt 拖拽创建节点副本')
               return
             }
             altDragDuplicateRef.current = null
             if (reconcileNodeGroupMembership(node.id, node.position)) return
-            if (resolveNodeOverlap(node.id)) return
             dragStartPositionsRef.current.delete(node.id)
-            if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId) measureNodeOverlay(node.id)
+            if (node.id === activeEditorNodeId || node.id === activeImageNodeId || node.id === activeGenerationNodeId || node.id === activeVideoNodeId) measureNodeOverlay(node.id)
           }}
           onNodeContextMenu={openNodeContextMenu}
           onPaneContextMenu={openNodeMenu}
@@ -8545,15 +11120,26 @@ function App() {
               return
             }
             const imageFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('image/'))
+            const videoFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('video/'))
+            if (videoFiles.length) {
+              event.preventDefault()
+              closeAllMenus()
+              const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+              const videoId = createNode('video', { x: flowPosition.x - 150, y: flowPosition.y - 95 })
+              if (videoId) uploadVideoToNode(videoId, videoFiles[0])
+              return
+            }
             if (!imageFiles.length) return
             event.preventDefault()
             closeAllMenus()
             const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
             void addImageFiles(imageFiles, { x: flowPosition.x - 130, y: flowPosition.y - 110 })
           }}
-          onPaneClick={(event) => {
-            if (canvasReferencePickerNodeId) {
+          onPaneClick={() => {
+            if (clipSession) setClipSession(null)
+            if (canvasReferencePickerNodeId || videoTextPickerNodeId) {
               setCanvasReferencePickerNodeId(null)
+              setVideoTextPickerNodeId(null)
               return
             }
             setMarqueeSelectionCommitted(false)
@@ -8566,18 +11152,23 @@ function App() {
             setActiveEditorNodeId(null)
             setActiveImageNodeId(null)
             setActiveGenerationNodeId(null)
+            setActiveVideoNodeId(null)
             setExpandedEditorNodeId(null)
           }}
           onMove={(_, viewport) => {
-            setCanvasZoom((current) =>
-              Math.abs(current - viewport.zoom) > 0.002 ? viewport.zoom : current,
-            )
-            setCanvasViewport((current) =>
-              Math.abs(current.x - viewport.x) > 0.25 || Math.abs(current.y - viewport.y) > 0.25
-                ? { x: viewport.x, y: viewport.y }
-                : current,
-            )
-            const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeEditorNodeId
+            canvasViewportRef.current = viewport
+            if (canvasViewportFrameRef.current === null) {
+              canvasViewportFrameRef.current = window.requestAnimationFrame(() => {
+                canvasViewportFrameRef.current = null
+                const next = canvasViewportRef.current
+                setCanvasZoom((current) => Math.abs(current - next.zoom) > 0.002 ? next.zoom : current)
+                setCanvasViewport((current) => Math.abs(current.x - next.x) > 0.25 || Math.abs(current.y - next.y) > 0.25
+                  ? { x: next.x, y: next.y }
+                  : current)
+              })
+            }
+            const selectedVideoNodeId = nodes.find((node) => node.selected && node.data.kind === 'video')?.id
+            const activeOverlayNodeId = activeImageNodeId ?? activeGenerationNodeId ?? activeVideoNodeId ?? activeEditorNodeId ?? selectedVideoNodeId
             if (activeOverlayNodeId && !isNodeDragging) measureNodeOverlay(activeOverlayNodeId)
           }}
           zoomOnDoubleClick={false}
@@ -8601,6 +11192,7 @@ function App() {
             <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--canvas-dot)" />
           )}
           <MiniMap
+            key={`minimap-${activeProjectId}-${activeCanvasId}`}
             className="disy-minimap"
             nodeColor="var(--minimap-node)"
             nodeStrokeColor="transparent"
@@ -8614,13 +11206,16 @@ function App() {
           </ReactFlow>
               </NodeExtensionMenuContext.Provider>
               </GroupCollapseContext.Provider>
+              </NodeVideoUploadContext.Provider>
               </NodeImageUploadContext.Provider>
               </NodeDataUpdateContext.Provider>
               </NodeTitleUpdateContext.Provider>
             </NodeTextUpdateContext.Provider>
           </ImageGalleryOpenContext.Provider>
           </ImageToolOpenContext.Provider>
+        </VideoPreviewOpenContext.Provider>
         </ImagePreviewOpenContext.Provider>
+        </VideoGenerationContext.Provider>
         </ActiveGenerationNodesContext.Provider>
 
         <AnimatePresence>
@@ -8647,17 +11242,17 @@ function App() {
               if (widthRatio >= heightRatio) setExpandSize({ width: longestEdge, height: Math.round(longestEdge * heightRatio / widthRatio) })
               else setExpandSize({ width: Math.round(longestEdge * widthRatio / heightRatio), height: longestEdge })
             }
-            const startExpandDrag = (side: keyof typeof expandInsets, event: React.PointerEvent<HTMLButtonElement>) => { const plane = event.currentTarget.closest('.image-tool-image-plane')!; const move = (moveEvent: PointerEvent) => { const rect = plane.getBoundingClientRect(); const value = side === 'left' ? (moveEvent.clientX - rect.left) / rect.width * 100 : side === 'right' ? (rect.right - moveEvent.clientX) / rect.width * 100 : side === 'top' ? (moveEvent.clientY - rect.top) / rect.height * 100 : (rect.bottom - moveEvent.clientY) / rect.height * 100; setExpandInsets((current) => ({ ...current, [side]: Math.round(Math.min(60, Math.max(-80, value))) })) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }
+            const startExpandDrag = (side: keyof typeof expandInsets, event: React.PointerEvent<HTMLButtonElement>) => { event.preventDefault(); event.stopPropagation(); const plane = event.currentTarget.closest('.image-tool-image-plane')!; const move = (moveEvent: PointerEvent) => { const rect = plane.getBoundingClientRect(); const value = side === 'left' ? (moveEvent.clientX - rect.left) / rect.width * 100 : side === 'right' ? (rect.right - moveEvent.clientX) / rect.width * 100 : side === 'top' ? (moveEvent.clientY - rect.top) / rect.height * 100 : (rect.bottom - moveEvent.clientY) / rect.height * 100; setExpandInsets((current) => ({ ...current, [side]: Math.round(Math.min(60, Math.max(-80, value))) })) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }
             const createImageEditTask = (title: string, prompt: string) => { const id = `image-edit-${crypto.randomUUID()}`; const nodeSize = getImageGenerationNodeSize('auto'); setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), { id, type: 'disy', selected: true, position: { x: source.position.x + 330, y: source.position.y + 24 }, style: nodeSize, data: { kind: 'image', title, body: prompt, promptText: prompt, referenceImageUrl: sourceUrl, referenceImageName: getNodeDisplayTitle(source.data), imageAspectRatio: 'auto', status: '待生成', generationSourceNodeId: source.id } }]); setEdges((current) => [...current, { id: `edge-${crypto.randomUUID()}`, source: source.id, target: id, type: 'luminous' }]); setActiveImageNodeId(null); setActiveGenerationNodeId(id); setAutoGenerateNodeId(id); setImageTool(null); setToastMessage(`正在执行${title}…`) }
             const addLocalEditMark = (event: React.PointerEvent<HTMLDivElement>) => {
-              if (imageTool.mode !== 'local-edit' || localEditMarks.length >= 5 || event.button !== 0) return
+              if (imageTool.mode !== 'local-edit' || localEditMarks.length >= 10 || event.button !== 0) return
               const image = event.currentTarget.querySelector(':scope > img')
               if (!(image instanceof HTMLImageElement)) return
               const rect = image.getBoundingClientRect()
               if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return
               const x = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100))
               const y = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100))
-              setLocalEditMarks((current) => current.length >= 5 ? current : [...current, { id: crypto.randomUUID(), x, y, prompt: '' }])
+              setLocalEditMarks((current) => current.length >= 10 ? current : [...current, { id: crypto.randomUUID(), x, y, prompt: '' }])
             }
             const activeStudioLight = studioLighting.lights.find((light) => light.id === activeStudioLightId) ?? studioLighting.lights[0]
             const updateStudioLight = (id: string, update: Partial<StudioLight>) => setStudioLighting((current) => ({ ...current, lights: current.lights.map((light) => light.id === id ? { ...light, ...update } : light) }))
@@ -8690,11 +11285,11 @@ function App() {
             }
             return <motion.div className="image-tool-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={() => { if (!cutoutBusy) setImageTool(null) }}>
               <motion.section className={`image-tool-dialog mode-${imageTool.mode}`} initial={{ opacity: 0, y: 18, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .98 }} onMouseDown={(event) => event.stopPropagation()}>
-                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'crop' ? <Crop size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'color' ? <Palette size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'crop' ? '本地裁剪' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'color' ? '调色' : imageTool.mode === 'local-edit' ? '局部修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'crop' ? '调整裁剪区域并保留原图，处理不消耗积分' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'color' ? '实时预览基础影调与白平衡，确认后生成新版本' : imageTool.mode === 'local-edit' ? '点击图片标记需要调整的位置，最多 5 处' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
+                <header><div><span>{imageTool.mode === 'grid' ? <Grid3X3 size={17} /> : imageTool.mode === 'crop' ? <Crop size={17} /> : imageTool.mode === 'expand' ? <Expand size={17} /> : imageTool.mode === 'studio' ? <Lightbulb size={17} /> : imageTool.mode === 'color' ? <Palette size={17} /> : imageTool.mode === 'local-edit' ? <MessageCircle size={17} /> : <Scissors size={17} />}</span><div><strong>{imageTool.mode === 'grid' ? '自由宫格切分' : imageTool.mode === 'crop' ? '本地裁剪' : imageTool.mode === 'expand' ? '自由区域扩图' : imageTool.mode === 'studio' ? '打光' : imageTool.mode === 'color' ? '调色' : imageTool.mode === 'local-edit' ? '局部修改' : '免费本地抠图'}</strong><small>{imageTool.mode === 'grid' ? '拖动辅助线定义每一张输出图片' : imageTool.mode === 'crop' ? '调整裁剪区域并保留原图，处理不消耗积分' : imageTool.mode === 'expand' ? '拖动画布边界，编辑画面延展提示词' : imageTool.mode === 'studio' ? '在左侧光场拖动光源，调整亮度、色温与轮廓光' : imageTool.mode === 'color' ? '实时预览基础影调与白平衡，确认后生成新版本' : imageTool.mode === 'local-edit' ? '点击图片标记需要调整的位置，最多 10 处' : '主体识别将在本机执行，不上传原图'}</small></div></div><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)} aria-label="关闭"><X size={17} /></button></header>
                 <div className="image-tool-content">
-                  <div className={`image-tool-stage mode-${imageTool.mode}`}>
-                    <div className="image-tool-image-plane" onPointerDown={addLocalEditMark} style={{ aspectRatio: imageTool.mode === 'expand' ? `${expandSize.width} / ${expandSize.height}` : `${imageToolSourceSize.width} / ${imageToolSourceSize.height}`, ...(imageTool.mode === 'local-edit' ? { width: `min(100%, ${Math.max(1, Math.round(500 * imageToolSourceSize.width / imageToolSourceSize.height))}px)` } : {}) }}>
-                      <img src={sourceUrl} alt="编辑预览" style={imageTool.mode === 'color' ? { filter: colorFilter } : undefined} />
+                  <div className={`image-tool-stage mode-${imageTool.mode}${imageToolZoomable ? ' is-zoomable' : ''}`} ref={imageToolStageRef} onPointerDown={imageToolZoomable ? startImageToolPan : undefined}>
+                    <div className="image-tool-image-plane" ref={imageToolPlaneRef} onPointerDown={addLocalEditMark} style={{ aspectRatio: imageTool.mode === 'expand' ? `${expandSize.width} / ${expandSize.height}` : `${imageToolSourceSize.width} / ${imageToolSourceSize.height}`, ...(imageTool.mode === 'local-edit' || imageTool.mode === 'color' ? { width: `min(100%, ${Math.max(1, Math.round(500 * imageToolSourceSize.width / imageToolSourceSize.height))}px)` } : {}), ...(imageToolZoomable ? { transform: `translate(${imageToolView.x}px, ${imageToolView.y}px) scale(${imageToolView.scale})` } : {}) }}>
+                      <img src={sourceUrl} alt="编辑预览" draggable={false} style={imageTool.mode === 'color' ? { filter: colorFilter } : undefined} />
                       {imageTool.mode === 'color' && <i className="color-temperature-overlay" style={{ backgroundColor: colorAdjustments.temperature >= 0 ? '#ff8a45' : '#69aaff', opacity: Math.abs(colorAdjustments.temperature) / 260, boxShadow: `inset 0 0 0 999px ${colorAdjustments.tint >= 0 ? 'rgba(224,72,190,' : 'rgba(62,194,120,'}${Math.abs(colorAdjustments.tint) / 420})` }} />}
                       {imageTool.mode === 'grid' && <>{gridGuides.vertical.map((guide, index) => <i key={`v-${index}`} className="image-guide is-vertical" style={{ left: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientX - stage.getBoundingClientRect().left) / stage.getBoundingClientRect().width * 100)); setGuide('vertical', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}{gridGuides.horizontal.map((guide, index) => <i key={`h-${index}`} className="image-guide is-horizontal" style={{ top: `${guide}%` }} onPointerDown={(event) => { const stage = event.currentTarget.parentElement!; const move = (moveEvent: PointerEvent) => { const next = Math.min(95, Math.max(5, (moveEvent.clientY - stage.getBoundingClientRect().top) / stage.getBoundingClientRect().height * 100)); setGuide('horizontal', index, next) }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', () => window.removeEventListener('pointermove', move), { once: true }) }} />)}</>}
                       {imageTool.mode === 'crop' && <div className="crop-selection" style={{ left:`${cropRect.x}%`,top:`${cropRect.y}%`,width:`${cropRect.width}%`,height:`${cropRect.height}%` }}>{(['nw','n','ne','e','se','s','sw','w'] as const).map((edge)=><i key={edge} className={edge} onPointerDown={(event)=>startCropResize(edge,event)}/>)}</div>}
@@ -8702,6 +11297,13 @@ function App() {
                       {imageTool.mode === 'studio' && <div className="lighting-three-shell"><div className="lighting-three-tabs"><button className={lightingView === 'perspective' ? 'is-active' : ''} onClick={() => setLightingView('perspective')}>透视</button><button className={lightingView === 'front' ? 'is-active' : ''} onClick={() => setLightingView('front')}>正面</button></div><Suspense fallback={<div className="lighting-three-loading"><LoaderCircle className="is-spinning" size={20} />正在载入三维光场…</div>}><LightingSpherePreview imageUrl={sourceUrl} lights={studioLighting.lights} activeLightId={activeStudioLight.id} exposure={studioLighting.exposure} view={lightingView} onSelectLight={setActiveStudioLightId} onChange={(id, yaw, pitch) => updateStudioLight(id, { yaw, pitch })} /></Suspense><span className="lighting-three-label"><i style={{ background: activeStudioLight.temperatureK < 5000 ? '#ff9a55' : activeStudioLight.temperatureK > 6200 ? '#8fc9ff' : '#fff7e9' }} />{activeStudioLight.name}</span><button type="button" className="lighting-three-reset" onClick={resetStudioLights}>↻ 重置</button><em>水平 {activeStudioLight.yaw}° · 垂直 {activeStudioLight.pitch}°</em></div>}
                       {imageTool.mode === 'local-edit' && <div className="local-edit-overlay">{localEditMarks.map((mark, index) => <span key={mark.id} className="local-edit-pin" style={{ left: `${mark.x}%`, top: `${mark.y}%` }} onPointerDown={(event) => event.stopPropagation()}>{index + 1}</span>)}</div>}
                     </div>
+                    {imageToolZoomable && <div className="image-tool-view-toolbar" onPointerDown={(event) => event.stopPropagation()}>
+                      <button type="button" aria-label="缩小" onClick={() => zoomImageToolView(1 / 1.25)}><Minus size={12} /></button>
+                      <b>{Math.round(imageToolView.scale * 100)}%</b>
+                      <button type="button" aria-label="放大" onClick={() => zoomImageToolView(1.25)}><Plus size={12} /></button>
+                      <button type="button" className="is-wide" onClick={resetImageToolView}>适应</button>
+                      <button type="button" className="is-wide" onClick={showImageToolActualSize}>1:1</button>
+                    </div>}
                   </div>
                   {imageTool.mode === 'grid' ? <div className="image-tool-controls">
                     <p>选择预设后仍可拖动青色辅助线微调。</p>
@@ -8731,11 +11333,11 @@ function App() {
                     ] as const).map(([key, label, min, max]) => <label key={key} className={key === 'temperature' ? 'is-temperature' : key === 'tint' ? 'is-tint' : ''}><span>{label}</span><input type="range" min={min} max={max} value={colorAdjustments[key]} onChange={(event) => setColorAdjustments((current) => ({ ...current, [key]: Number(event.target.value) }))} /><b>{colorAdjustments[key] > 0 ? '+' : ''}{colorAdjustments[key]}</b></label>)}</div>
                     <div className="color-preview-note"><Palette size={14} /><span>调节会生成新的图片节点，原图始终保留。</span></div>
                   </div> : imageTool.mode === 'local-edit' ? <div className="image-tool-controls local-edit-controls">
-                    <div className="local-edit-heading"><div><strong>修改点位</strong><small>仅调整标记区域，其余画面保持不变</small></div><span>{localEditMarks.length} / 5</span></div>
+                    <div className="local-edit-heading"><div><strong>修改点位</strong><small>仅调整标记区域，其余画面保持不变</small></div><span>{localEditMarks.length} / 10</span></div>
                     <p>点击左侧图片添加点位，再描述希望如何修改。</p>
                     <div className="local-edit-comment-list">{localEditMarks.map((mark, index) => <label key={mark.id}><b>{index + 1}</b><textarea autoFocus={index === localEditMarks.length - 1} value={mark.prompt} placeholder="描述这个位置要怎么修改…" onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setLocalEditMarks((current) => current.map((item) => item.id === mark.id ? { ...item, prompt: event.target.value } : item))} /><button type="button" aria-label={`删除评论 ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setLocalEditMarks((current) => current.filter((item) => item.id !== mark.id))}><X size={14} /></button></label>)}</div>
-                    {!localEditMarks.length && <div className="local-edit-empty"><MessageCircle size={20} /><strong>在图片上添加修改点位</strong><span>点击任意位置，最多添加 5 处</span></div>}
-                    {localEditMarks.length >= 5 && <small className="local-edit-limit">已达到 5 个点位上限</small>}
+                    {!localEditMarks.length && <div className="local-edit-empty"><MessageCircle size={20} /><strong>在图片上添加修改点位</strong><span>点击任意位置，最多添加 10 处</span></div>}
+                    {localEditMarks.length >= 10 && <small className="local-edit-limit">已达到 10 个点位上限</small>}
                   </div> : <div className="image-tool-controls cutout-info"><p>本机后台运行 MIT 许可的通用主体模型；首次下载后会缓存，不消耗 API 积分，也不会上传原图。</p><small>适合人像、商品主体；复杂毛发建议生成后检查边缘。</small>{cutoutProgress && <div className="cutout-progress-panel" role="status" aria-live="polite"><div><LoaderCircle className="is-spinning" size={15} /><strong>{cutoutProgress.stage}</strong><b>{typeof cutoutProgress.progress === 'number' ? `${Math.round(cutoutProgress.progress)}%` : ''}</b></div><span><i style={{ width: `${cutoutProgress.progress ?? 8}%` }} /></span>{cutoutProgress.detail && <small>{cutoutProgress.detail}</small>}<em>处理完成前窗口会保持打开，随后自动生成并连接结果节点。</em></div>}</div>}
                 </div>
                 <footer><button type="button" disabled={cutoutBusy} onClick={() => setImageTool(null)}>取消</button>{imageTool.mode === 'grid' ? <button type="button" className="is-primary" onClick={() => void applyGridCut()}><Crop size={15} />切分为 {((gridGuides.vertical.length + 1) * (gridGuides.horizontal.length + 1))} 张</button> : imageTool.mode === 'expand' ? <button type="button" className="is-primary" onClick={() => { const extensionGuide = `扩展区域：上 ${Math.max(0, -expandInsets.top)}%，右 ${Math.max(0, -expandInsets.right)}%，下 ${Math.max(0, -expandInsets.bottom)}%，左 ${Math.max(0, -expandInsets.left)}%。`; createImageEditTask('自由扩图', `${expandPrompt.trim()}\n目标输出尺寸：${expandSize.width} × ${expandSize.height}px。\n${extensionGuide}`) }}><Expand size={15} />立即扩图</button> : imageTool.mode === 'studio' ? <button type="button" className="is-primary" disabled={!studioLighting.lights.some((light) => light.enabled)} onClick={() => createImageEditTask('打光', `保持原图主体、构图、材质、文字和身份完全一致，仅重设光线。全局曝光 ${studioLighting.exposure}%。${studioPrompt}。各光源方向、强弱与色温独立生效，光影自然、曝光准确，不改变产品形状、画面内容与视角。`)}><Sparkles size={15} />生成图片</button> : imageTool.mode === 'color' ? <button type="button" className="is-primary" onClick={() => void applyLocalColor()}><Palette size={15} />本地应用调色</button> : imageTool.mode === 'local-edit' ? <button type="button" className="is-primary" disabled={!localEditMarks.length || localEditMarks.some((mark) => !mark.prompt.trim())} onClick={() => createImageEditTask('局部修改', `按编号仅修改以下点位：\n${localEditMarks.map((mark, index) => `${index + 1}. 点位(${Math.round(mark.x)}%,${Math.round(mark.y)}%)：${mark.prompt.trim()}`).join('\n')}\n点位之外的像素、主体、构图、光线与尺寸保持不变，不要重绘其他区域。`)}><Sparkles size={15} />立即修改</button> : <button type="button" className="is-primary" disabled={cutoutBusy} onClick={() => applyLocalCutout()}>{cutoutBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Scissors size={15} />}{cutoutBusy ? '处理中…' : cutoutProgress?.failed ? '重新尝试' : '开始本地抠图'}</button>}</footer>
@@ -8745,7 +11347,212 @@ function App() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {canvasReferencePickerNodeId && (
+          {activeVideoNode && !activeVideoNode.data.videoMediaId && activeVideoNode.data.status !== '已完成' && activeVideoNode.data.videoSource !== 'local-upload' && nodeOverlayRect && !isNodeDragging && (
+            <motion.div
+              className="node-quick-toolbar image-generation-upload-toolbar nodrag nowheel"
+              style={{ left: nodeEditorCenterX, top: nodeOverlayRect.top - 34 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {!activeVideoNode.data.videoMediaId && <button type="button" onClick={() => document.getElementById(`video-upload-${activeVideoNode.id}`)?.click()}>
+                <Upload size={14} />
+                <span>{activeVideoNode.data.videoUrl ? '替换视频' : '上传视频'}</span>
+              </button>}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {activeVideoNode && clipSession?.nodeId !== activeVideoNode.id && nodeOverlayRect && !isNodeDragging && (
+            <div className="image-node-editor-positioner video-node-editor-positioner" style={{ left: nodeEditorCenterX, top: nodeEditorTop, width: nodeEditorWidth }}>
+              <motion.section className={`image-node-editor video-floating-editor video-mode-${activeVideoNode.data.videoGenerationMethod || 'text'} nodrag nowheel ${videoParameterMenuOpen || videoModelMenuOpen ? 'is-parameter-open' : ''}`} style={{ height: Math.max(340, Math.min(680, activeVideoNode.data.videoEditorHeight ?? 340)) }} aria-label="Video node editor" initial={{ opacity: 0, y: 12, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: .98 }} onPointerDown={(event) => { if (videoParameterMenuOpen && !(event.target as HTMLElement).closest('.video-parameter-control')) setVideoParameterMenuOpen(false); if (videoModelMenuOpen && !(event.target as HTMLElement).closest('.video-model-picker')) setVideoModelMenuOpen(false); event.stopPropagation() }} onWheel={(event) => event.stopPropagation()}>
+                  <div
+                    className={`image-editor-reference-row reference-drop-zone ${referenceDropTargetNodeId === activeVideoNode.id ? 'is-drop-active' : ''}`}
+                    onDragEnter={(event) => handleReferenceDragOver(event, activeVideoNode.id)}
+                    onDragOver={(event) => handleReferenceDragOver(event, activeVideoNode.id)}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setReferenceDropTargetNodeId(null)
+                    }}
+                    onDrop={(event) => { setReferenceDropTargetNodeId(null); handleVideoReferenceDrop(event) }}
+                  >
+                   <span className="reference-drop-hint"><Upload size={15} />松开以添加参考素材</span>
+                   <input id={`video-upload-${activeVideoNode.id}`} type="file" hidden accept="video/*,.mp4,.webm,.mov,.m4v,.avi,.mkv" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadVideoToNode(activeVideoNode.id, file); event.target.value = '' }} />
+                   <div className="image-reference-thumbnails" onWheel={(event) => { event.stopPropagation(); event.currentTarget.scrollLeft += event.deltaY || event.deltaX }}>
+                   {activeVideoReferences.map((reference) => <button
+                     type="button"
+                     draggable={reference.kind !== 'text'}
+                     className={`image-reference-thumbnail ${(reference.selected || activeVideoNode.data.body.includes(reference.mention)) ? 'is-mentioned' : ''} ${reference.disabledReason || reference.available === false || (reference.kind === 'text' && !reference.text?.trim()) ? 'is-disabled' : ''} ${videoReferenceDragId === reference.id ? 'is-dragging' : ''} ${videoReferenceDropId === reference.id ? 'is-drop-target' : ''}`}
+                     key={reference.id}
+                     aria-label={`引用 ${reference.name}`}
+                     title={reference.disabledReason || `引用 ${reference.name}，拖拽调整顺序`}
+                    onMouseDown={(event) => {
+                      if (reference.kind === 'text' || reference.kind === 'video') event.preventDefault()
+                    }}
+                    onMouseEnter={(event) => {
+                      if (reference.kind !== 'text' || !reference.text?.trim()) return
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      setTextReferencePreview({ name: reference.name, text: reference.text, left: Math.min(rect.left, window.innerWidth - 300), bottom: window.innerHeight - rect.top + 8 })
+                    }}
+                    onMouseLeave={() => setTextReferencePreview(null)}
+                    onDragStart={(event) => {
+                      event.stopPropagation()
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('application/x-disy-video-reference-order', reference.id)
+                      setVideoReferenceDragId(reference.id)
+                    }}
+                    onDragOver={(event) => {
+                      if (!videoReferenceDragId || videoReferenceDragId === reference.id) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      event.dataTransfer.dropEffect = 'move'
+                      setVideoReferenceDropId(reference.id)
+                    }}
+                    onDrop={(event) => {
+                      const sourceId = event.dataTransfer.getData('application/x-disy-video-reference-order') || videoReferenceDragId
+                      if (!sourceId) return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      reorderVideoReferences(sourceId, reference.id)
+                    }}
+                    onDragEnd={() => { setVideoReferenceDragId(null); setVideoReferenceDropId(null) }}
+                    onClick={() => selectVideoMention(reference)}
+                   >
+                     {reference.kind === 'video'
+                       ? <VideoReferenceThumbnail reference={reference} name={reference.name} />
+                       : reference.url
+                         ? <img src={reference.url} alt="" />
+                         : <span className="reference-text-thumbnail">{reference.kind === 'text' ? <Type size={13} /> : <FileImage size={13} />}</span>}
+                     <span className="image-reference-name">{compactReferenceName(reference.name)}</span>
+                     <span className="reference-remove" role="button" aria-label={`移除 ${reference.name}`} onClick={(event) => { event.stopPropagation(); removeVideoReference(reference) }}><X size={9} /></span>
+                   </button>)}
+                   </div>
+                   {activeVideoNode.data.videoGenerationMethod === 'text' && <button type="button" className={`add-image-reference-button video-text-node-picker ${videoTextPickerNodeId === activeVideoNode.id ? 'is-active' : ''}`} title={videoTextPickerNodeId === activeVideoNode.id ? '请点选文本节点' : '从画布点选文本节点'} aria-label={videoTextPickerNodeId === activeVideoNode.id ? '请点选文本节点' : '从画布点选文本节点'} onClick={() => { setCanvasReferencePickerNodeId(null); setVideoTextPickerNodeId((current) => current === activeVideoNode.id ? null : activeVideoNode.id) }}><Type size={15} /></button>}
+                   {(activeVideoNode.data.videoGenerationMethod === 'omni') && <><button type="button" className="add-image-reference-button" title="添加参考图" aria-label="添加参考图" onClick={() => document.getElementById(`video-reference-image-${activeVideoNode.id}`)?.click()}><ImageUp size={15} /></button><label className="add-image-reference-button video-reference-file-button" title="添加参考视频" aria-label="添加参考视频"><Video size={15} /><input type="file" accept="video/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadVideoReference(activeVideoNode.id, file); event.target.value = '' }} /></label></>}
+                   {activeVideoNode.data.videoGenerationMethod === 'image' && <button type="button" className="add-image-reference-button" title="上传首帧图片" aria-label="上传首帧图片" onClick={() => document.getElementById(`video-reference-image-${activeVideoNode.id}`)?.click()}><ImageUp size={15} /></button>}
+                   {activeVideoNode.data.videoGenerationMethod === 'frames' && <><button type="button" className="add-image-reference-button" title="上传首帧图片" aria-label="上传首帧图片" onClick={() => document.getElementById(`video-reference-image-${activeVideoNode.id}`)?.click()}><BetweenHorizontalStart size={15} /></button><button type="button" className="add-image-reference-button" title="上传尾帧图片" aria-label="上传尾帧图片" onClick={() => document.getElementById(`video-reference-last-${activeVideoNode.id}`)?.click()}><BetweenHorizontalEnd size={15} /></button></>}
+                   {activeVideoNode.data.videoGenerationMethod === 'reference' && <button type="button" className="add-image-reference-button" title="添加参考图" aria-label="添加参考图" onClick={() => document.getElementById(`video-reference-image-${activeVideoNode.id}`)?.click()}><ImageUp size={15} /></button>}
+                  {activeVideoNode.data.videoGenerationMethod !== 'text' && <><input id={`video-reference-image-${activeVideoNode.id}`} type="file" hidden accept="image/*" multiple={activeVideoNode.data.videoGenerationMethod === 'image'} onChange={(event) => { const files = Array.from(event.target.files ?? []); files.forEach((file) => uploadVideoReferenceImage(activeVideoNode.id, file, activeVideoNode.data.videoGenerationMethod === 'frames' ? 'first' : 'reference')); if (files.length > 1 && activeVideoNode.data.videoGenerationMethod === 'image') setToastMessage('图生视频只使用排序第一张图片作为首帧，其余图片可拖拽调整'); event.target.value = '' }} /><input id={`video-reference-last-${activeVideoNode.id}`} type="file" hidden accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadVideoReferenceImage(activeVideoNode.id, file, 'last'); event.target.value = '' }} /></>}
+                </div>
+                <div className="image-prompt-field video-prompt-field">
+                  <AtomicPromptEditor
+                    key={activeVideoNode.id}
+                    ref={videoPromptEditorRef}
+                    value={activeVideoNode.data.body}
+                    references={activeVideoReferences}
+                    ariaLabel="视频提示词"
+                    placeholder="描述你想生成的视频，按 @ 引用参考素材"
+                    onChange={handleVideoPromptChange}
+                    onRemoveToken={(start, end) => {
+                      const nodeId = activeVideoNode.id
+                      const removedMention = activeVideoNode.data.body.slice(start, end)
+                      const removedReference = activeVideoReferences.find((reference) => reference.mention === removedMention)
+                      setNodes((current) => current.map((node) => {
+                        if (node.id !== nodeId) return node
+                        const nextBody = `${node.data.body.slice(0, start)}${node.data.body.slice(end)}`
+                        if (!removedReference || removedReference.source === 'connection') return { ...node, data: { ...node.data, promptText: undefined, body: nextBody } }
+                        const cleared = removedReference.id === 'video-first-frame' ? { videoFirstFrameUrl: undefined }
+                          : removedReference.id === 'video-last-frame' ? { videoLastFrameUrl: undefined }
+                            : removedReference.id === 'video-reference-video' ? { videoReferenceUrl: undefined, videoReferenceFileName: undefined }
+                              : removedReference.id === 'video-reference-image' ? { videoReferenceImageUrl: undefined, videoReferenceImageName: undefined }
+                                : { referenceImages: (node.data.referenceImages ?? []).filter((reference) => reference.id !== removedReference.id) }
+                        return { ...node, data: { ...node.data, ...cleared, promptText: undefined, body: nextBody } }
+                      }))
+                      if (removedReference?.source === 'connection' && removedReference.sourceNodeId) {
+                        setEdges((current) => current.map((edge) => edge.source === removedReference.sourceNodeId && edge.target === nodeId
+                          ? { ...edge, data: { ...edge.data, referenceSelected: false } }
+                          : edge))
+                      }
+                      window.requestAnimationFrame(() => videoPromptEditorRef.current?.focusAt(start))
+                    }}
+                    onBlur={() => {
+                      setVideoMentionOpen(false)
+                      setVideoMentionRange(null)
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation()
+                      if (videoMentionOpen && filteredVideoMentionReferences.length) {
+                        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                          event.preventDefault()
+                          const direction = event.key === 'ArrowDown' ? 1 : -1
+                          setVideoMentionIndex((current) => (current + direction + filteredVideoMentionReferences.length) % filteredVideoMentionReferences.length)
+                          return
+                        }
+                        if (event.key === 'Enter' || event.key === 'Tab') {
+                          event.preventDefault()
+                          selectVideoMention(filteredVideoMentionReferences[videoMentionIndex] ?? filteredVideoMentionReferences[0])
+                          return
+                        }
+                      }
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !activeVideoGenerationRunning) {
+                        event.preventDefault()
+                        void generateVideoNode(activeVideoNode.id)
+                      }
+                      if (event.key === 'Escape') {
+                        if (videoMentionOpen) setVideoMentionOpen(false)
+                        else setActiveVideoNodeId(null)
+                      }
+                    }}
+                  />
+                  <AnimatePresence>
+                    {videoMentionOpen && <motion.div className="image-mention-menu" initial={{ opacity: 0, y: 5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .98 }}>
+                      <div className="image-mention-heading"><span>@ 引用参考素材</span><small>{filteredVideoMentionReferences.filter((reference) => !reference.disabledReason && reference.available !== false && (reference.kind !== 'text' || Boolean(reference.text?.trim()))).length} 个可用</small></div>
+                      {filteredVideoMentionReferences.map((reference, index) => <button type="button" key={reference.id} className={`${videoMentionIndex === index ? 'is-selected' : ''} ${reference.disabledReason || reference.available === false || (reference.kind === 'text' && !reference.text?.trim()) ? 'is-disabled' : ''}`} title={reference.disabledReason || undefined} onMouseDown={(event) => event.preventDefault()} onClick={() => selectVideoMention(reference)}>
+                        {reference.kind === 'video'
+                          ? <VideoReferenceThumbnail reference={reference} name={reference.name} />
+                          : reference.url
+                            ? <img src={reference.url} alt="" />
+                            : <span className="reference-text-thumbnail">{reference.kind === 'image' ? <FileImage size={13} /> : <Type size={13} />}</span>}
+                        <span><strong>@{reference.name}</strong><small>{reference.name}</small></span>
+                        <em>{reference.source === 'connection' ? (reference.kind === 'text' ? '来自文本连线' : reference.kind === 'video' ? '来自视频连线' : '来自图片连线') : '本地素材'}</em>
+                      </button>)}
+                      {!filteredVideoMentionReferences.length && <p>没有匹配的参考素材</p>}
+                    </motion.div>}
+                  </AnimatePresence>
+                </div>
+                <footer className="image-editor-footer">
+                  {enabledVideoModels.length ? <div className="video-model-picker"><button type="button" className="editor-model-empty video-model-select" onClick={() => setVideoModelMenuOpen((open) => !open)}><ModelBrandBadge name={formatVideoModelName(activeVideoNode.data.videoModelName || enabledVideoModels[0]?.model.name || '')} video /><span>{formatVideoModelName(activeVideoNode.data.videoModelName || enabledVideoModels[0]?.model.name || '选择视频模型')}</span></button>{videoModelMenuOpen && <div className="video-model-menu"><header><span>视频模型</span><button type="button" className="video-model-settings" title="打开 API 设置" aria-label="打开 API 设置" onClick={(event) => { event.stopPropagation(); setVideoModelMenuOpen(false); openApiSettings() }}><Settings2 size={13} /></button></header>{videoModelProviderGroups.map((group) => <div className="video-model-provider-group" key={group.key}>{groupVideoModelsByProvider && <div className="video-model-provider"><span>{group.label}</span><small>{group.items.length} 个模型</small></div>}{group.items.map(({ connection, model }) => { const selected = (activeVideoNode.data.videoModelId || enabledVideoModels[0]?.model.id) === model.id && (activeVideoNode.data.videoModelConnectionId || enabledVideoModels[0]?.connection.id) === connection.id; return <div className="video-model-option-wrap" key={`${connection.id}-${model.id}`}><button type="button" className={selected ? 'is-selected' : ''} onClick={() => { updateNodeData(activeVideoNode.id, { videoModelConnectionId: connection.id, videoModelId: model.id, videoModelName: model.name }); setVideoModelMenuOpen(false) }}><ModelBrandBadge name={formatVideoModelName(model.name)} video /><span><strong>{formatVideoModelName(model.name)}</strong></span>{selected && <Check size={13} />}</button></div> })}</div>)}</div>}</div> : <button type="button" className="editor-model-empty video-model-select video-model-configure" onClick={openApiSettings}><ModelBrandBadge name="seedance" video /><span>配置并启用视频模型</span></button>}
+                  <div className="image-editor-options video-editor-options">
+                    {renderPromptOptimizeControl(activeVideoNode.id)}
+                    <div className="video-parameter-control">
+                      <AnimatePresence>
+                        {videoParameterMenuOpen && <motion.div className="video-parameter-menu" initial={{ opacity: 0, y: 8, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: .97 }}>
+                          <header><strong>视频参数</strong><button type="button" aria-label="关闭视频参数" onClick={() => setVideoParameterMenuOpen(false)}><X size={13} /></button></header>
+                          <section><label>生成模式</label><div className="video-generation-method-options">{([['text', '文生视频', Type, '仅使用文字描述生成视频，不接收图片或视频参考'], ['omni', '全能参考', Sparkles, '最多支持 9 张图片和 3 个视频，可作为角色、动作和风格参考'], ['image', '图生视频', FileImage, '使用一张图片作为视频首帧'], ['frames', '首尾帧', Frame, '使用前两张图片分别作为首帧和尾帧'], ['reference', '图片参考', ImagePlus, '使用最多四张图片作为主体与风格参考']] as const).map(([value, label, ModeIcon, tip]) => <button type="button" key={value} data-tooltip={tip} aria-label={`${label}：${tip}`} className={(activeVideoNode.data.videoGenerationMethod || 'text') === value ? 'is-selected' : ''} onClick={() => { updateNodeData(activeVideoNode.id, { videoGenerationMethod: value, promptText: undefined }); setVideoTextPickerNodeId(null) }}><ModeIcon size={13} /><span>{label}</span></button>)}</div></section>
+                          <section><label>清晰度</label><div className="video-quality-options">{(['480p', '720p', '1080p', '4K'] as const).map((quality) => { const value = quality.toLowerCase() as VideoResolution; const available = activeVideoCapabilities.resolutions.includes(value); return <button type="button" key={quality} disabled={!available} className={`${(activeVideoNode.data.videoResolution || '720p').toUpperCase() === quality.toUpperCase() ? 'is-selected' : ''} ${!available ? 'is-disabled' : ''}`} onClick={() => available && updateNodeData(activeVideoNode.id, { videoResolution: value })}>{quality}</button> })}</div></section>
+                          <section><label>视频时长</label><div className="video-duration-control"><input type="range" min="1" max="15" step="1" value={activeVideoNode.data.videoDuration || 4} onChange={(event) => updateNodeData(activeVideoNode.id, { videoDuration: Number(event.target.value) })} /><input className="video-duration-number" type="number" min="1" max="15" step="1" value={activeVideoNode.data.videoDuration || 4} aria-label="视频时长（秒）" onChange={(event) => updateNodeData(activeVideoNode.id, { videoDuration: Math.max(1, Math.min(15, Number(event.target.value) || 1)) })} /><small>秒</small></div></section>
+                          <section><label>比例</label><div className="video-ratio-options">{VIDEO_ASPECT_OPTIONS.map((option) => { const available = activeVideoCapabilities.ratios.includes(option.value); return <button type="button" key={option.value} disabled={!available} className={`${(activeVideoNode.data.videoAspectRatio || '16:9') === option.value ? 'is-selected' : ''} ${!available ? 'is-disabled' : ''}`} title={!available ? `${option.label} 暂不支持当前视频模型` : undefined} onClick={() => available ? updateNodeData(activeVideoNode.id, { videoAspectRatio: option.value }) : setToastMessage(`${option.label} 暂不支持当前视频模型`)}><span className="ratio-shape" style={{ aspectRatio: `${option.width} / ${option.height}` }} /><small>{option.label === 'Auto' ? '自适应' : option.label}</small></button> })}</div></section>
+                          <section><label>生成音频</label><div className="video-audio-options"><button type="button" className={activeVideoNode.data.videoGenerateAudio !== false ? 'is-selected' : ''} onClick={() => updateNodeData(activeVideoNode.id, { videoGenerateAudio: true })}>开启</button><button type="button" className={activeVideoNode.data.videoGenerateAudio === false ? 'is-selected' : ''} onClick={() => updateNodeData(activeVideoNode.id, { videoGenerateAudio: false })}>关闭</button></div></section>
+                        </motion.div>}
+                      </AnimatePresence>
+                      <button type="button" className={`image-option-chip video-parameter-summary ${videoParameterMenuOpen ? 'is-open' : ''}`} onClick={() => setVideoParameterMenuOpen((open) => !open)} title="设置视频参数">{activeVideoNode.data.videoGenerationMethod === 'omni' ? <Sparkles size={13} /> : activeVideoNode.data.videoGenerationMethod === 'image' ? <FileImage size={13} /> : activeVideoNode.data.videoGenerationMethod === 'frames' ? <Frame size={13} /> : activeVideoNode.data.videoGenerationMethod === 'reference' ? <ImagePlus size={13} /> : <Type size={13} />}<span>{({ text: '文生视频', omni: '全能参考', image: '图生视频', frames: '首尾帧', reference: '图片参考' } as Record<string, string>)[activeVideoNode.data.videoGenerationMethod || 'text']}</span><i /><Ratio size={12} /><span>{activeVideoNode.data.videoAspectRatio || '16:9'} · {activeVideoNode.data.videoDuration || 4}秒 · {activeVideoNode.data.videoResolution || '720p'}</span></button>
+                    </div>
+                    <div className="generation-quantity-control"><AnimatePresence>{videoQuantityMenuOpen && <motion.div className="generation-quantity-menu" initial={{ opacity: 0, y: 5, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .96 }}>{[4, 3, 2, 1].map((count) => <button key={count} type="button" className={(activeVideoNode.data.videoGenerateCount || 1) === count ? 'is-selected' : ''} onClick={() => { updateNodeData(activeVideoNode.id, { videoGenerateCount: count as 1 | 2 | 3 | 4 }); setVideoQuantityMenuOpen(false) }}>{count}×</button>)}</motion.div>}</AnimatePresence><button type="button" className="generation-quantity-button" aria-label={`生成数量 ${activeVideoNode.data.videoGenerateCount || 1}`} onClick={() => { setVideoParameterMenuOpen(false); setVideoQuantityMenuOpen((open) => !open) }}>{activeVideoNode.data.videoGenerateCount || 1}×</button></div>
+                    <div className="video-generate-control" title={displayedVideoCost?.title}>{displayedVideoCost && <span className="generation-cost-chip video-generation-cost-chip">{displayedVideoCost.label}</span>}<button className="editor-generate-button image-generate-button" type="button" title={activeVideoGenerationRunning ? '停止生成' : '生成视频'} onClick={() => activeVideoGenerationRunning ? cancelVideoGeneration(activeVideoNode.id) : void generateVideoNode(activeVideoNode.id)}>{activeVideoGenerationRunning ? <X size={16} /> : <ArrowUp size={17} />}</button></div>
+                  </div>
+                </footer>
+                <div className="node-editor-resize-handle" role="separator" aria-orientation="horizontal" aria-label="Resize video editor" title="Drag to resize editor" onPointerDown={(event) => {
+                  event.preventDefault(); event.stopPropagation()
+                  const nodeId = activeVideoNode.id
+                  const startY = event.clientY
+                  const startHeight = Math.max(260, Math.min(680, activeVideoNode.data.videoEditorHeight ?? 340))
+                  const move = (moveEvent: PointerEvent) => {
+                    const maxHeight = Math.max(320, Math.min(680, window.innerHeight - 40))
+                    const nextHeight = Math.max(260, Math.min(maxHeight, startHeight + moveEvent.clientY - startY))
+                    setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, videoEditorHeight: Math.round(nextHeight) } } : node))
+                  }
+                  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); document.body.classList.remove('is-resizing-node-editor') }
+                  document.body.classList.add('is-resizing-node-editor')
+                  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once: true })
+                }}><span /></div>
+              </motion.section>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {(canvasReferencePickerNodeId || videoTextPickerNodeId) && (
             <motion.div
               className="canvas-reference-picker-pill nodrag nowheel"
               role="status"
@@ -8754,9 +11561,9 @@ function App() {
               exit={{ opacity: 0 }}
             >
               <Focus size={14} />
-              <strong>从画布选择参考</strong>
+              <strong>{videoTextPickerNodeId ? '从画布选择文本节点' : '从画布选择参考'}</strong>
               <span />
-              <button type="button" onClick={() => setCanvasReferencePickerNodeId(null)}>退出</button>
+              <button type="button" onClick={() => { setCanvasReferencePickerNodeId(null); setVideoTextPickerNodeId(null) }}>退出</button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -8912,13 +11719,15 @@ function App() {
           >
             <AnimatePresence initial={false}>
               {!agentOpen && <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><WelcomeAgentComposer
-                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
-                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatModelDisplayName(model.name), connectionName: connection.name }))}
+                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatImageModelName(model.name), connectionName: connection.name }))}
+                videoModels={enabledVideoModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatVideoModelName(model.name), connectionName: getVideoModelProviderLabel(connection.baseUrl) }))}
                 textModelKey={agentTextModelKey}
                 imageModelKey={agentImageModelKey}
+                videoModelKey={agentVideoModelKey}
                 onTextModelChange={setAgentTextModelKey}
                 onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
-                onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
+                onVideoModelChange={(key) => { setAgentVideoModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentVideoPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, videoConnectionId: connectionId, videoModelId: modelId })) }}
                 onSend={(message) => void sendAgentMessage(message, message)}
                 busy={agentBusy}
               /></motion.div>}
@@ -8939,10 +11748,9 @@ function App() {
                 <WandSparkles size={15} />
                 图像生成
               </button>
-              <button className="is-coming-soon" onClick={showVideoGenerationUnavailable}>
-                <Film size={15} />
+              <button onClick={() => createNodeFromEmptyState('video')}>
+                <Film size={12} strokeWidth={1.7} />
                 视频生成
-                <small>暂未开放</small>
               </button>
               <button onClick={() => createNodeFromEmptyState('upload')}>
                 <Upload size={15} />
@@ -8956,13 +11764,19 @@ function App() {
           ref={imageInputRef}
           className="image-file-input"
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           multiple
           aria-label="选择要上传的参考图片"
           onChange={(event) => {
             const files = event.target.files
             const position = uploadPositionRef.current
-            if (files?.length && position) void addImageFiles(files, position)
+            if (files?.length && position) {
+              const video = Array.from(files).find((file) => file.type.startsWith('video/'))
+              if (video) {
+                const videoId = createNode('video', position)
+                if (videoId) uploadVideoToNode(videoId, video)
+              } else void addImageFiles(files, position)
+            }
             event.target.value = ''
             uploadPositionRef.current = null
           }}
@@ -8989,9 +11803,16 @@ function App() {
           onChange={(event) => {
             const files = Array.from(event.target.files ?? [])
             const nodeId = generationReferenceNodeIdRef.current
-            if (files.length && nodeId) void addReferenceFilesToNode(nodeId, files)
+            const target = nodes.find((node) => node.id === nodeId)
+            if (files.length && nodeId) {
+              const directResult = generationReferenceUploadModeRef.current === 'result'
+              void (directResult && target?.data.kind === 'image'
+                ? uploadImageResultToGenerationNode(nodeId, files[0])
+                : addReferenceFilesToNode(nodeId, files))
+            }
             event.target.value = ''
             generationReferenceNodeIdRef.current = null
+            generationReferenceUploadModeRef.current = 'reference'
           }}
         />
 
@@ -9369,16 +12190,66 @@ function App() {
           >
             <ArrowUpDown size={16} />
           </button>
-          {currentProviderCredits && <button
-            type="button"
-            className="credits-chip"
-            onClick={openApiSettings}
-            aria-label="查看各厂商余额"
-            title={creditsTooltip}
+          {displayedProviderCredits && <div
+            className="credits-control"
+            onMouseEnter={() => {
+              if (creditsPopoverCloseTimerRef.current !== null) window.clearTimeout(creditsPopoverCloseTimerRef.current)
+              setCreditsPopoverOpen(true)
+            }}
+            onMouseLeave={() => {
+              if (creditsPopoverCloseTimerRef.current !== null) window.clearTimeout(creditsPopoverCloseTimerRef.current)
+              creditsPopoverCloseTimerRef.current = window.setTimeout(() => setCreditsPopoverOpen(false), 140)
+            }}
+            onFocusCapture={() => setCreditsPopoverOpen(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setCreditsPopoverOpen(false)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setCreditsPopoverOpen(false)
+              }
+            }}
           >
-            <WalletCards size={15} />
-            <span>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)} {currentProviderCredits.unit}</span>
-          </button>}
+            <button
+              type="button"
+              className="credits-chip"
+              onClick={openApiSettings}
+              aria-label="查看各厂商余额"
+              aria-haspopup="listbox"
+              aria-expanded={creditsPopoverOpen}
+              aria-controls="provider-credits-popover"
+              title={creditsTooltip}
+            >
+              <WalletCards size={15} />
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span key={displayedProviderCreditEntry?.key ?? 'credit'} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: .28, ease: 'easeOut' }}>
+                  {formatProviderCreditAmount(displayedProviderCredits)}{formatProviderCreditUnit(displayedProviderCredits) ? ` ${formatProviderCreditUnit(displayedProviderCredits)}` : ''}
+                </motion.span>
+              </AnimatePresence>
+            </button>
+            <AnimatePresence>
+              {creditsPopoverOpen && <motion.div id="provider-credits-popover" className="credits-popover" role="listbox" aria-label="各 API 厂商余额" initial={{ opacity: 0, y: -5, scale: .97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -3, scale: .98 }} transition={{ duration: .14, ease: 'easeOut' }}>
+                <header><strong>API 余额</strong><small>悬停查看 · 点击常亮</small></header>
+                {availableProviderCredits.map(({ key, connectionName, credits }) => <button
+                  key={key}
+                  type="button"
+                  role="option"
+                  aria-selected={key === displayedProviderCreditEntry?.key}
+                  className={`credits-provider-row ${key === displayedProviderCreditEntry?.key ? 'is-pinned' : ''}`}
+                  onClick={() => {
+                    setPinnedCreditConnectionId(key)
+                    setCreditsPopoverOpen(true)
+                  }}
+                  title={`点击让此厂商余额常亮${formatProviderCreditView(credits).original && usdToCnyRate ? ` · ${formatProviderCreditView(credits).original} · 汇率 ${usdToCnyRate.rate.toFixed(4)}（${usdToCnyRate.date}）` : ''}`}
+                >
+                  <span className="credits-provider-copy"><strong>{credits.provider}</strong><small>{connectionName}</small></span>
+                  <span className="credits-provider-value"><b>{formatProviderCreditAmount(credits)}</b>{formatProviderCreditUnit(credits) && <small>{formatProviderCreditUnit(credits)}</small>}</span>
+                  <span className="credits-provider-state" aria-hidden="true">{key === displayedProviderCreditEntry?.key ? '常亮' : '选择'}</span>
+                </button>)}
+              </motion.div>}
+            </AnimatePresence>
+          </div>}
           <button
             ref={apiButtonRef}
             className={`api-chip ${apiConfigured ? 'configured' : ''}`}
@@ -9534,7 +12405,7 @@ function App() {
                   </section>
                   <aside className={`help-performance-note ${automaticPerformanceMode ? 'is-active' : ''}`}>
                     <Sparkles size={15} />
-                    <div><strong>{automaticPerformanceMode ? '画布性能模式已自动开启' : '画布性能模式会自动开启'}</strong><small>节点达到 28 个后，Disy 会减少不可见节点和高开销光效渲染；无需修改浏览器设置。</small></div>
+                    <div><strong>{automaticPerformanceMode ? '画布性能模式已自动开启' : '画布性能模式会自动开启'}</strong><small>节点达到 16 个或连线达到 28 条后，Disy 会减少不可见节点和高开销光效渲染；无需修改浏览器设置。</small></div>
                   </aside>
                 </div>
               </motion.section>
@@ -9548,20 +12419,27 @@ function App() {
               <AgentPanel
                 messages={agentMessages}
                 plans={agentPlans}
+                videoPlans={agentVideoPlans}
                 textPlans={agentTextPlans}
                 references={agentReferences}
                 pendingReferences={agentPendingReferences}
                 candidates={agentImageCandidates}
                 conversations={agentConversationOptions.length ? agentConversationOptions : [{ id: agentConversationId, title: '新的对话', updatedAt: new Date().toISOString() }]}
                 activeConversationId={agentConversationId}
-                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
-                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+                textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatModelDisplayName(model.name), connectionName: connection.name }))}
+                imageModels={enabledImageModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatImageModelName(model.name), connectionName: connection.name }))}
+                videoModels={enabledVideoModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatVideoModelName(model.name), connectionName: getVideoModelProviderLabel(connection.baseUrl) }))}
                 aspectOptions={IMAGE_ASPECT_OPTIONS.map(({ value, label }) => ({ value, label }))}
                 resolutionOptions={(['1K', '2K', '4K'] as ImageResolution[]).map((value) => ({ value, label: value }))}
                 detailOptions={(Object.keys(IMAGE_DETAIL_LABELS) as ImageDetail[]).map((value) => ({ value, label: IMAGE_DETAIL_LABELS[value] }))}
+                videoAspectOptions={VIDEO_ASPECT_OPTIONS.filter((option) => agentVideoCapabilities.ratios.includes(option.value)).map(({ value, label }) => ({ value, label: label === 'Auto' ? '自适应' : label }))}
+                videoResolutionOptions={agentVideoCapabilities.resolutions.map((value) => ({ value, label: value.toUpperCase() }))}
+                videoDurationOptions={[4, 5, 6, 8, 10, 12, 15].map((value) => ({ value: String(value), label: `${value} 秒` }))}
                 textModelKey={agentTextModelKey}
                 imageModelKey={agentImageModelKey}
+                videoModelKey={agentVideoModelKey}
                 imageDefaults={agentImageDefaults}
+                videoDefaults={agentVideoDefaults}
                 busy={agentBusy}
                 agentOnly={false}
                 onStop={stopAgentThinking}
@@ -9573,6 +12451,24 @@ function App() {
                 onSelectConversation={(id) => void selectAgentConversation(id)}
                 onTextModelChange={setAgentTextModelKey}
                 onImageModelChange={(key) => { setAgentImageModelKey(key); const [connectionId = '', modelId = ''] = key.split('::'); setAgentPlans((current) => current.map((plan) => plan.status === 'running' || plan.status === 'completed' ? plan : { ...plan, imageConnectionId: connectionId, imageModelId: modelId })) }}
+                onVideoModelChange={(key) => {
+                  setAgentVideoModelKey(key)
+                  const [connectionId = '', modelId = ''] = key.split('::')
+                  const selected = enabledVideoModels.find(({ connection, model }) => connection.id === connectionId && model.id === modelId)
+                  const capabilities = getVideoModelCapabilities(`${selected?.model.id ?? ''} ${selected?.model.name ?? ''}`)
+                  setAgentVideoDefaults((current) => ({
+                    ...current,
+                    aspectRatio: capabilities.ratios.includes(current.aspectRatio) ? current.aspectRatio : capabilities.ratios[0] ?? '16:9',
+                    resolution: capabilities.resolutions.includes(current.resolution) ? current.resolution : capabilities.resolutions[0] ?? '720p',
+                  }))
+                  setAgentVideoPlans((current) => current.map((plan) => plan.status !== 'ready' ? plan : {
+                    ...plan,
+                    videoConnectionId: connectionId,
+                    videoModelId: modelId,
+                    aspectRatio: capabilities.ratios.includes(plan.aspectRatio as VideoAspectRatio) ? plan.aspectRatio : capabilities.ratios[0] ?? '16:9',
+                    resolution: capabilities.resolutions.includes(plan.resolution as VideoResolution) ? plan.resolution : capabilities.resolutions[0] ?? '720p',
+                  }))
+                }}
                 onImageDefaultsChange={(patch) => {
                   const normalizedPatch = {
                     ...(patch.aspectRatio ? { aspectRatio: patch.aspectRatio as ImageAspectRatio } : {}),
@@ -9589,12 +12485,25 @@ function App() {
                       : plan
                   )))
                 }}
-                onVideoUnavailable={() => setToastMessage('视频生成功能暂未开放，敬请期待')}
+                onVideoDefaultsChange={(patch) => {
+                  const normalizedPatch = {
+                    ...(patch.aspectRatio ? { aspectRatio: patch.aspectRatio as VideoAspectRatio } : {}),
+                    ...(patch.resolution ? { resolution: patch.resolution as VideoResolution } : {}),
+                    ...(typeof patch.duration === 'number' ? { duration: patch.duration } : {}),
+                    ...(typeof patch.count === 'number' ? { count: patch.count } : {}),
+                  }
+                  setAgentVideoDefaults((current) => ({ ...current, ...normalizedPatch }))
+                  setAgentVideoPlans((current) => current.map((plan) => plan.status === 'ready' ? { ...plan, ...normalizedPatch } : plan))
+                }}
                 onReferencesChange={setAgentReferences}
                 onCreateUploadedReference={createAgentUploadedReference}
                 onUploadNotice={setToastMessage}
                 onPendingReferenceConsumed={() => setAgentPendingReferences([])}
-                onPickFromCanvas={() => { setAgentCanvasPicking((active) => !active); setToastMessage(agentCanvasPicking ? '已结束画布选图' : '请在画布上点击图片，完成后再次点击“画布选择”') }}
+                onPickFromCanvas={(mediaKind, videoGenerationMode) => {
+                  agentCanvasPickModeRef.current = { mediaKind: mediaKind ?? 'image', videoGenerationMode }
+                  setAgentCanvasPicking((active) => !active)
+                  setToastMessage(agentCanvasPicking ? '已结束画布选择' : videoGenerationMode === 'omni' ? '请在画布上点击图片或视频' : '请在画布上点击图片')
+                }}
                 onSend={(message, invocationText, references) => void sendAgentMessage(message, invocationText, references)}
                 onPlanChange={(id, patch) => setAgentPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
                 onSelectPlanOptions={selectAgentPlanOptions}
@@ -9602,6 +12511,15 @@ function App() {
                 getImagePlanCostLabel={getAgentImagePlanCostLabel}
                 onCancelPlan={(id) => setAgentPlans((current) => current.map((plan) => plan.id === id ? { ...plan, status: 'proposed' } : plan))}
                 onRemovePlanContextReference={(id, nodeId) => setAgentPlans((current) => current.map((plan) => plan.id === id ? {
+                  ...plan,
+                  contextReferences: (plan.contextReferences ?? []).filter((reference) => reference.nodeId !== nodeId),
+                  referenceNodeIds: plan.referenceNodeIds.filter((referenceId) => referenceId !== nodeId),
+                  references: (plan.references ?? []).filter((reference) => reference.nodeId !== nodeId),
+                } : plan))}
+                onVideoPlanChange={(id, patch) => setAgentVideoPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, ...patch } : plan))}
+                onConfirmVideoPlan={(id) => void confirmAgentVideoPlan(id)}
+                onCancelVideoPlan={(id) => setAgentVideoPlans((current) => current.map((plan) => plan.id === id && plan.status === 'ready' ? { ...plan, status: 'cancelled' } : plan))}
+                onRemoveVideoPlanContextReference={(id, nodeId) => setAgentVideoPlans((current) => current.map((plan) => plan.id === id ? {
                   ...plan,
                   contextReferences: (plan.contextReferences ?? []).filter((reference) => reference.nodeId !== nodeId),
                   referenceNodeIds: plan.referenceNodeIds.filter((referenceId) => referenceId !== nodeId),
@@ -9645,17 +12563,17 @@ function App() {
               <Type size={16} />
               <span><strong>文本</strong><small>{nodeMenu.connectionSourceId ? '引用来源生成文本' : '记录灵感与提示词'}</small></span>
             </button>
-            <button className={nodeMenu.connectionSourceId ? 'is-primary' : undefined} onClick={() => createNode('image')}>
+            <button
+              disabled={Boolean(nodeMenu.connectionDirection !== 'incoming' && nodeMenu.connectionSourceId && nodes.find((node) => node.id === nodeMenu.connectionSourceId)?.data.kind === 'video')}
+              className={nodeMenu.connectionDirection !== 'incoming' && nodeMenu.connectionSourceId && nodes.find((node) => node.id === nodeMenu.connectionSourceId)?.data.kind === 'video' ? 'is-disabled' : ''}
+              onClick={() => createNode('image')}
+            >
               <WandSparkles size={16} />
               <span><strong>图像</strong><small>文生图 / 图生图</small></span>
             </button>
-            <button onClick={() => createNode('svg-motion')}>
-              <Activity size={16} />
-              <span><strong>SVG 动效</strong><small>Logo / 图标 / 角色微动效</small></span>
-            </button>
-            <button className="is-coming-soon" onClick={showVideoGenerationUnavailable}>
-              <Film size={16} />
-              <span><strong>视频</strong><small>暂未开放</small></span>
+            <button onClick={() => createNode('video')}>
+              <Film size={16} strokeWidth={1.7} />
+              <span><strong>视频</strong><small>文生视频 / 图生视频</small></span>
             </button>
             {!nodeMenu.connectionSourceId && (
               <button onClick={() => openImagePicker({ x: nodeMenu.flowX - 130, y: nodeMenu.flowY - 110 })}>
@@ -9741,7 +12659,7 @@ function App() {
               className="node-quick-toolbar image-node-quick-toolbar nodrag nowheel"
               style={{
                 left: Math.min(window.innerWidth - 320, Math.max(320, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
-                top: nodeOverlayRect.top - 10,
+                top: nodeOverlayRect.top - 12,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -9750,14 +12668,14 @@ function App() {
             >
               <button type="button" onClick={() => openNodeImagePreview(activeImageNode.id)}>
                 <Maximize2 size={14} />
-                <span>放大查看</span>
+                <span>放大</span>
               </button>
               <span className="quick-toolbar-divider" />
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'color')} title="调色"><Palette size={14} /><span>调色</span></button>
               <button type="button" onClick={() => openImageTool(activeImageNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
               <div className="image-more-wrap"><button type="button" className={imageMoreMenuNodeId === activeImageNode.id ? 'is-active' : ''} onClick={() => setImageMoreMenuNodeId((current) => current === activeImageNode.id ? null : activeImageNode.id)} title="更多图片工具"><MoreHorizontal size={16} /></button>{imageMoreMenuNodeId === activeImageNode.id && <motion.div className="image-more-menu" initial={{opacity:0,y:-5,scale:.98}} animate={{opacity:1,y:0,scale:1}}>
                 <button onClick={()=>openImageTool(activeImageNode.id,'crop')}><Crop size={14}/><span>裁剪</span></button><button onClick={()=>openImageTool(activeImageNode.id,'expand')}><Expand size={14}/><span>自由扩图</span></button><button onClick={()=>openImageTool(activeImageNode.id,'local-edit')}><MessageCircle size={14}/><span>局部修改</span></button><button onClick={()=>openImageTool(activeImageNode.id,'cutout')}><Scissors size={14}/><span>去背景</span></button><button onClick={()=>openImageTool(activeImageNode.id,'grid')}><Grid3X3 size={14}/><span>自由宫格</span></button>
-                <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1;return <button type="button" aria-label={`${columns}×${rows} 切分`} key={index} className={columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows?'is-on':''} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeImageNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
+                <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1,isOn=columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows,isTarget=columns===quickSplitGrid.columns&&rows===quickSplitGrid.rows;return <button type="button" aria-label={`${columns}×${rows} 切分`} aria-current={isTarget?'true':undefined} key={index} className={`${isOn?'is-on ':''}${isTarget?'is-target':''}`.trim()} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onFocus={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeImageNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
               </motion.div>}</div>
               <span className="quick-toolbar-divider" />
               <button type="button" onClick={() => void downloadSelectedImages([activeImageNode])} title="下载到浏览器默认目录"><Download size={14} /><span>下载</span></button>
@@ -9767,6 +12685,97 @@ function App() {
         </AnimatePresence>
 
         <AnimatePresence>
+          {videoToolbarNode && clipSession?.nodeId !== videoToolbarNode.id && videoCropSession?.nodeId !== videoToolbarNode.id && (videoToolbarNode.data.videoMediaId || videoToolbarNode.data.videoGeneratedAt || videoToolbarNode.data.videoUrl || videoToolbarNode.data.status === '已完成') && nodeOverlayRect && !isNodeDragging && (
+            <motion.div
+              className="node-quick-toolbar image-node-quick-toolbar video-node-quick-toolbar nodrag nowheel"
+              role="toolbar"
+              aria-label="视频操作工具"
+              style={{
+                left: Math.min(window.innerWidth - 340, Math.max(340, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
+                top: nodeOverlayRect.top - 12,
+              }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => openNodeVideoPreview(videoToolbarNode.id)} title="全屏查看视频"><Maximize2 size={14} /><span>全屏</span></button>
+              <span className="quick-toolbar-divider" />
+              <button type="button" onClick={(event) => { event.stopPropagation(); void openClipStudio(videoToolbarNode.id) }} title="剪辑视频"><Scissors size={14} /><span>剪辑</span></button>
+              <button type="button" onClick={() => void openVideoCrop(videoToolbarNode.id)} title="裁剪视频画面"><Crop size={14} /><span>裁剪</span></button>
+              <div className="video-frame-capture-wrap">
+                <button type="button" className={frameCaptureMenuNodeId === videoToolbarNode.id ? 'is-active' : ''} onClick={() => setFrameCaptureMenuNodeId((current) => current === videoToolbarNode.id ? null : videoToolbarNode.id)} title="截取视频画面" aria-haspopup="menu" aria-expanded={frameCaptureMenuNodeId === videoToolbarNode.id}><Frame size={14} /><span>截帧</span></button>
+                <AnimatePresence>{frameCaptureMenuNodeId === videoToolbarNode.id && <motion.div className="video-frame-capture-menu" role="menu" aria-label="选择截帧位置" initial={{ opacity: 0, y: -5, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -4, scale: .98 }} transition={{ duration: .16, ease: [0.22, 0.61, 0.36, 1] }}>
+                  <button type="button" role="menuitem" onClick={() => void captureVideoFrame(videoToolbarNode.id, 'current')}>截取当前帧</button>
+                  <button type="button" role="menuitem" onClick={() => void captureVideoFrame(videoToolbarNode.id, 'first')}>截取首帧</button>
+                  <button type="button" role="menuitem" onClick={() => void captureVideoFrame(videoToolbarNode.id, 'last')}>截取尾帧</button>
+                </motion.div>}</AnimatePresence>
+              </div>
+              <span className="quick-toolbar-divider" />
+              <button type="button" onClick={() => void downloadVideoNode(videoToolbarNode.id)} title="下载到浏览器默认目录"><Download size={14} /><span>下载</span></button>
+              <button type="button" onClick={() => saveNodeToAssets(videoToolbarNode)}><Library size={14} /><span>加入资产库</span></button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {videoCropSession && (
+          <div className="video-crop-layer" role="dialog" aria-label="视频画面裁剪" onPointerDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
+            <motion.div className="video-crop-stage nodrag nowheel" style={(() => {
+              const card = getNodeCardElements(videoCropSession.nodeId)[0]?.getBoundingClientRect()
+              return card ? { left: card.left, top: card.top, width: card.width, height: card.height } : { left: 0, top: 0, width: 0, height: 0 }
+            })()} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <div className="video-crop-shade is-top" style={{ height: `${videoCropSession.rect.y * 100}%` }} />
+              <div className="video-crop-shade is-left" style={{ left: 0, top: `${videoCropSession.rect.y * 100}%`, width: `${videoCropSession.rect.x * 100}%`, height: `${videoCropSession.rect.height * 100}%` }} />
+              <div className="video-crop-shade is-right" style={{ right: 0, top: `${videoCropSession.rect.y * 100}%`, width: `${(1 - videoCropSession.rect.x - videoCropSession.rect.width) * 100}%`, height: `${videoCropSession.rect.height * 100}%` }} />
+              <div className="video-crop-shade is-bottom" style={{ height: `${(1 - videoCropSession.rect.y - videoCropSession.rect.height) * 100}%` }} />
+              <div className="video-crop-selection" style={{ left: `${videoCropSession.rect.x * 100}%`, top: `${videoCropSession.rect.y * 100}%`, width: `${videoCropSession.rect.width * 100}%`, height: `${videoCropSession.rect.height * 100}%` }} onPointerDown={moveVideoCropSelection}>
+                <span className="video-crop-size-label">{Math.round(videoCropSession.sourceWidth * videoCropSession.rect.width)} × {Math.round(videoCropSession.sourceHeight * videoCropSession.rect.height)}</span>
+                <i className="video-crop-grid is-v1" /><i className="video-crop-grid is-v2" /><i className="video-crop-grid is-h1" /><i className="video-crop-grid is-h2" />
+                {(['nw','n','ne','e','se','s','sw','w'] as const).map((edge) => <button type="button" key={edge} className={`video-crop-handle is-${edge}`} aria-label={`调整裁剪区域 ${edge}`} onPointerDown={(event) => resizeVideoCropSelection(edge, event)} />)}
+              </div>
+            </motion.div>
+            <motion.div className="video-crop-dock nodrag nowheel" style={(() => {
+              const card = getNodeCardElements(videoCropSession.nodeId)[0]?.getBoundingClientRect()
+              return card ? { left: card.left + card.width / 2, top: Math.min(window.innerHeight - 66, card.bottom + 12) } : { left: window.innerWidth / 2, top: window.innerHeight / 2 }
+            })()} initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }}>
+              <button type="button" className="video-crop-cancel" title="取消裁剪" aria-label="取消裁剪" disabled={videoCropExporting} onClick={() => setVideoCropSession(null)}><X size={21} strokeWidth={1.8} /></button>
+              <strong>{Math.round(videoCropSession.sourceWidth * videoCropSession.rect.width)} × {Math.round(videoCropSession.sourceHeight * videoCropSession.rect.height)}</strong>
+              <button type="button" className="video-crop-confirm" title="确认裁剪并创建新视频" aria-label="确认裁剪并创建新视频" disabled={videoCropExporting} onClick={() => void exportVideoCrop()}>{videoCropExporting ? <LoaderCircle className="is-spinning" size={20} /> : <ArrowUp size={22} strokeWidth={2} />}</button>
+            </motion.div>
+          </div>
+        )}
+
+        {clipSession && (
+          <div ref={clipStudioLayerRef} className="clip-studio-layer" role="dialog" aria-label="视频剪辑台">
+            <motion.div className="clip-studio-dock nodrag nowheel" style={(() => {
+              const card = getNodeCardElements(clipSession.nodeId)[0]?.getBoundingClientRect()
+              const anchor = card ?? { left: window.innerWidth / 2 - 240, width: 480, bottom: window.innerHeight / 2 }
+              const edge = window.innerWidth <= 760 ? 10 : 16
+              const width = Math.min(window.innerWidth - edge * 2, Math.max(560, anchor.width * 1.48))
+              const left = Math.max(edge, Math.min(window.innerWidth - width - edge, anchor.left + anchor.width / 2 - width / 2))
+              const top = Math.min(window.innerHeight - (window.innerWidth <= 760 ? 80 : 90), anchor.bottom + 12)
+              return { width, left, top }
+            })()} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .2, ease: [0.22, 0.61, 0.36, 1] }} onPointerDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
+              <button type="button" className="clip-studio-close" title="取消剪辑" aria-label="取消剪辑" onClick={() => setClipSession(null)}><X size={21} strokeWidth={1.8} /></button>
+              <span className="clip-studio-divider" aria-hidden="true" />
+              <div className="clip-studio-track">
+                <div className={`clip-studio-frames ${clipSession.frames.length ? '' : 'is-empty'}`}>{clipSession.frames.map((frame, index) => <img key={index} src={frame} alt="" draggable={false} />)}{!clipSession.frames.length && <span>视频轨道</span>}</div>
+                <div className="clip-studio-shade is-before" style={{ width: `${clipSession.start / clipSession.duration * 100}%` }} />
+                <div className="clip-studio-shade is-after" style={{ width: `${(clipSession.duration - clipSession.end) / clipSession.duration * 100}%` }} />
+                <div className="clip-studio-selection" onPointerDown={moveClipSelection} style={{ left: `${clipSession.start / clipSession.duration * 100}%`, right: `${(clipSession.duration - clipSession.end) / clipSession.duration * 100}%` }}>
+                  <button type="button" className="clip-studio-handle is-start" aria-label="拖动剪辑起点" onPointerDown={(event) => moveClipEdge('start', event)} />
+                  <b>{(clipSession.end - clipSession.start).toFixed(2)} s</b>
+                  <button type="button" className="clip-studio-handle is-end" aria-label="拖动剪辑终点" onPointerDown={(event) => moveClipEdge('end', event)} />
+                </div>
+              </div>
+              <button type="button" className={`clip-studio-tool ${clipSession.removeAudio ? 'is-active' : ''}`} title={clipSession.removeAudio ? '保留原声音' : '移除声音'} aria-label={clipSession.removeAudio ? '保留原声音' : '移除声音'} onClick={() => setClipSession((current) => current ? { ...current, removeAudio: !current.removeAudio } : current)}>{clipSession.removeAudio ? <VolumeX size={21} strokeWidth={1.8} /> : <Volume2 size={21} strokeWidth={1.8} />}</button>
+              <button type="button" className="clip-studio-tool" title="重置选区" aria-label="重置选区" onClick={() => setClipSession((current) => current ? { ...current, start: 0, end: current.duration } : current)}><RefreshCw size={20} strokeWidth={1.8} /></button>
+              <button type="button" className="clip-studio-confirm" disabled={clipExporting || clipSession.end - clipSession.start < .1} title="确认剪辑并创建新节点" aria-label="确认剪辑并创建新节点" onClick={() => void exportClipStudio()}>{clipExporting ? <LoaderCircle className="is-spinning" size={22} /> : <Check size={28} strokeWidth={1.8} />}</button>
+            </motion.div>
+          </div>
+        )}
+
+        <AnimatePresence>
           {activeGenerationNode && nodeOverlayRect && !isNodeDragging && (
             <motion.div
               className={`node-quick-toolbar ${activeGenerationNode.data.imageUrl ? 'image-node-quick-toolbar' : 'image-generation-upload-toolbar'} nodrag nowheel`}
@@ -9774,7 +12783,7 @@ function App() {
                 left: activeGenerationNode.data.imageUrl
                   ? Math.min(window.innerWidth - 320, Math.max(320, nodeEditorCenterX))
                   : nodeEditorCenterX,
-                top: nodeOverlayRect.top - 10,
+                top: nodeOverlayRect.top - 34,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -9785,14 +12794,14 @@ function App() {
                 <>
                   <button type="button" onClick={() => openNodeImagePreview(activeGenerationNode.id)}>
                     <Maximize2 size={14} />
-                    <span>放大查看</span>
+                    <span>放大</span>
                   </button>
                   <span className="quick-toolbar-divider" />
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'color')} title="调色"><Palette size={14} /><span>调色</span></button>
                   <button type="button" onClick={() => openImageTool(activeGenerationNode.id, 'studio')} title="打光"><Lightbulb size={14} /><span>打光</span></button>
                   <div className="image-more-wrap"><button type="button" className={imageMoreMenuNodeId === activeGenerationNode.id ? 'is-active' : ''} onClick={() => setImageMoreMenuNodeId((current) => current === activeGenerationNode.id ? null : activeGenerationNode.id)} title="更多图片工具"><MoreHorizontal size={16} /></button>{imageMoreMenuNodeId === activeGenerationNode.id && <motion.div className="image-more-menu" initial={{opacity:0,y:-5,scale:.98}} animate={{opacity:1,y:0,scale:1}}>
                     <button onClick={()=>openImageTool(activeGenerationNode.id,'crop')}><Crop size={14}/><span>裁剪</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'expand')}><Expand size={14}/><span>自由扩图</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'local-edit')}><MessageCircle size={14}/><span>局部修改</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'cutout')}><Scissors size={14}/><span>去背景</span></button><button onClick={()=>openImageTool(activeGenerationNode.id,'grid')}><Grid3X3 size={14}/><span>自由宫格</span></button>
-                    <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1;return <button type="button" aria-label={`${columns}×${rows} 切分`} key={index} className={columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows?'is-on':''} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeGenerationNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
+                    <div className="quick-split-hover-zone"><div className="quick-split-row"><span><Grid3X3 size={14}/>快速切分</span><small>悬停选择</small></div><div className="quick-split-preview">{Array.from({length:36},(_,index)=>{const columns=index%6+1,rows=Math.floor(index/6)+1,isOn=columns<=quickSplitGrid.columns&&rows<=quickSplitGrid.rows,isTarget=columns===quickSplitGrid.columns&&rows===quickSplitGrid.rows;return <button type="button" aria-label={`${columns}×${rows} 切分`} aria-current={isTarget?'true':undefined} key={index} className={`${isOn?'is-on ':''}${isTarget?'is-target':''}`.trim()} onMouseEnter={()=>setQuickSplitGrid({columns,rows})} onFocus={()=>setQuickSplitGrid({columns,rows})} onClick={()=>void applyQuickGridCut(activeGenerationNode.id,columns,rows)}/>})}<b>{quickSplitGrid.columns}×{quickSplitGrid.rows}</b></div></div>
                   </motion.div>}</div>
                   <span className="quick-toolbar-divider" />
                   <button type="button" onClick={() => void downloadSelectedImages([activeGenerationNode])} title="下载到浏览器默认目录"><Download size={14} /><span>下载</span></button>
@@ -9801,13 +12810,15 @@ function App() {
               ) : (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    generationReferenceUploadModeRef.current = 'result'
                     generationReferenceNodeIdRef.current = activeGenerationNode.id
                     generationReferenceInputRef.current?.click()
                   }}
                 >
                   <Upload size={14} />
-                  <span>{activeGenerationNode.data.referenceImageUrl ? '替换图片' : '上传图片'}</span>
+                  <span>上传图片</span>
                 </button>
               )}
             </motion.div>
@@ -9820,7 +12831,7 @@ function App() {
               className="node-quick-toolbar nodrag nowheel"
               style={{
                 left: Math.min(window.innerWidth - 92, Math.max(92, nodeOverlayRect.left + nodeOverlayRect.width / 2)),
-                top: nodeOverlayRect.top - 10,
+                top: nodeOverlayRect.top - 34,
               }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -9836,6 +12847,17 @@ function App() {
                 <Maximize2 size={14} />
                 <span>放大</span>
               </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {previewVideoNode && previewVideoUrl && (
+            <motion.div className="video-preview-backdrop" role="dialog" aria-modal="true" aria-label="视频预览" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onPointerDown={() => setPreviewVideoNodeId(null)}>
+              <div className="video-preview-shell" onPointerDown={(event) => event.stopPropagation()}>
+                <header className="video-preview-header"><div><strong>{getNodeDisplayTitle(previewVideoNode.data)}</strong></div><button type="button" aria-label="关闭视频预览" onClick={() => setPreviewVideoNodeId(null)}><X size={20} /></button></header>
+                <div className="video-preview-body"><div className="video-preview-stage"><video ref={previewVideoRef} className="video-preview-media" src={previewVideoUrl} playsInline muted={previewVideoMuted} onLoadedMetadata={(event) => readPreviewVideoDuration(event.currentTarget)} onDurationChange={(event) => { const duration = event.currentTarget.duration; if (Number.isFinite(duration) && duration > 0) setPreviewVideoDuration(duration) }} onTimeUpdate={(event) => setPreviewVideoCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPreviewVideoPlaying(true)} onPause={() => setPreviewVideoPlaying(false)} onEnded={() => setPreviewVideoPlaying(false)} /><div className="video-preview-controls"><button type="button" title={previewVideoPlaying ? '暂停' : '播放'} aria-label={previewVideoPlaying ? '暂停' : '播放'} onClick={() => { const video = previewVideoRef.current; if (!video) return; if (video.paused) void video.play(); else video.pause() }}>{previewVideoPlaying ? <Pause size={17} /> : <Play size={17} />}</button><span>{formatVideoTime(previewVideoCurrentTime)}</span><input type="range" min="0" max={Math.max(effectivePreviewVideoDuration, .1)} step=".01" value={Math.min(previewVideoCurrentTime, effectivePreviewVideoDuration)} aria-label="视频播放进度" onChange={(event) => { const time = Number(event.target.value); setPreviewVideoCurrentTime(time); if (previewVideoRef.current) previewVideoRef.current.currentTime = time }} /><span>{formatVideoTime(effectivePreviewVideoDuration)}</span><button type="button" title={previewVideoMuted ? '打开声音' : '静音'} aria-label={previewVideoMuted ? '打开声音' : '静音'} onClick={() => setPreviewVideoMuted((muted) => !muted)}>{previewVideoMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button><button type="button" title="浏览器全屏" aria-label="浏览器全屏" onClick={() => void document.querySelector<HTMLElement>('.video-preview-stage')?.requestFullscreen?.()}><Maximize2 size={17} /></button></div></div><aside className="video-preview-info"><h3>提示词</h3><p>{previewVideoNode.data.body || '暂无提示词'}</p><h3>信息</h3><dl><div><dt>模型</dt><dd>{formatVideoModelName(previewVideoNode.data.videoModelName) || '未选择'}</dd></div><div><dt>清晰度</dt><dd>{previewVideoNode.data.videoResolution || '720p'}</dd></div><div><dt>宽高比</dt><dd>{previewVideoNode.data.videoAspectRatio || '16:9'}</dd></div><div><dt>时长</dt><dd>{formatVideoTime(effectivePreviewVideoDuration)}</dd></div><div><dt>生成音频</dt><dd>{previewVideoNode.data.videoGenerateAudio === false ? '关闭' : '开启'}</dd></div></dl></aside></div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -9932,8 +12954,14 @@ function App() {
                   <span>{libraryPreviewIndex + 1} / {libraryPreviewItems.length}</span>
                 </div>
                 <div>
-                  <button type="button" className="library-gallery-action" onClick={() => void downloadImageUrl(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Download size={15} /><span>下载</span></button>
-                  <button type="button" className="library-gallery-action" disabled={libraryPreview.kind === 'asset'} title={libraryPreview.kind === 'asset' ? '该图片已在资产库' : '加入资产库'} onClick={() => saveImageUrlToAssets(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Library size={15} /><span>{libraryPreview.kind === 'asset' ? '已在资产库' : '加入资产库'}</span></button>
+                  <button type="button" className="library-gallery-action" onClick={() => activeLibraryPreview.kind === 'video'
+                    ? activeLibraryPreview.record
+                      ? void downloadGenerationRecord(activeLibraryPreview.record)
+                      : activeLibraryPreview.asset
+                        ? void downloadAsset(activeLibraryPreview.asset)
+                        : undefined
+                    : void downloadImageUrl(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Download size={15} /><span>下载</span></button>
+                  <button type="button" className="library-gallery-action" disabled={libraryPreview.kind === 'asset' || activeLibraryPreview.kind === 'video'} title={libraryPreview.kind === 'asset' ? '该图片已在资产库' : activeLibraryPreview.kind === 'video' ? '请从视频节点加入资产库' : '加入资产库'} onClick={() => saveImageUrlToAssets(activeLibraryPreview.url, activeLibraryPreview.fileName)}><Library size={15} /><span>{libraryPreview.kind === 'asset' ? '已在资产库' : '加入资产库'}</span></button>
                   <button type="button" aria-label="关闭画廊" onClick={() => setLibraryPreview(null)}><X size={20} /></button>
                 </div>
               </header>
@@ -9953,7 +12981,9 @@ function App() {
                     transition={{ duration: .22, ease: [0.22, 1, 0.36, 1] }}
                     onPointerDown={(event) => event.stopPropagation()}
                   >
-                    <img src={activeLibraryPreview.url} alt={activeLibraryPreview.alt} draggable={false} />
+                    {activeLibraryPreview.kind === 'video'
+                      ? <video src={activeLibraryPreview.url} aria-label={activeLibraryPreview.alt} controls playsInline preload="metadata" />
+                      : <img src={activeLibraryPreview.url} alt={activeLibraryPreview.alt} draggable={false} />}
                     <figcaption title={activeLibraryPreview.fileName}>{activeLibraryPreview.fileName}</figcaption>
                   </motion.figure>
                 </AnimatePresence>
@@ -9974,7 +13004,9 @@ function App() {
                       setLibraryPreviewDirection(index > libraryPreviewIndex ? 1 : -1)
                       setLibraryPreview({ ...libraryPreview, id: item.id })
                     }}
-                  ><img src={item.url} alt="" draggable={false} /></button>
+                  >{item.kind === 'video'
+                    ? <video src={item.url} aria-hidden="true" muted playsInline preload="metadata" />
+                    : <img src={item.url} alt="" draggable={false} />}</button>
                 ))}
               </div>
               <span className="library-gallery-hint">滚轮或方向键切换</span>
@@ -10075,7 +13107,7 @@ function App() {
               }}
             >
               <motion.section
-                className={`image-node-editor nodrag nowheel ${imageParameterMenuOpen ? 'is-parameter-open' : ''}`}
+                className={`image-node-editor nodrag nowheel ${imageParameterMenuOpen || imageModelMenuOpen ? 'is-parameter-open' : ''}`}
                 style={{ height: Math.max(260, Math.min(680, activeGenerationNode.data.imageEditorHeight ?? 340)) }}
                 aria-label="图像节点编辑器"
                 initial={{ opacity: 0, y: 14, scale: 0.98 }}
@@ -10182,6 +13214,7 @@ function App() {
                     className="add-image-reference-button"
                     title="上传参考图片"
                     onClick={() => {
+                      generationReferenceUploadModeRef.current = 'reference'
                       generationReferenceNodeIdRef.current = activeGenerationNode.id
                       generationReferenceInputRef.current?.click()
                     }}
@@ -10307,8 +13340,8 @@ function App() {
                                 setImageModelMenuOpen(false)
                               }}
                             >
-                              <ModelBrandBadge name={model.name} image />
-                              <span><strong>{model.name}</strong></span>
+                              <ModelBrandBadge name={formatImageModelName(model.name)} image />
+                              <span><strong>{formatImageModelName(model.name)}</strong></span>
                               {displayedActiveNodeImageModel?.connection.id === connection.id && displayedActiveNodeImageModel.model.id === model.id && <Check size={14} />}
                             </button>
                           </div>))}
@@ -10319,7 +13352,7 @@ function App() {
                     <button
                       type="button"
                       className="editor-model-empty"
-                      title={activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || '选择图像模型'}
+                      title={formatImageModelName(activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || '选择图像模型')}
                       onClick={() => {
                         setImageParameterMenuOpen(false)
                         setQuantityMenuOpen(false)
@@ -10327,11 +13360,13 @@ function App() {
                         else openApiSettings()
                       }}
                     >
-                      <ModelBrandBadge name={activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name} image />
-                      <span>{activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || (hasCatalogImageModels ? '图像模型尚未启用' : '配置并启用图像模型')}</span>
+                      <ModelBrandBadge name={formatImageModelName(activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name)} image />
+                      <span>{formatImageModelName(activeGenerationNode?.data.imageModelName || displayedActiveNodeImageModel?.model.name || (hasCatalogImageModels ? '图像模型尚未启用' : '配置并启用图像模型'))}</span>
                     </button>
                   </div>
                   <div className="image-editor-options">
+                    {renderPromptOptimizeControl(activeGenerationNode.id)}
+                    {activeGenerationNode.data.promptOptimizationBackup !== undefined && <button type="button" className="prompt-optimize-undo" title="撤回到优化前" onClick={() => undoNodePromptOptimization(activeGenerationNode.id)}><RefreshCw size={13} /><span>撤回</span></button>}
                     <div className="image-parameter-control">
                       <AnimatePresence>
                         {imageParameterMenuOpen && (
@@ -10409,7 +13444,7 @@ function App() {
                       </button>
                     </div>
                     <div className="generation-run-control">
-                      {activeImageCostLabel && <span className="generation-cost-chip" title={activeImagePrice?.priceExample || '厂商实时积分价格'}>{activeImageCostLabel}</span>}
+                    <div className="generation-run-control generation-run-composite">{activeImageCostLabel && <span className="generation-cost-chip" title={activeImagePrice ? formatProviderPriceTooltip(activeImagePrice, usdToCnyRate?.rate) : '厂商实时积分价格'}>{activeImageCostLabel}</span>}
                       <AnimatePresence>
                         {activeImageGenerationRunning && generationControlMenuNodeId === activeGenerationNode.id && (
                           <motion.div className="generation-control-menu" initial={{ opacity: 0, y: 5, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4, scale: .96 }}>
@@ -10428,7 +13463,7 @@ function App() {
                       >
                         {activeImageGenerationRunning ? <Pause size={17} /> : <ArrowUp size={17} strokeWidth={2.2} />}
                       </button>
-                    </div>
+                    </div></div>
                   </div>
                 </footer>
                 <div
@@ -10501,8 +13536,8 @@ function App() {
                         <button
                           type="button"
                           key={reference.id}
-                          className={`image-reference-thumbnail ${(reference.selected || (activeTextNode.data.promptText ?? '').includes(reference.mention)) ? 'is-mentioned' : ''} ${(reference.kind === 'text' ? !reference.text?.trim() : !reference.url) ? 'is-disabled' : ''}`}
-                          title={(reference.kind === 'text' ? !reference.text?.trim() : !reference.url) ? `${reference.name} · 来源内容暂不可用` : `${reference.name} · 点击插入引用`}
+                          className={`image-reference-thumbnail ${(reference.selected || (activeTextNode.data.promptText ?? '').includes(reference.mention)) ? 'is-mentioned' : ''} ${(reference.kind === 'text' ? !reference.text?.trim() : reference.kind === 'video' ? reference.available === false : !reference.url) ? 'is-disabled' : ''}`}
+                          title={(reference.kind === 'text' ? !reference.text?.trim() : reference.kind === 'video' ? reference.available === false : !reference.url) ? `${reference.name} · 来源内容暂不可用` : `${reference.name} · 点击插入引用`}
                           onMouseDown={(event) => event.preventDefault()}
                           onMouseEnter={(event) => {
                             if (reference.kind !== 'text' || !reference.text?.trim()) return
@@ -10517,7 +13552,9 @@ function App() {
                           onMouseLeave={() => setTextReferencePreview(null)}
                           onClick={() => selectTextMention(reference)}
                         >
-                          {reference.url
+                          {reference.kind === 'video'
+                            ? <VideoReferenceThumbnail reference={reference} name={reference.name} />
+                            : reference.url
                             ? <img src={reference.url} alt={reference.name} />
                             : <span className="reference-text-thumbnail"><Type size={13} /></span>}
                           <span className="image-reference-name" title={reference.name}>{compactReferenceName(reference.name)}</span>
@@ -10538,6 +13575,7 @@ function App() {
                       className="add-image-reference-button"
                       title="上传本地参考图片"
                       onClick={() => {
+                        generationReferenceUploadModeRef.current = 'reference'
                         generationReferenceNodeIdRef.current = activeTextNode.id
                         generationReferenceInputRef.current?.click()
                       }}
@@ -10608,11 +13646,13 @@ function App() {
                         <div className="image-mention-heading"><span>@ 引用节点</span><small>{filteredTextMentionReferences.length} 个可用</small></div>
                         {filteredTextMentionReferences.map((reference, index) => (
                           <button type="button" key={reference.id} className={textMentionIndex === index ? 'is-selected' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => selectTextMention(reference)}>
-                            {reference.url
-                              ? <img src={reference.url} alt="" />
-                              : <span className="reference-text-thumbnail"><Type size={13} /></span>}
+                            {reference.kind === 'video'
+                              ? <VideoReferenceThumbnail reference={reference} name={reference.name} />
+                              : reference.url
+                                ? <img src={reference.url} alt="" />
+                                : <span className="reference-text-thumbnail"><Type size={13} /></span>}
                             <span><strong>@{reference.name}</strong><small>{reference.name}</small></span>
-                            <em>{reference.kind === 'image' ? '图片参考' : '文本参考'}</em>
+                            <em>{reference.kind === 'image' ? '图片参考' : reference.kind === 'video' ? '视频参考' : '文本参考'}</em>
                           </button>
                         ))}
                         {!filteredTextMentionReferences.length && <p>没有匹配的引用</p>}
@@ -10646,8 +13686,8 @@ function App() {
                                 setModelMenuOpen(false)
                               }}
                             >
-                              <ModelBrandBadge name={model.name} />
-                              <span><strong>{model.name}</strong></span>
+                              <ModelBrandBadge name={formatModelDisplayName(model.name)} />
+                              <span><strong>{formatModelDisplayName(model.name)}</strong></span>
                               {selectedTextModel?.connection.id === connection.id && selectedTextModel.model.id === model.id && <Check size={14} />}
                             </button>
                           </div>))}
@@ -10660,14 +13700,16 @@ function App() {
                     <button
                       type="button"
                       className="editor-model-empty"
-                      title={selectedTextModel?.model.name || '选择文本模型'}
+                      title={formatModelDisplayName(selectedTextModel?.model.name || '选择文本模型')}
                       onClick={() => enabledTextModels.length ? setModelMenuOpen((open) => !open) : openApiSettings()}
                     >
-                      <ModelBrandBadge name={selectedTextModel?.model.name} />
-                      <span>{selectedTextModel?.model.name || (hasCatalogTextModels ? '文本模型尚未启用' : hasCatalogImageModels ? '当前只有图像模型，请切换' : '配置并启用文本模型')}</span>
+                      <ModelBrandBadge name={formatModelDisplayName(selectedTextModel?.model.name)} />
+                      <span>{formatModelDisplayName(selectedTextModel?.model.name || (hasCatalogTextModels ? '文本模型尚未启用' : hasCatalogImageModels ? '当前只有图像模型，请切换' : '配置并启用文本模型'))}</span>
                     </button>
                   </div>
                   <div className="editor-footer-actions">
+                    {renderPromptOptimizeControl(activeTextNode.id)}
+                    {activeTextNode.data.promptOptimizationBackup !== undefined && <button type="button" className="prompt-optimize-undo" title="撤回到优化前" onClick={() => undoNodePromptOptimization(activeTextNode.id)}><RefreshCw size={13} /><span>撤回</span></button>}
                     <div className="generation-quantity-control">
                       <AnimatePresence>
                         {quantityMenuOpen && (
@@ -10703,16 +13745,15 @@ function App() {
                         {generationCount}×
                       </button>
                     </div>
-                    {activeTextCostLabel && <span className="generation-cost-chip" title={activeTextPrice?.priceExample || '厂商实时积分价格'}>{activeTextCostLabel}</span>}
-                    <button
+                    <div className={`generation-run-control generation-run-composite ${activeTextGenerationRunning ? 'is-running' : ''}`}>{(activeTextCostLabel || activeTextGenerationRunning) && <span className="generation-cost-chip" title={activeTextGenerationRunning ? '文本模型正在分析提示词与参考素材' : activeTextPrice ? formatProviderPriceTooltip(activeTextPrice, usdToCnyRate?.rate) : '厂商实时积分价格'}>{activeTextGenerationRunning ? <><i className="generation-status-pulse" />正在生成</> : activeTextCostLabel}</span>}<button
                       className="editor-generate-button"
                       aria-label="生成"
                       title={activeTextGenerationRunning ? '正在生成' : '生成文本'}
                       disabled={activeTextGenerationRunning}
                       onClick={() => void generateFromActiveTextNode()}
                     >
-                      {activeTextGenerationRunning ? <LoaderCircle size={17} className="is-spinning" /> : <ArrowUp size={17} strokeWidth={2.2} />}
-                    </button>
+                      {activeTextGenerationRunning ? <span className="editor-generation-loader" aria-hidden="true"><i /><b /></span> : <ArrowUp size={17} strokeWidth={2.2} />}
+                    </button></div>
                   </div>
                 </footer>
                 <div
@@ -10869,6 +13910,7 @@ function App() {
                     ['all', '全部'],
                     ['text', '文本'],
                     ['image', '图像'],
+                    ['video', '视频'],
                     ['failed', `失败 ${outputFailureCount || ''}`],
                     ['ops', operatorUnlocked ? '运维日志' : '···'],
                   ] as Array<[typeof outputHistoryFilter, string]>).map(([value, label]) => (
@@ -10943,7 +13985,7 @@ function App() {
                               <article key={log.id} className={`operator-log-row ${log.resultType === 'failed' ? 'is-failed' : ''}`}>
                                 <code title={log.taskId || '—'}>{log.taskId || '—'}</code>
                                 <span title={log.connectionName || log.provider}>{log.provider}</span>
-                                <span>{log.modelName || log.model}</span>
+                                <span>{formatModelDisplayName(log.modelName || log.model, { video: /video|seedance|wan|veo|happyhorse|kling|hailuo|sora/i.test(log.modelName || log.model || '') })}</span>
                                 <span>{Math.max(1, Math.round(log.durationMs / 1000))}s</span>
                                 <em>{log.resultType === 'success' ? '成功' : '失败'}</em>
                                 <p title={log.prompt}>{log.prompt}</p>
@@ -10992,7 +14034,7 @@ function App() {
                       <span className="output-record-status">{failed ? <X size={14} /> : <Check size={14} />}</span>
                       <div className="output-record-main">
                         <header>
-                          <span className="output-kind-badge">{record.kind === 'image' ? <ImagePlus size={12} /> : <Type size={12} />}{record.kind === 'image' ? '图像' : '文本'}</span>
+                          <span className="output-kind-badge">{record.kind === 'image' ? <ImagePlus size={12} /> : record.kind === 'video' ? <Video size={12} /> : <Type size={12} />}{record.kind === 'image' ? '图像' : record.kind === 'video' ? '视频' : '文本'}</span>
                           <strong>{failed ? record.error?.summary : `成功输出 ${record.outputCount} 项内容`}</strong>
                           <time>{new Date(record.createdAt).toLocaleString('zh-CN', { hour12: false })}</time>
                           <button
@@ -11004,7 +14046,7 @@ function App() {
                           ><Trash2 size={13} /></button>
                         </header>
                         <p className="output-record-prompt">{record.prompt}</p>
-                        <div className="output-record-meta"><span>{record.modelName}</span><span>{record.connectionName}</span><span>{record.requestedCount}×</span>{record.preview && <span>{record.preview}</span>}</div>
+                        <div className="output-record-meta"><span>{formatModelDisplayName(record.modelName, { video: record.kind === 'video' || /video|seedance|wan|veo|happyhorse|kling|hailuo|sora/i.test(record.modelName) })}</span><span>{record.connectionName}</span><span>{record.requestedCount}×</span>{record.preview && <span>{record.preview}</span>}</div>
                         {failed && record.error && (
                           <div className="output-error-block">
                             <div><Info size={13} /><span>判断：{categoryLabel}出现问题。{record.error.summary}</span></div>
@@ -11055,7 +14097,7 @@ function App() {
           onClose={() => setPromptLibraryOpen(false)}
           onUsePrompt={addPromptCaseNode}
           onAddImage={addPromptCaseImage}
-          textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: model.name, connectionName: connection.name }))}
+          textModels={enabledTextModels.map(({ connection, model }) => ({ key: `${connection.id}::${model.id}`, name: formatModelDisplayName(model.name), connectionName: connection.name }))}
           defaultTextModelKey={selectedTextModel ? `${selectedTextModel.connection.id}::${selectedTextModel.model.id}` : undefined}
           onReversePrompts={reverseInspirationPrompts}
         /></Suspense>}
@@ -11228,7 +14270,9 @@ function App() {
                               }}
                             >
                               <div className="asset-library-thumbnail">
-                                {previewUrl ? <img src={previewUrl} alt="" draggable={false} loading="lazy" decoding="async" /> : (
+                                {previewUrl ? (asset.data?.kind === 'video'
+                                  ? <video src={previewUrl} aria-label={asset.title || asset.data.fileName || '视频资产'} muted playsInline preload="auto" />
+                                  : <img src={previewUrl} alt="" draggable={false} loading="lazy" decoding="async" />) : (
                                   <div className="asset-library-placeholder">
                                     {asset.type === 'group' ? <Box size={24} /> : <Type size={24} />}
                                     <span>{asset.data?.body || asset.title || '资产'}</span>
@@ -11361,36 +14405,51 @@ function App() {
                             if (!droppedOutside) return
                             const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY })
                             const stamp = Date.now()
+                            const isVideoHistory = record.kind === 'video'
                             setNodes((current) => [...current, {
-                              id: `history-image-${stamp}-${crypto.randomUUID()}`,
+                              id: `history-${isVideoHistory ? 'video' : 'image'}-${stamp}-${crypto.randomUUID()}`,
                               type: 'disy',
                               position: { x: flowPosition.x - 130, y: flowPosition.y - 110 },
                               data: {
-                                kind: 'upload',
-                                title: record.fileName || '生成历史图片',
+                                kind: isVideoHistory ? 'video' : 'upload',
+                                title: record.fileName || (isVideoHistory ? '生成历史视频' : '生成历史图片'),
                                 body: record.prompt || '',
-                                imageUrl: record.imageUrl,
-                                fileName: record.fileName || `disy-history-${stamp}.png`,
+                                ...(isVideoHistory
+                                  ? { videoMediaId: record.mediaId, videoGeneratedAt: record.createdAt, status: '已完成' }
+                                  : { imageUrl: record.imageUrl }),
+                                fileName: record.fileName || `disy-history-${stamp}.${isVideoHistory ? 'mp4' : 'png'}`,
                               },
                             }])
                             setGenerationHistoryOpen(false)
-                            setToastMessage('历史图片已加入画布')
+                            setToastMessage(`历史${isVideoHistory ? '视频' : '图片'}已加入画布`)
                           }}
                         >
                           <div className="asset-library-thumbnail">
-                            <img
-                              src={record.imageUrl}
-                              alt={record.prompt}
-                              draggable={false}
-                              loading="lazy"
-                              decoding="async"
-                              onLoad={() => {
-                                setBrokenHistoryIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : current)
-                                ensureHistoryRecordArchived(record)
-                              }}
-                              onError={() => setBrokenHistoryIds((current) => current.includes(record.id) ? current : [...current, record.id])}
-                            />
-                            {brokenHistoryIds.includes(record.id) && (
+                            {record.kind === 'video' ? (
+                              <video
+                                src={record.imageUrl}
+                                aria-label={record.prompt || record.fileName}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                onLoadedData={() => setBrokenHistoryIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : current)}
+                                onError={() => setBrokenHistoryIds((current) => current.includes(record.id) ? current : [...current, record.id])}
+                              />
+                            ) : (
+                              <img
+                                src={record.imageUrl}
+                                alt={record.prompt}
+                                draggable={false}
+                                loading="lazy"
+                                decoding="async"
+                                onLoad={() => {
+                                  setBrokenHistoryIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : current)
+                                  ensureHistoryRecordArchived(record)
+                                }}
+                                onError={() => setBrokenHistoryIds((current) => current.includes(record.id) ? current : [...current, record.id])}
+                              />
+                            )}
+                            {record.kind !== 'video' && brokenHistoryIds.includes(record.id) && (
                               <div className="history-image-broken" draggable={false} onClick={(event) => event.stopPropagation()}>
                                 <Info size={16} />
                                 <span>原图片链接已失效</span>
@@ -11422,10 +14481,10 @@ function App() {
                             >
                               {selectedHistoryIds.includes(record.id) && <Check size={13} strokeWidth={3} />}
                             </button>
-                            <span className="asset-kind-badge"><Sparkles size={12} /></span>
+                            <span className="asset-kind-badge">{record.kind === 'video' ? <Film size={12} /> : <Sparkles size={12} />}</span>
                             <div className="asset-card-actions">
                               <button type="button" title="画廊查看" onClick={() => setLibraryPreview({ kind: 'history', id: record.id })}><Maximize2 size={14} /></button>
-                              <button type="button" title="下载" onClick={() => void downloadImageUrl(record.imageUrl, record.fileName)}><Download size={14} /></button>
+                              <button type="button" title="下载" onClick={() => void downloadGenerationRecord(record)}><Download size={14} /></button>
                               <button type="button" title="删除" onClick={() => setDeleteConfirm({ kind: 'history', id: record.id, label: record.fileName })}><Trash2 size={14} /></button>
                             </div>
                           </div>
@@ -11435,7 +14494,7 @@ function App() {
                     </div>
                   </section>
                 )) : (
-                  <div className="asset-library-empty"><History size={28} /><strong>{generationHistorySearch ? '没有找到匹配记录' : '还没有生成记录'}</strong><span>通过文本节点生成的图像会自动出现在这里。</span></div>
+                  <div className="asset-library-empty"><History size={28} /><strong>{generationHistorySearch ? '没有找到匹配记录' : '还没有生成记录'}</strong><span>生成完成的图像和视频会自动出现在这里。</span></div>
                 )}
               </div>
             </motion.section>
@@ -11579,7 +14638,7 @@ function App() {
                         <span className="preview-node preview-node-two" />
                         <span className="preview-edge" />
                         <span className="preview-node preview-node-three" />
-                        {cover && <img className="project-cover-image" src={cover.imageUrl} alt={`${project.name} 最新生成图片`} onError={(event) => event.currentTarget.remove()} />}
+                        {cover && <ProjectCoverMedia cover={cover} alt={`${project.name} 最新生成预览`} />}
                       </div>
                       <div className="project-card-meta">
                         <strong>{project.name}</strong>
@@ -11865,21 +14924,29 @@ function App() {
                 </button>
               </div>
 
+              <div className="settings-shell">
+                <aside className="settings-sidebar" aria-label="设置分类">
+                  <button type="button" className="is-active"><KeyRound size={14} />API 设置</button>
+                  {apiStorageNavVisible && <button type="button" onClick={openStorageSettings}><HardDrive size={14} />存储空间</button>}
+                </aside>
               <div className="api-manager-body">
                 <aside className="api-connection-list">
                   <button type="button" className="api-new-connection" onClick={beginNewApiConnection}>
                     <Plus size={15} /><span>添加 API 连接</span>
                   </button>
                   <div className="api-list-label">连接</div>
-                  {apiSettings.connections.map((connection) => {
-                    const enabledCount = connection.models.filter((model) => model.enabled).length
-                    const usable = isConnectionUsable(connection)
+                  {apiConnectionGroups.map((group) => {
+                    const connection = group.find((item) => item.id === editingConnectionId) ?? group[0]
+                    const enabledCount = group.reduce((sum, item) => sum + item.models.filter((model) => model.enabled).length, 0)
+                    const modelCount = group.reduce((sum, item) => sum + item.models.length, 0)
+                    const usable = group.some(isConnectionUsable)
                     const health = connectionHealthByConnection[connection.id]
-                    const appearsOnline = usable && health !== 'offline'
+                    const appearsOnline = usable && group.every((item) => connectionHealthByConnection[item.id] !== 'offline')
+                    const isMerged = group.length > 1
                     return (
                       <div
-                        key={connection.id}
-                        className={`api-connection-card ${editingConnectionId === connection.id ? 'is-active' : ''} ${usable ? '' : 'is-disabled'}`}
+                        key={group.map((item) => item.id).join('|')}
+                        className={`api-connection-card ${group.some((item) => item.id === editingConnectionId) ? 'is-active' : ''} ${usable ? '' : 'is-disabled'}`}
                       >
                         <button
                           type="button"
@@ -11887,7 +14954,7 @@ function App() {
                           onClick={() => selectApiConnection(connection)}
                         >
                           <span className={`api-connection-dot ${appearsOnline ? 'is-online' : ''}`} />
-                          <span><strong>{connection.name}</strong><small>{!connection.apiKey.trim() ? 'API Key 缺失' : health === 'offline' ? '凭据验证失败' : connection.models.length ? `${enabledCount}/${connection.models.length} 个模型已启用` : (connection.disconnected ? '已断开' : '尚未获取模型')}</small></span>
+                          <span><strong>{isMerged ? `${connection.name}（${group.length} 个连接）` : connection.name}</strong><small>{!connection.apiKey.trim() ? 'API Key 缺失' : health === 'offline' ? '凭据验证失败' : modelCount ? `${enabledCount}/${modelCount} 个模型已启用${isMerged ? ` · ${group.map((item) => item.name).join(' / ')}` : ''}` : (connection.disconnected ? '已断开' : '尚未获取模型')}</small></span>
                         </button>
                         <button
                           type="button"
@@ -11935,11 +15002,12 @@ function App() {
                   {editingConnectionId === 'new' && <div className="api-provider-presets">
                     <div><strong>从常用厂商开始</strong><span>自动填写连接名称与接口地址</span></div>
                     <div>{API_PROVIDER_PRESETS.map((preset) => (
-                      <button type="button" key={preset.id} className={apiDraft.baseUrl === preset.baseUrl ? 'is-active' : ''} onClick={() => applyApiProviderPreset(preset)}>
+                      <button type="button" key={preset.id} data-tooltip={preset.detail} aria-label={`${preset.name}：${preset.detail}`} className={apiDraft.baseUrl === preset.baseUrl ? 'is-active' : ''} onClick={() => applyApiProviderPreset(preset)}>
                         <b>{preset.name.slice(0, 2)}</b>
                         <span><strong>{preset.name}</strong><small>{preset.detail}</small></span>
                       </button>
                     ))}</div>
+                    {apiDraft.name === '自定义接口' && <p className="api-custom-hint">提示：每个中转站提供的模型和参数规则都不同。请从接口文档确认模型 ID、消息格式、图片/视频字段及鉴权方式；只填写 OpenAI 兼容地址并不代表所有能力都可直接使用。</p>}
                   </div>}
 
                   <div className="api-fields-grid">
@@ -11984,7 +15052,7 @@ function App() {
                         {creditsLoading ? '查询中' : '刷新余额'}
                       </button>
                     </div>
-                    {currentProviderCredits ? <div className="provider-credits-value"><strong>{new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(currentProviderCredits.amount)}</strong><span>{currentProviderCredits.unit}</span><small>{currentProviderCredits.provider} · {new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(currentProviderCredits.updatedAt))} 更新</small></div>
+                    {currentProviderCredits ? <div className="provider-credits-value"><strong>{formatProviderCreditAmount(currentProviderCredits)}</strong><span>{formatProviderCreditUnit(currentProviderCredits)}</span><small>{currentProviderCredits.provider} · {new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(currentProviderCredits.updatedAt))} 更新{formatProviderCreditView(currentProviderCredits).original ? ` · 原始 ${formatProviderCreditView(currentProviderCredits).original}${usdToCnyRate ? ` · 汇率 ${usdToCnyRate.rate.toFixed(4)}（${usdToCnyRate.date}）` : ''}` : ''}</small></div>
                       : <p>{creditsError || '点击“刷新余额”查询当前 API Key 的可用积分。'}</p>}
                   </section>
 
@@ -12002,12 +15070,12 @@ function App() {
                         <div key={model.id} className={`api-model-row ${model.enabled ? 'is-enabled' : ''}`}>
                           <button type="button" className="api-model-main" onClick={() => setDraftModels((current) => current.map((item) => item.id === model.id ? { ...item, enabled: !item.enabled } : item))}>
                             <span className="api-model-type">{MODEL_CAPABILITY_LABELS[model.capability].slice(0, 1)}</span>
-                            <span><strong>{model.name}</strong><small>ID: {model.id}</small></span>
+                            <span><strong>{formatModelDisplayName(model.name, { video: model.capability === 'video' })}</strong><small>ID: {model.id}</small></span>
                             <span className="api-model-check">{model.enabled && <Check size={13} />}</span>
                           </button>
                           <select
                             value={model.capability}
-                            aria-label={`修改 ${model.name} 的模型类型`}
+                            aria-label={`修改 ${formatModelDisplayName(model.name, { video: model.capability === 'video' })} 的模型类型`}
                             title="模型分类不准确时可手动修正"
                             onChange={(event) => {
                               const capability = event.target.value as ModelCapability
@@ -12032,6 +15100,7 @@ function App() {
                     </div>
                   </footer>
                 </section>
+              </div>
               </div>
             </motion.div>
           </motion.div>

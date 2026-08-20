@@ -4,6 +4,10 @@ dist/
 .netlify-appdata/
 .netlify-config/
 .netlify-npm-cache/
+.tmp/
+.wrangler/
+coverage/
+*.tsbuildinfo
 disylab-beta-publish/
 disylab-online-debug/
 .env
@@ -18,6 +22,7 @@ Thumbs.db
 docs/Disy-上线部署指南.md
 docs/Disy-样式与文案修改指南.md
 docs/Disy无限可能-项目实施文档.md
+HANDOFF-*
 
 # APIYI integration scratch (not secrets, just session artifacts — keep out of git)
 apiyi_pricing.json
