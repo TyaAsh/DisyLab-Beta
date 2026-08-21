@@ -217,6 +217,8 @@ type CanvasNode = Node<{
   promptText?: string
   status?: string
   imageUrl?: string
+  /** Durable IndexedDB media backing for generated images. */
+  imageMediaId?: string
   fileName?: string
   imageVariants?: ImageVariant[]
   activeImageVariantId?: string
@@ -240,6 +242,7 @@ type CanvasNode = Node<{
   videoMediaId?: string
   videoGeneratedAt?: string
   videoTaskId?: string
+  imageTaskId?: string
   videoProgress?: number
   videoAspectRatio?: VideoAspectRatio
   videoDuration?: VideoDuration
@@ -3438,6 +3441,50 @@ function App() {
       return changed ? next : current
     })
   }, [agentPlans, generationHistory])
+
+  const canvasImageMediaSignature = useMemo(() => Array.from(new Set(nodes.flatMap((node) => [
+    node.data.imageMediaId,
+    ...(node.data.imageVariants ?? []).map((variant) => variant.mediaId),
+  ].filter((value): value is string => Boolean(value))))).sort().join('|'), [nodes])
+
+  useEffect(() => {
+    if (!canvasImageMediaSignature) return
+    let cancelled = false
+    const mediaIds = canvasImageMediaSignature.split('|')
+    void Promise.all(mediaIds.map(async (mediaId) => {
+      const cached = historyMediaObjectUrlsRef.current.get(mediaId)
+      if (cached) return [mediaId, cached] as const
+      const media = await loadHistoryMedia(mediaId)
+      if (!media) return null
+      const url = URL.createObjectURL(media.blob)
+      historyMediaObjectUrlsRef.current.set(mediaId, url)
+      return [mediaId, url] as const
+    })).then((loaded) => {
+      if (cancelled) return
+      const urls = new Map(loaded.filter((item): item is readonly [string, string] => Boolean(item)))
+      if (!urls.size) return
+      setNodes((current) => current.map((node) => {
+        const activeUrl = node.data.imageMediaId ? urls.get(node.data.imageMediaId) : undefined
+        let variantsChanged = false
+        const imageVariants = node.data.imageVariants?.map((variant) => {
+          const localUrl = variant.mediaId ? urls.get(variant.mediaId) : undefined
+          if (!localUrl || localUrl === variant.url) return variant
+          variantsChanged = true
+          return { ...variant, url: localUrl }
+        })
+        if (!activeUrl && !variantsChanged) return node
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            imageUrl: activeUrl || node.data.imageUrl,
+            imageVariants: variantsChanged ? imageVariants : node.data.imageVariants,
+          },
+        }
+      }))
+    })
+    return () => { cancelled = true }
+  }, [canvasImageMediaSignature])
 
   useEffect(() => () => {
     historyMediaObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
@@ -8289,6 +8336,9 @@ function App() {
     const response = await fetch(record.imageUrl)
     if (!response.ok) throw new Error(`图片归档失败（${response.status}）`)
     const blob = await response.blob()
+    if (!blob.size || !blob.type.startsWith('image/')) {
+      throw new Error(`图片归档返回了无效文件（${blob.type || 'unknown'}）`)
+    }
     const mediaId = `history-media-${crypto.randomUUID()}`
     await saveHistoryMedia({ id: mediaId, blob, fileName: record.fileName, createdAt: record.createdAt })
     const imageUrl = URL.createObjectURL(blob)
@@ -8590,6 +8640,11 @@ function App() {
             resolution: activeImageResolution,
             detail: activeImageDetail,
             signal: controller.signal,
+            onTaskId: (taskId) => {
+              void patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => node.id === generationNodeId
+                ? { ...node, data: { ...node.data, imageTaskId: taskId } }
+                : node))
+            },
             captureAdminLog: (log) => captureGenerationAdminLog(log, {
               prompt: promptText,
               modelName: activeNodeImageModel.model.name,
@@ -8608,12 +8663,28 @@ function App() {
 
       const stamp = Date.now()
       const createdAt = new Date().toISOString()
-      const newVariants: ImageVariant[] = images.map((image, index) => ({
+      const providerVariants: ImageVariant[] = images.map((image, index) => ({
         id: `variant-${stamp}-${index}`,
         url: image.url,
         fileName: `disy-${stamp}-${index + 1}.png`,
         createdAt,
         revisedPrompt: image.revisedPrompt || prompt,
+      }))
+      // Archive before updating the node. Provider URLs may be short-lived, so
+      // the canvas must point at the verified local Blob whenever possible.
+      const records = await archiveGenerationRecords(providerVariants.map((variant): GenerationRecord => ({
+        id: `history-${variant.id}`,
+        createdAt,
+        prompt,
+        model: activeNodeImageModel.model.name,
+        imageUrl: variant.url,
+        fileName: variant.fileName,
+        projectId: generationOrigin.projectId,
+      })))
+      const newVariants: ImageVariant[] = providerVariants.map((variant, index) => ({
+        ...variant,
+        url: records[index]?.imageUrl || variant.url,
+        mediaId: records[index]?.mediaId,
       }))
       const primaryVariant = newVariants[0]
       await patchCanvasNodesAtOrigin(generationOrigin, (current) => current.map((node) => {
@@ -8634,6 +8705,7 @@ function App() {
           data: {
             ...node.data,
             imageUrl: primaryVariant.url,
+            imageMediaId: primaryVariant.mediaId,
             fileName: primaryVariant.fileName,
             imageVariants: [...previousVariants, ...newVariants],
             activeImageVariantId: primaryVariant.id,
@@ -8649,15 +8721,6 @@ function App() {
           },
         }
       }))
-      const records = await archiveGenerationRecords(newVariants.map((variant): GenerationRecord => ({
-        id: `history-${variant.id}`,
-        createdAt: new Date().toISOString(),
-        prompt,
-        model: activeNodeImageModel.model.name,
-        imageUrl: variant.url,
-        fileName: variant.fileName,
-        projectId: generationOrigin.projectId,
-      })))
       setGenerationHistory((current) => {
         const next = [...current, ...records]
         try {
@@ -9286,6 +9349,11 @@ function App() {
               resolution,
               detail,
               signal: controller.signal,
+              onTaskId: (taskId) => {
+                void patchCanvasNodesAtOrigin(origin, (current) => current.map((node) => node.id === nodeId
+                  ? { ...node, data: { ...node.data, imageTaskId: taskId } }
+                  : node))
+              },
               captureAdminLog: (log) => captureGenerationAdminLog(log, {
                 prompt: plan.prompt,
                 modelName: model.model.name,
@@ -9303,7 +9371,21 @@ function App() {
       }
       if (!images.length) throw stoppedError ?? new Error('图像模型没有返回图片')
       const createdAt = new Date().toISOString()
-      const variants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
+      const providerVariants: ImageVariant[] = images.map((image, index) => ({ id: `variant-${crypto.randomUUID()}`, url: image.url, fileName: `disy-agent-${Date.now()}-${index + 1}.png`, createdAt, revisedPrompt: image.revisedPrompt || plan.prompt }))
+      const historyRecords = await archiveGenerationRecords(providerVariants.map((variant): GenerationRecord => ({
+        id: `history-${variant.id}`,
+        createdAt,
+        prompt: plan.prompt,
+        model: model.model.name,
+        imageUrl: variant.url,
+        fileName: variant.fileName,
+        projectId: origin.projectId,
+      })))
+      const variants: ImageVariant[] = providerVariants.map((variant, index) => ({
+        ...variant,
+        url: historyRecords[index]?.imageUrl || variant.url,
+        mediaId: historyRecords[index]?.mediaId,
+      }))
       const wasInterrupted = stoppedError instanceof DOMException && stoppedError.name === 'AbortError'
       const partialFailure = stoppedError && !wasInterrupted ? toOutputHistoryError(stoppedError) : null
       const completedStatus = wasInterrupted
@@ -9315,6 +9397,7 @@ function App() {
         data: {
           ...node.data,
           imageUrl: variants[0].url,
+          imageMediaId: variants[0].mediaId,
           fileName: variants[0].fileName,
           imageVariants: variants,
           activeImageVariantId: variants[0].id,
@@ -9325,15 +9408,6 @@ function App() {
           status: completedStatus,
         },
       } : node))
-      const historyRecords = await archiveGenerationRecords(variants.map((variant): GenerationRecord => ({
-        id: `history-${variant.id}`,
-        createdAt,
-        prompt: plan.prompt,
-        model: model.model.name,
-        imageUrl: variant.url,
-        fileName: variant.fileName,
-        projectId: origin.projectId,
-      })))
       await patchAgentPlansAtOrigin(origin, (current) => current.map((item) => item.id === planId ? {
         ...item,
         status: wasInterrupted ? 'cancelled' : partialFailure ? 'failed' : 'completed',
@@ -11191,18 +11265,6 @@ function App() {
           {showGrid && (
             <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--canvas-dot)" />
           )}
-          <MiniMap
-            key={`minimap-${activeProjectId}-${activeCanvasId}`}
-            className="disy-minimap"
-            nodeColor="var(--minimap-node)"
-            nodeStrokeColor="transparent"
-            nodeStrokeWidth={0}
-            nodeBorderRadius={2}
-            maskColor="var(--minimap-mask)"
-            pannable
-            zoomable
-            ariaLabel="画布小地图，可拖拽导航"
-          />
           </ReactFlow>
               </NodeExtensionMenuContext.Provider>
               </GroupCollapseContext.Provider>
@@ -11217,6 +11279,21 @@ function App() {
         </ImagePreviewOpenContext.Provider>
         </VideoGenerationContext.Provider>
         </ActiveGenerationNodesContext.Provider>
+
+        {/* Render outside ReactFlow's internal stacking context so node editors
+            and contextual toolbars can never cover the protected minimap. */}
+        <MiniMap
+          key={`minimap-${activeProjectId}-${activeCanvasId}`}
+          className="disy-minimap"
+          nodeColor="var(--minimap-node)"
+          nodeStrokeColor="transparent"
+          nodeStrokeWidth={0}
+          nodeBorderRadius={2}
+          maskColor="var(--minimap-mask)"
+          pannable
+          zoomable
+          ariaLabel="画布小地图，可拖拽导航"
+        />
 
         <AnimatePresence>
           {imageTool && (() => {
@@ -13075,6 +13152,7 @@ function App() {
                             data: {
                               ...node.data,
                               imageUrl: variant.url,
+                              imageMediaId: variant.mediaId,
                               fileName: variant.fileName,
                               body: node.data.kind === 'upload' ? variant.revisedPrompt || node.data.body : node.data.body,
                               activeImageVariantId: variant.id,

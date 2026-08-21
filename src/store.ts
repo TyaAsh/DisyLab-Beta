@@ -93,17 +93,36 @@ function readApiSettings(): ApiSettings {
           apiKey: secrets[id] ?? '',
           balanceToken: typeof balanceTokens[id] === 'string' ? balanceTokens[id] : '',
           models: Array.isArray(connection.models)
-            ? connection.models.filter((model): model is ApiModelConfig => Boolean(model) && ['text', 'image', 'video'].includes((model as ApiModelConfig).capability))
+            ? connection.models.flatMap((candidate) => {
+                if (!candidate || typeof candidate !== 'object') return []
+                const model = candidate as Partial<ApiModelConfig>
+                if (typeof model.id !== 'string' || !model.id.trim() || !['text', 'image', 'video'].includes(String(model.capability))) return []
+                return [{
+                  id: model.id,
+                  name: typeof model.name === 'string' && model.name.trim() ? model.name : model.id,
+                  capability: model.capability as ModelCapability,
+                  enabled: model.enabled !== false,
+                }]
+              })
             : [],
           modelsFetchedAt: typeof connection.modelsFetchedAt === 'string' ? connection.modelsFetchedAt : undefined,
           enabled: connection.enabled === false ? false : true,
           disconnected: connection.disconnected === true,
         }
       })
+      const validateSelection = (candidate: unknown, capability: ModelCapability): ModelSelection | undefined => {
+        if (!candidate || typeof candidate !== 'object') return undefined
+        const { connectionId, modelId } = candidate as Partial<ModelSelection>
+        if (typeof connectionId !== 'string' || typeof modelId !== 'string') return undefined
+        const connection = connections.find((item) => item.id === connectionId)
+        if (!connection || connection.enabled === false || connection.disconnected) return undefined
+        const model = connection.models.find((item) => item.id === modelId)
+        return model?.enabled && model.capability === capability ? { connectionId, modelId } : undefined
+      }
       return {
         connections,
-        selectedTextModel: value.selectedTextModel as ModelSelection | undefined,
-        selectedImageModel: value.selectedImageModel as ModelSelection | undefined,
+        selectedTextModel: validateSelection(value.selectedTextModel, 'text'),
+        selectedImageModel: validateSelection(value.selectedImageModel, 'image'),
       }
     }
 

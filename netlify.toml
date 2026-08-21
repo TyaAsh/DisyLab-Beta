@@ -6,6 +6,12 @@
   NODE_VERSION = "22"
 
 [[redirects]]
+  from = "/visionary/*"
+  to = "/.netlify/functions/visionary/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/apiyi/seedance/*"
   to = "/.netlify/functions/apiyi-seedance/:splat"
   status = 200

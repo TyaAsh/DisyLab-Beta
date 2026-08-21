@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: LicenseRef-DisyLab-Proprietary
  */
 import type { ModelCapability } from './store'
+import { classifyProviderPayload, extractProviderImages, extractProviderTaskId, extractProviderTaskStatus, providerTaskPollPaths } from './providerLifecycle'
 
 export type ApiRequestSettings = {
   baseUrl: string
@@ -76,6 +77,8 @@ export type ImageGenerationOptions = {
   resolution?: '1K' | '2K' | '4K'
   detail?: 'low' | 'medium' | 'high'
   signal?: AbortSignal
+  /** Persists a paid async task before polling starts so it can be recovered safely. */
+  onTaskId?: (taskId: string) => void
   /** Captures a sanitized request/result snapshot for admin recovery logs. */
   captureAdminLog?: (log: GenerationAdminLog) => void
 }
@@ -85,6 +88,14 @@ const REFERENCE_IMAGE_READ_TIMEOUT_MS = 20_000
 const GRSAI_IMAGE_POLL_INTERVAL_MS = 2_500
 const GRSAI_IMAGE_POLL_TIMEOUT_MS = 15 * 60_000
 const GRSAI_MAX_CONSECUTIVE_POLL_ERRORS = 24
+const VISIONARY_POLL_INTERVAL_MS = 3_000
+const VISIONARY_POLL_TIMEOUT_MS = 15 * 60_000
+const VISIONARY_MAX_CONSECUTIVE_POLL_ERRORS = 5
+const VISIONARY_SUCCESS_WITHOUT_URL_RETRIES = 20
+const GENERIC_PROVIDER_POLL_INTERVAL_MS = 3_000
+const GENERIC_PROVIDER_POLL_TIMEOUT_MS = 15 * 60_000
+const GENERIC_PROVIDER_MAX_CONSECUTIVE_POLL_ERRORS = 5
+const GENERIC_PROVIDER_SUCCESS_WITHOUT_URL_RETRIES = 20
 
 function blobToDataUrl(blob: Blob) {
   return new Promise<string>((resolve, reject) => {
@@ -253,12 +264,22 @@ function normalizedApiBaseUrl(baseUrl: string) {
     throw new Error('接口地址必须是完整的 http(s) URL，例如 https://api.example.com/v1')
   }
   if (!/^https?:$/i.test(url.protocol)) throw new Error('接口地址只支持 http:// 或 https://')
-  const host = url.hostname.toLowerCase()
+  let host = url.hostname.toLowerCase()
+  // `visionary.beer` is the website/result-media host. Users commonly copy it
+  // from task history, but generation endpoints live on api.visionary.beer/v1.
+  // Canonicalize only a bare website base; preserve explicit custom paths.
+  if (host === 'visionary.beer' && (!url.pathname || url.pathname === '/')) {
+    url.hostname = 'api.visionary.beer'
+    url.pathname = '/v1'
+    host = 'api.visionary.beer'
+  }
   if (!url.pathname || url.pathname === '/') {
     const defaultPath = host === 'api.openai.com' || host === 'api.deepseek.com' || /siliconflow\.cn$/i.test(host)
       ? '/v1'
       : /(?:api\.apiyi\.com|apiyi\.com|apimart\.ai)$/i.test(host)
         ? '/v1'
+        : host === 'api.visionary.beer'
+          ? '/v1'
         : /^(?:grsaiapi\.com|grsai\.dakka\.com\.cn)$/i.test(host)
           ? '/v1'
           : ''
@@ -275,6 +296,9 @@ function endpoint(baseUrl: string, path: string) {
     const normalized = normalizedApiBaseUrl(baseUrl)
     const providerPath = new URL(normalized).pathname.replace(/\/$/, '')
     return `/apiyi/openai${providerPath}/${path.replace(/^\//, '')}`
+  }
+  if (typeof window !== 'undefined' && isVisionaryBaseUrl(baseUrl)) {
+    return `/visionary/${path.replace(/^\//, '')}`
   }
   return `${normalizedApiBaseUrl(baseUrl)}/${path.replace(/^\//, '')}`
 }
@@ -301,6 +325,23 @@ function isGrsaiBaseUrl(baseUrl: string) {
   return /^https?:\/\/(?:grsaiapi\.com|grsai\.dakka\.com\.cn)(?:\/|$)/i.test(normalizedApiBaseUrl(baseUrl))
 }
 
+function isVisionaryBaseUrl(baseUrl: string) {
+  try {
+    const host = new URL(normalizedApiBaseUrl(baseUrl)).hostname.toLowerCase()
+    return host === 'visionary.beer' || host === 'api.visionary.beer'
+  } catch {
+    return false
+  }
+}
+
+function providerRelayHeaders(settings: Pick<ApiRequestSettings, 'baseUrl'>, init?: HeadersInit) {
+  const headers = apiYiRelayHeaders(settings, init)
+  if (typeof window !== 'undefined' && isVisionaryBaseUrl(settings.baseUrl)) {
+    headers.set('X-DisyLab-Visionary-Base', normalizedApiBaseUrl(settings.baseUrl))
+  }
+  return headers
+}
+
 // Decide whether the structured numbered reference guide ("图1 / 图片1 / 参考图1 =
 // 第 1 张输入图片") should be appended to the prompt.
 //
@@ -319,7 +360,7 @@ function isGrsaiBaseUrl(baseUrl: string) {
 // results. Position-based reference ("图1/图2" in the user's own prompt) still
 // works because those providers align images by upload order.
 export function shouldAppendReferenceGuide(opts: { modelId: string; baseUrl: string; isImageGeneration: boolean }): boolean {
-  if (isGrsaiBaseUrl(opts.baseUrl)) return false
+  if (isGrsaiBaseUrl(opts.baseUrl) || isVisionaryBaseUrl(opts.baseUrl)) return false
   if (opts.isImageGeneration) return /(?:gpt-image|chatgpt-image)/i.test(opts.modelId)
   return true
 }
@@ -327,6 +368,7 @@ export function shouldAppendReferenceGuide(opts: { modelId: string; baseUrl: str
 export function resolveProviderLabel(baseUrl: string) {
   const normalized = normalizedApiBaseUrl(baseUrl).toLowerCase()
   if (/grsaiapi\.com|grsai\.dakka\.com\.cn/.test(normalized)) return 'GRS AI'
+  if (/(?:api\.)?visionary\.beer/.test(normalized)) return 'Visionary'
   if (/api\.apiyi\.com|apiyi\.com/.test(normalized)) return 'APIYI'
   if (/api\.apimart\.ai|apimart\.ai/.test(normalized)) return 'APIMart'
   if (/gptgod\.online|gptgod\.com/.test(normalized)) return 'GPTGod'
@@ -342,22 +384,7 @@ export function resolveProviderLabel(baseUrl: string) {
 }
 
 function extractTaskId(payload: unknown) {
-  if (!payload || typeof payload !== 'object') return ''
-  const record = payload as Record<string, unknown>
-  const nested = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
-    ? record.data as Record<string, unknown>
-    : null
-  return String(
-    record.id
-    ?? record.taskId
-    ?? record.task_id
-    ?? record.request_id
-    ?? record.requestId
-    ?? nested?.id
-    ?? nested?.taskId
-    ?? nested?.task_id
-    ?? '',
-  ).trim()
+  return extractProviderTaskId(payload)
 }
 
 function collectRecoverableResultUrls(payload: unknown) {
@@ -423,21 +450,44 @@ function videoResultUrl(payload: unknown): string {
     data?.video_url, data?.videoUrl, data?.result_url, data?.resultUrl, data?.url,
     output?.video_url, output?.videoUrl, output?.result_url, output?.resultUrl, output?.url,
   ]
-  return candidates.find((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value)) ?? ''
+  return candidates.find((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value))
+    ?? extractGeneratedImages(payload).find((item) => /^https?:\/\//i.test(item.url))?.url
+    ?? ''
 }
 
 function videoTaskStatus(payload: unknown, fallback = 'queued') {
-  if (!payload || typeof payload !== 'object') return fallback
-  const record = payload as Record<string, unknown>
-  const nested = record.data && typeof record.data === 'object' ? record.data as Record<string, unknown> : null
-  const output = record.output && typeof record.output === 'object' ? record.output as Record<string, unknown> : null
-  return String(record.status ?? record.state ?? nested?.status ?? nested?.state ?? output?.status ?? output?.state ?? fallback).trim().toLowerCase()
+  return extractProviderTaskStatus(payload) || fallback
+}
+
+async function waitForReplicatedVideoUrl(taskUrl: string, headers: HeadersInit, initialPayload: unknown, signal?: AbortSignal) {
+  let payload = initialPayload
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const url = videoResultUrl(payload)
+    if (url) return { url, payload }
+    await waitForDelay(2_000, signal)
+    try {
+      const response = await fetch(taskUrl, { headers, signal })
+      if (response.ok) payload = await response.json() as unknown
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+    }
+  }
+  return { url: '', payload }
 }
 
 function apiYiGeneratedMediaUrl(source: string) {
   // Result/CDN URLs are often missing CORS headers. Keep browser downloads on
   // the app origin; server-side callers continue to use the provider URL.
   return typeof window === 'undefined' ? source : `/apiyi/media?url=${encodeURIComponent(source)}`
+}
+
+function browserReadableImageResult(source: string, settings: ApiRequestSettings) {
+  if (typeof window === 'undefined' || !isVisionaryBaseUrl(settings.baseUrl) || !/^https?:\/\//i.test(source)) return source
+  try {
+    const hostname = new URL(source).hostname.toLowerCase()
+    if (hostname === 'visionary.beer' || hostname.endsWith('.visionary.beer')) return `/apiyi/media?url=${encodeURIComponent(source)}`
+  } catch { /* keep the original result */ }
+  return source
 }
 
 function apiYiVideoEndpoint(settings: ApiRequestSettings, relayPrefix: string, path: string) {
@@ -536,8 +586,9 @@ async function generateApiYiSeedanceVideo(settings: ApiRequestSettings, options:
     options.onProgress?.(status === 'running' || status === 'processing' ? 50 : ['succeeded', 'completed', 'success'].includes(status) ? 90 : 10, status)
     if (['failed', 'expired', 'cancelled', 'canceled'].includes(status)) throw new GenerationRequestError('api', `Seedance 任务${status === 'expired' ? '已过期' : '失败'}`, sanitizeAdminLogJson(job), { requestId: taskId })
     if (['succeeded', 'completed', 'success'].includes(status)) {
-      const videoUrl = videoResultUrl(job)
-      if (!videoUrl) throw new GenerationRequestError('platform', 'Seedance 成功但没有返回视频地址', sanitizeAdminLogJson(job), { requestId: taskId })
+      const replicated = await waitForReplicatedVideoUrl(`${taskEndpoint}/${encodeURIComponent(taskId)}`, requestHeaders, job, options.signal)
+      const videoUrl = replicated.url
+      if (!videoUrl) throw new GenerationRequestError('platform', 'Seedance 成功但没有返回视频地址', sanitizeAdminLogJson(replicated.payload), { requestId: taskId })
       let videoResponse: Response
       try {
         videoResponse = await fetch(apiYiGeneratedMediaUrl(videoUrl), { signal: options.signal })
@@ -676,8 +727,11 @@ async function generateApiYiWanVideo(settings: ApiRequestSettings, options: Vide
     options.onProgress?.(Number.isFinite(progressValue) ? progressValue : 30, status)
     if (['failed', 'cancelled', 'canceled'].includes(status)) throw new GenerationRequestError('api', 'Wan 视频生成失败', sanitizeAdminLogJson(job), { requestId: taskId })
     if (['completed', 'succeeded', 'success'].includes(status)) {
-      const resultUrl = videoResultUrl(job)
-      if (!resultUrl) throw new GenerationRequestError('platform', 'Wan 成功但没有返回视频地址', sanitizeAdminLogJson(job), { requestId: taskId })
+      const taskUrl = apiYiVideoEndpoint(settings, '/apiyi/wan', `/v1/tasks/${encodeURIComponent(taskId)}`)
+      const taskHeaders = apiYiVideoHeaders(settings, { Authorization: `Bearer ${settings.apiKey}` })
+      const replicated = await waitForReplicatedVideoUrl(taskUrl, taskHeaders, job, options.signal)
+      const resultUrl = replicated.url
+      if (!resultUrl) throw new GenerationRequestError('platform', 'Wan 成功但没有返回视频地址', sanitizeAdminLogJson(replicated.payload), { requestId: taskId })
       const video = await fetch(apiYiGeneratedMediaUrl(resultUrl), { signal: options.signal })
       if (!video.ok) throw new GenerationRequestError('network', 'Wan 视频下载失败', `视频下载失败（${video.status}）`, { requestId: taskId, resultUrls: [resultUrl] })
       const blob = await video.blob()
@@ -964,25 +1018,45 @@ async function generateRemoteVideoRequest(settings: ApiRequestSettings, options:
   const startedAt = Date.now()
   let progress = Number(created.progress ?? 0)
   let status = videoTaskStatus(created)
+  let lastJob: unknown = created
+  let consecutivePollErrors = 0
   options.onProgress?.(progress, status)
   while (!['completed', 'succeeded', 'success', 'failed', 'cancelled', 'canceled'].includes(status)) {
-    if (Date.now() - startedAt > 30 * 60_000) throw new GenerationRequestError('network', '视频生成等待超时', `任务 ${taskId} 超过 30 分钟仍未完成`)
+    if (Date.now() - startedAt > 30 * 60_000) throw new GenerationRequestError('network', '视频生成等待超时', `任务 ${taskId} 超过 30 分钟仍未完成`, { requestId: taskId })
     await waitForDelay(2_500, options.signal)
     let pollResponse: Response
     try {
       pollResponse = await fetch(endpoint(settings.baseUrl, `videos/${encodeURIComponent(taskId)}`), { headers: apiYiRelayHeaders(settings, { Authorization: `Bearer ${settings.apiKey}` }), signal: options.signal })
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error
-      throw createNetworkError(error)
+      consecutivePollErrors += 1
+      if (consecutivePollErrors < 3) continue
+      throw new GenerationRequestError('network', '视频任务查询暂时中断', `任务 ID：${taskId}。任务仍可能成功，请勿重新提交。`, { requestId: taskId })
     }
-    if (!pollResponse.ok) throw await createApiError(pollResponse)
+    if (!pollResponse.ok) {
+      if (pollResponse.status === 429 || pollResponse.status >= 500) {
+        consecutivePollErrors += 1
+        if (consecutivePollErrors < 3) continue
+        throw new GenerationRequestError('network', '视频任务查询暂时中断', `任务 ID：${taskId}。连续查询失败，任务仍可能成功。`, { requestId: taskId })
+      }
+      throw await createApiError(pollResponse)
+    }
+    consecutivePollErrors = 0
     const job = await pollResponse.json() as Record<string, unknown>
+    lastJob = job
     status = videoTaskStatus(job, status)
     const jobProgress = Number(job.progress)
     progress = Math.max(progress, Number.isFinite(jobProgress) ? jobProgress : progress)
     options.onProgress?.(progress, status)
-    if (status === 'failed') throw new GenerationRequestError('api', '视频生成失败', sanitizeAdminLogJson(job))
+    if (status === 'failed') throw new GenerationRequestError('api', '视频生成失败', sanitizeAdminLogJson(job), { requestId: taskId })
     if (status === 'cancelled' || status === 'canceled') throw new DOMException('Generation cancelled', 'AbortError')
+  }
+  const completedUrl = videoResultUrl(lastJob)
+  if (completedUrl) {
+    const mediaResponse = await fetch(/api\.apiyi\.com|apiyi\.com/i.test(settings.baseUrl) ? apiYiGeneratedMediaUrl(completedUrl) : completedUrl, { signal: options.signal })
+    if (!mediaResponse.ok) throw new GenerationRequestError('network', '视频已生成但下载失败', `任务 ${taskId} 的媒体下载失败（${mediaResponse.status}）`, { requestId: taskId, resultUrls: [completedUrl] })
+    const mediaBlob = await mediaResponse.blob()
+    if (mediaBlob.size) return { blob: mediaBlob, taskId, progress: 100, sourceUrl: completedUrl }
   }
   const contentResponse = await fetch(endpoint(settings.baseUrl, `videos/${encodeURIComponent(taskId)}/content`), { headers: apiYiRelayHeaders(settings, { Authorization: `Bearer ${settings.apiKey}` }), signal: options.signal })
   if (!contentResponse.ok) throw await createApiError(contentResponse)
@@ -1272,49 +1346,21 @@ export function pickPreferredModelId(
     ?? enabled[0].id
 }
 
-function extractGeneratedImages(payload: unknown): GeneratedImage[] {
-  const rows: GeneratedImage[] = []
-  const visited = new WeakSet<object>()
-  const normalizeImageValue = (value: unknown) => {
-    if (typeof value !== 'string') return ''
-    const candidate = value.trim()
-    if (/^(?:https?:|blob:|data:image\/)/i.test(candidate)) return candidate
-    if (candidate.length > 128 && /^[A-Za-z0-9+/=\r\n]+$/.test(candidate)) return `data:image/png;base64,${candidate.replace(/\s/g, '')}`
-    return ''
+const extractGeneratedImages = extractProviderImages
+
+/** Visionary can echo request reference URLs while a task is processing. Only
+ * documented result containers count as generated output. */
+function extractVisionaryGeneratedImages(payload: unknown): GeneratedImage[] {
+  if (!payload || typeof payload !== 'object') return []
+  const root = payload as Record<string, unknown>
+  const candidates: unknown[] = [root.results, root.result, root.output]
+  const dataItems = Array.isArray(root.data) ? root.data : [root.data]
+  for (const item of dataItems) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    candidates.push(record.result, record.results, record.output)
   }
-  const pushImage = (value: unknown, revisedPrompt?: unknown) => {
-    const url = normalizeImageValue(value)
-    if (!url) return false
-    rows.push({
-      url,
-      revisedPrompt: typeof revisedPrompt === 'string' ? revisedPrompt : undefined,
-    })
-    return true
-  }
-  const visit = (value: unknown, depth = 0) => {
-    if (depth > 12 || value == null) return
-    if (typeof value === 'string') {
-      pushImage(value)
-      return
-    }
-    if (Array.isArray(value)) {
-      value.forEach((item) => visit(item, depth + 1))
-      return
-    }
-    if (typeof value !== 'object') return
-    if (visited.has(value)) return
-    visited.add(value)
-    const record = value as Record<string, unknown>
-    const revisedPrompt = record.revised_prompt ?? record.revisedPrompt
-    for (const key of ['url', 'image_url', 'b64_json', 'b64', 'base64']) {
-      if (pushImage(record[key], revisedPrompt)) break
-    }
-    ;['data', 'images', 'image', 'urls', 'output', 'outputs', 'result', 'results', 'artifacts', 'content'].forEach((key) => {
-      if (key in record) visit(record[key], depth + 1)
-    })
-  }
-  visit(payload)
-  return rows
+  return candidates.flatMap((candidate) => extractGeneratedImages(candidate))
 }
 
 async function resolveGrsaiImageResult(
@@ -1415,6 +1461,196 @@ async function resolveGrsaiImageResult(
   )
 }
 
+async function resolveVisionaryImageResult(
+  settings: ApiRequestSettings,
+  initialPayload: unknown,
+  signal?: AbortSignal,
+) {
+  if (extractVisionaryGeneratedImages(initialPayload).length) return initialPayload
+  const taskId = extractTaskId(initialPayload)
+  if (!taskId) return initialPayload
+  if (classifyProviderPayload(initialPayload) === 'failed') {
+    throw new GenerationRequestError('api', 'Visionary 图像任务生成失败', sanitizeAdminLogJson(initialPayload), { requestId: taskId })
+  }
+
+  const startedAt = Date.now()
+  let consecutiveErrors = 0
+  let successWithoutResultCount = 0
+  while (Date.now() - startedAt < VISIONARY_POLL_TIMEOUT_MS) {
+    await waitForDelay(VISIONARY_POLL_INTERVAL_MS, signal)
+    try {
+      const response = await fetch(endpoint(settings.baseUrl, `tasks/${encodeURIComponent(taskId)}`), {
+        signal,
+        headers: providerRelayHeaders(settings, { Authorization: `Bearer ${settings.apiKey}` }),
+      })
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) throw await createApiError(response)
+        // A newly submitted task can briefly be absent while it propagates.
+        if (response.status === 404 && Date.now() - startedAt < 30_000) continue
+        if (response.status === 429 || response.status >= 500) throw new Error(`任务查询暂时失败（${response.status}）`)
+        throw await createApiError(response)
+      }
+      const payload = await response.json() as unknown
+      consecutiveErrors = 0
+      if (extractVisionaryGeneratedImages(payload).length) return payload
+      const state = classifyProviderPayload(payload)
+      if (state === 'failed') {
+        throw new GenerationRequestError('api', 'Visionary 图像任务生成失败', sanitizeAdminLogJson(payload), { requestId: taskId })
+      }
+      if (state === 'success_without_result') {
+        successWithoutResultCount += 1
+        if (successWithoutResultCount >= VISIONARY_SUCCESS_WITHOUT_URL_RETRIES) {
+          throw new GenerationRequestError(
+            'platform',
+            'Visionary 显示生成成功，但暂未返回图片地址',
+            `任务 ${taskId} 已成功，但结果地址仍未同步；请从任务记录恢复，不要重新生成。`,
+            { requestId: taskId },
+          )
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      if (error instanceof GenerationRequestError) throw error
+      consecutiveErrors += 1
+      if (consecutiveErrors >= VISIONARY_MAX_CONSECUTIVE_POLL_ERRORS) {
+        throw new GenerationRequestError(
+          'network',
+          'Visionary 任务已提交，但结果查询暂时中断',
+          `任务 ID：${taskId}。任务仍可能成功，请从任务记录恢复，不要重新生成。`,
+          { requestId: taskId },
+        )
+      }
+    }
+  }
+  throw new GenerationRequestError(
+    'network',
+    'Visionary 任务查询超时',
+    `任务 ID：${taskId}。任务仍可能稍后完成，请勿重复生成。`,
+    { requestId: taskId },
+  )
+}
+
+function genericProviderPollCandidates(settings: ApiRequestSettings, initialPayload: unknown, taskId: string) {
+  const candidates: string[] = []
+  const baseOrigin = new URL(normalizedApiBaseUrl(settings.baseUrl)).origin
+  const visited = new WeakSet<object>()
+  const addExplicit = (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) return
+    try {
+      const url = new URL(value.trim(), normalizedApiBaseUrl(settings.baseUrl) + '/')
+      // Never forward a user's API key to a host other than the configured
+      // provider. Cross-origin result media is handled after JSON extraction.
+      if (url.origin === baseOrigin) candidates.push(url.toString())
+    } catch { /* ignore malformed provider hints */ }
+  }
+  const visit = (value: unknown, depth = 0) => {
+    if (!value || depth > 4 || typeof value !== 'object' || visited.has(value)) return
+    visited.add(value)
+    if (Array.isArray(value)) { value.forEach((item) => visit(item, depth + 1)); return }
+    const record = value as Record<string, unknown>
+    for (const key of ['status_url', 'statusUrl', 'task_url', 'taskUrl', 'poll_url', 'pollUrl']) addExplicit(record[key])
+    for (const key of ['data', 'result', 'output']) visit(record[key], depth + 1)
+  }
+  visit(initialPayload)
+  for (const path of providerTaskPollPaths(taskId)) candidates.push(endpoint(settings.baseUrl, path))
+  return Array.from(new Set(candidates))
+}
+
+/**
+ * Conservative fallback for OpenAI-shaped providers that submit an async job.
+ * It performs GET-only discovery, never retries the billable POST, and only
+ * sends credentials to the configured provider origin.
+ */
+async function resolveGenericProviderImageResult(
+  settings: ApiRequestSettings,
+  initialPayload: unknown,
+  signal?: AbortSignal,
+) {
+  if (extractProviderImages(initialPayload).length) return initialPayload
+  const taskId = extractProviderTaskId(initialPayload)
+  if (!taskId) return initialPayload
+  if (classifyProviderPayload(initialPayload) === 'failed') {
+    throw new GenerationRequestError('api', '图像任务生成失败', sanitizeAdminLogJson(initialPayload), { requestId: taskId })
+  }
+
+  const candidates = genericProviderPollCandidates(settings, initialPayload, taskId)
+  const headers = providerRelayHeaders(settings, { Authorization: `Bearer ${settings.apiKey}`, Accept: 'application/json' })
+  const startedAt = Date.now()
+  let selectedEndpoint = ''
+  let consecutiveErrors = 0
+  let successWithoutResultCount = 0
+  while (Date.now() - startedAt < GENERIC_PROVIDER_POLL_TIMEOUT_MS) {
+    await waitForDelay(GENERIC_PROVIDER_POLL_INTERVAL_MS, signal)
+    const roundCandidates = selectedEndpoint ? [selectedEndpoint] : candidates
+    let foundEndpointThisRound = false
+    let transientFailureThisRound = false
+    for (const candidate of roundCandidates) {
+      try {
+        const response = await fetch(candidate, { signal, headers })
+        if (response.status === 404 && !selectedEndpoint) continue
+        if (response.status === 401 || response.status === 403) throw await createApiError(response)
+        if (response.status === 429 || response.status >= 500) {
+          transientFailureThisRound = true
+          continue
+        }
+        if (!response.ok) throw await createApiError(response)
+        foundEndpointThisRound = true
+        selectedEndpoint = candidate
+        const payload = await response.json() as unknown
+        consecutiveErrors = 0
+        if (extractProviderImages(payload).length) return payload
+        const state = classifyProviderPayload(payload)
+        if (state === 'failed') {
+          throw new GenerationRequestError('api', '图像任务生成失败', sanitizeAdminLogJson(payload), { requestId: taskId })
+        }
+        if (state === 'success_without_result') {
+          successWithoutResultCount += 1
+          if (successWithoutResultCount >= GENERIC_PROVIDER_SUCCESS_WITHOUT_URL_RETRIES) {
+            throw new GenerationRequestError(
+              'platform',
+              '厂商显示生成成功，但暂未返回图片地址',
+              `任务 ID：${taskId}。结果可能仍在同步，请从厂商任务记录恢复，不要重新生成。`,
+              { requestId: taskId },
+            )
+          }
+        }
+        break
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error
+        if (error instanceof GenerationRequestError) throw error
+        transientFailureThisRound = true
+      }
+    }
+    if (foundEndpointThisRound) continue
+    if (!selectedEndpoint && !transientFailureThisRound) {
+      if (Date.now() - startedAt < 30_000) continue
+    }
+    if (!selectedEndpoint && Date.now() - startedAt >= 30_000 && !transientFailureThisRound) {
+      throw new GenerationRequestError(
+        'platform',
+        '已收到任务编号，但无法识别厂商的查询接口',
+        `任务 ID：${taskId}。已安全尝试常见 tasks、jobs、requests 查询路径，未重新提交生成请求。请从厂商后台恢复。`,
+        { requestId: taskId },
+      )
+    }
+    consecutiveErrors += 1
+    if (consecutiveErrors >= GENERIC_PROVIDER_MAX_CONSECUTIVE_POLL_ERRORS) {
+      throw new GenerationRequestError(
+        'network',
+        '任务已提交，但结果查询暂时中断',
+        `任务 ID：${taskId}。任务仍可能在厂商服务器完成，请勿重新生成。`,
+        { requestId: taskId },
+      )
+    }
+  }
+  throw new GenerationRequestError(
+    'network',
+    '任务查询超时',
+    `任务 ID：${taskId}。任务仍可能稍后完成，请勿重复生成。`,
+    { requestId: taskId },
+  )
+}
+
 export async function generateRemoteImages(
   settings: ApiRequestSettings,
   options: ImageGenerationOptions,
@@ -1452,6 +1688,7 @@ export async function generateRemoteImages(
   if (!/gpt-image/i.test(settings.model)) body.response_format = 'url'
   const referenceImages = options.referenceImages?.filter(Boolean) ?? []
   const useGrsaiUnifiedImage = isGrsaiBaseUrl(settings.baseUrl)
+  const useVisionaryTaskImage = isVisionaryBaseUrl(settings.baseUrl)
   const useStandardImageEdit = !useGrsaiUnifiedImage && referenceImages.length > 0 && /(?:gpt-image|chatgpt-image)/i.test(settings.model)
   // GRS documents `images` as raw Base64 or URL values. A browser Data URL
   // includes a MIME header that its upload worker does not decode reliably.
@@ -1474,8 +1711,20 @@ export async function generateRemoteImages(
     replyType: 'async',
   }
   if (!isGrsaiGptImage) grsaiRequestBody.imageSize = options.resolution ?? '1K'
+  const clientRequestId = crypto.randomUUID()
+  const visionaryRequestBody: Record<string, unknown> = {
+    model: settings.model,
+    prompt: options.prompt,
+    images: referenceImages,
+    size: options.aspectRatio && options.aspectRatio !== 'auto' ? options.aspectRatio : compatibleSize,
+    resolution: options.resolution ?? '1K',
+    ...(options.detail ? { quality: options.detail } : {}),
+    client_request_id: clientRequestId,
+  }
   const requestForLog: Record<string, unknown> = useGrsaiUnifiedImage
     ? grsaiRequestBody
+    : useVisionaryTaskImage
+      ? visionaryRequestBody
     : useStandardImageEdit
       ? { model: settings.model, prompt: options.prompt, n: options.count, size: compatibleSize, quality: options.detail, images: `[multipart × ${referenceImages.length}]` }
       : body
@@ -1541,6 +1790,17 @@ export async function generateRemoteImages(
           ...(isApiYiSeedream ? { 'Accept-Encoding': 'identity' } : {}),
         },
         body: JSON.stringify(grsaiRequestBody),
+      })
+    } else if (useVisionaryTaskImage) {
+      response = await fetch(endpoint(settings.baseUrl, 'images/generations'), {
+        method: 'POST',
+        signal: options.signal,
+        headers: providerRelayHeaders(settings, {
+          Authorization: `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': clientRequestId,
+        }),
+        body: JSON.stringify(visionaryRequestBody),
       })
     } else if (useStandardImageEdit) {
       const form = new FormData()
@@ -1634,6 +1894,9 @@ export async function generateRemoteImages(
     payload = await response.json()
     lastPayload = payload
     taskId = extractTaskId(payload) || taskId
+    if (taskId) {
+      try { options.onTaskId?.(taskId) } catch { /* persistence must not interrupt a paid task */ }
+    }
   } catch (error) {
     return failWithAdminLog(new GenerationRequestError(
       'platform',
@@ -1646,8 +1909,16 @@ export async function generateRemoteImages(
       payload = await resolveGrsaiImageResult(settings, payload, options.signal)
       lastPayload = payload
       taskId = extractTaskId(payload) || taskId
+    } else if (useVisionaryTaskImage) {
+      payload = await resolveVisionaryImageResult(settings, payload, options.signal)
+      lastPayload = payload
+    } else if (extractProviderTaskId(payload) && !extractProviderImages(payload).length) {
+      payload = await resolveGenericProviderImageResult(settings, payload, options.signal)
+      lastPayload = payload
+      taskId = extractProviderTaskId(payload) || taskId
     }
-    const rows = extractGeneratedImages(payload)
+    const rows = (useVisionaryTaskImage ? extractVisionaryGeneratedImages(payload) : extractGeneratedImages(payload))
+      .map((image) => ({ ...image, url: browserReadableImageResult(image.url, settings) }))
     if (!rows.length) {
       throw new GenerationRequestError(
         'platform',

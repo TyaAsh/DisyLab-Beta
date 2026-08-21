@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/visionary/:path*", "destination": "/api/visionary/:path*" },
     { "source": "/apiyi/seedance/:path*", "destination": "/api/apiyi/seedance/:path*" },
     { "source": "/apiyi/media", "destination": "/api/apiyi/media" },
     { "source": "/apiyi/openai/:path*", "destination": "/api/apiyi/openai/:path*" },

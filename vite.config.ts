@@ -158,6 +158,50 @@ const apiYiMediaRelayPlugin: Plugin = {
     installGatewayRelay('/apiyi/wan')
     installGatewayRelay('/apiyi/veo')
     installGatewayRelay('/apiyi/openai')
+    server.middlewares.use('/visionary', async (request, response, next) => {
+      if (!['GET', 'POST', 'HEAD'].includes(request.method ?? '')) return next()
+      try {
+        const requestedBase = String(request.headers['x-disylab-visionary-base'] ?? 'https://api.visionary.beer/v1')
+        const base = new URL(requestedBase)
+        if (base.protocol !== 'https:' || !new Set(['visionary.beer', 'api.visionary.beer']).has(base.hostname.toLowerCase()) || base.username || base.password || base.port) {
+          response.statusCode = 400
+          response.end(JSON.stringify({ error: { message: '不支持的 Visionary 上游地址' } }))
+          return
+        }
+        // Connect strips the mounted `/visionary` prefix but leaves a leading
+        // slash. Remove it so URL resolution keeps the configured `/v1` base
+        // instead of resetting to the provider origin root.
+        const upstreamPath = (request.url || '/').replace(/^\/visionary\/?/, '').replace(/^\/+/, '')
+        const target = new URL(upstreamPath, `${base.origin}${base.pathname.replace(/\/$/, '')}/`)
+        const headers = new Headers()
+        for (const [name, value] of Object.entries(request.headers)) {
+          if (['host', 'content-length', 'connection', 'x-disylab-visionary-base'].includes(name.toLowerCase())) continue
+          if (Array.isArray(value)) headers.set(name, value.join(', '))
+          else if (value) headers.set(name, value)
+        }
+        headers.set('Accept-Encoding', 'identity')
+        const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await readBody(request)
+        const proxyAvailable = await localProxyIsAvailable()
+        const upstream = proxyAvailable
+          ? await requestThroughLocalProxy(target, request.method!, headers, body)
+          : await fetch(target, { method: request.method, headers, body }).then(async (result) => ({
+              status: result.status,
+              headers: Object.fromEntries(result.headers.entries()),
+              body: Buffer.from(await result.arrayBuffer()),
+            }))
+        response.statusCode = upstream.status
+        for (const name of ['content-type', 'cache-control', 'x-request-id']) {
+          const value = upstream.headers[name]
+          if (value) response.setHeader(name, value)
+        }
+        response.setHeader('content-length', upstream.body.length)
+        response.end(upstream.body)
+      } catch {
+        response.statusCode = 502
+        response.setHeader('content-type', 'application/json')
+        response.end(JSON.stringify({ error: { message: 'Visionary 上游连接失败' } }))
+      }
+    })
     server.middlewares.use('/apiyi/media', async (request, response, next) => {
       if (request.method !== 'GET') return next()
       try {
@@ -167,21 +211,35 @@ const apiYiMediaRelayPlugin: Plugin = {
           response.end('invalid media url')
           return
         }
-        const targetUrl = new URL(target)
-        if (!/(?:^|\.)apiyi\.com$|(?:^|\.)volces\.com$|(?:^|\.)aliyuncs\.com$/i.test(targetUrl.hostname)) {
+        let targetUrl = new URL(target)
+        const mediaHostAllowed = (url: URL) => url.protocol === 'https:'
+          && !url.username && !url.password && !url.port
+          && /(?:^|\.)apiyi\.com$|(?:^|\.)volces\.com$|(?:^|\.)aliyuncs\.com$|(?:^|\.)visionary\.beer$/i.test(url.hostname)
+        if (!mediaHostAllowed(targetUrl)) {
           response.statusCode = 403
           response.end('media host not allowed')
           return
         }
         const relayHeaders = new Headers({ 'Accept-Encoding': 'identity' })
-        const proxyAvailable = await localProxyIsAvailable()
-        const upstream = proxyAvailable
-          ? await requestThroughLocalProxy(targetUrl, 'GET', relayHeaders)
-          : await fetch(targetUrl, { headers: relayHeaders }).then(async (result) => ({
-              status: result.status,
-              headers: Object.fromEntries(result.headers.entries()),
-              body: Buffer.from(await result.arrayBuffer()),
-            }))
+        let upstream: Awaited<ReturnType<typeof requestThroughLocalProxy>> | null = null
+        for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+          const proxyAvailable = await localProxyIsAvailable()
+          const currentUpstream = proxyAvailable
+            ? await requestThroughLocalProxy(targetUrl, 'GET', relayHeaders)
+            : await fetch(targetUrl, { headers: relayHeaders, redirect: 'manual' }).then(async (result) => ({
+                status: result.status,
+                headers: Object.fromEntries(result.headers.entries()),
+                body: Buffer.from(await result.arrayBuffer()),
+              }))
+          upstream = currentUpstream
+          if (![301, 302, 303, 307, 308].includes(currentUpstream.status)) break
+          const location = currentUpstream.headers.location
+          if (!location || redirectCount === 5) throw new Error('media redirect limit exceeded')
+          const redirected = new URL(Array.isArray(location) ? location[0] : location, targetUrl)
+          if (!mediaHostAllowed(redirected)) throw new Error('redirected media host not allowed')
+          targetUrl = redirected
+        }
+        if (!upstream) throw new Error('media upstream unavailable')
         response.statusCode = upstream.status
         const contentType = upstream.headers['content-type']
         if (contentType) response.setHeader('content-type', contentType)

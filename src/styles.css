@@ -145,7 +145,9 @@ button { border: 0; cursor: pointer; }
 
 .floating-chrome {
   position: absolute;
-  z-index: 12;
+  /* Persistent canvas chrome is a protected interaction layer. Node editors
+     (32) and contextual toolbars (30) must never cover these controls. */
+  z-index: 40;
   border: 1px solid var(--line);
   color: var(--ink);
   background: var(--surface);
@@ -472,8 +474,7 @@ button { border: 0; cursor: pointer; }
 .sync-indicator { width: 8px; height: 8px; margin: 0 6px 0 3px; border-radius: 50%; border: 1px solid var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 12%, transparent); }
 
 .tool-rail {
-  /* Below project settings / switcher panels; above the bare canvas */
-  z-index: 16;
+  z-index: 40;
   left: 16px;
   top: 50%;
   width: 52px;
@@ -571,7 +572,7 @@ button { border: 0; cursor: pointer; }
 .tool-rail button[data-tooltip]:hover::after,
 .tool-rail button[data-tooltip]:focus-visible::after { transform: translate(0, -50%) scale(1); }
 
-.help-launcher { position: fixed; left: 22px; bottom: 20px; z-index: 14; width: 38px; height: 38px; padding: 0; border: 1px solid color-mix(in srgb, var(--ink) 22%, var(--line)); border-radius: 50%; display: grid; place-items: center; color: color-mix(in srgb, var(--ink) 86%, transparent); background: color-mix(in srgb, var(--surface-strong) 92%, transparent); box-shadow: 0 10px 28px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); backdrop-filter: blur(16px); transition: color .16s ease, border-color .16s ease, transform .16s ease; }
+.help-launcher { position: fixed; left: 22px; bottom: 20px; z-index: 40; width: 38px; height: 38px; padding: 0; border: 1px solid color-mix(in srgb, var(--ink) 22%, var(--line)); border-radius: 50%; display: grid; place-items: center; color: color-mix(in srgb, var(--ink) 86%, transparent); background: color-mix(in srgb, var(--surface-strong) 92%, transparent); box-shadow: 0 10px 28px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); backdrop-filter: blur(16px); transition: color .16s ease, border-color .16s ease, transform .16s ease; }
 .help-launcher:hover { color: #fff; border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); transform: translateY(-2px); }
 .help-launcher::after { content: attr(data-tooltip); position: absolute; left: calc(100% + 12px); top: 50%; min-width: max-content; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: rgba(28,31,29,.97); box-shadow: 0 9px 25px rgba(0,0,0,.34); font-size: 10px; font-weight: 700; pointer-events: none; opacity: 0; transform: translate(-4px,-50%); transition: opacity .15s ease, transform .15s ease; }
 .help-launcher:hover::after, .help-launcher:focus-visible::after { opacity: 1; transform: translate(0,-50%); }
@@ -1120,7 +1121,7 @@ button { border: 0; cursor: pointer; }
   border-radius: 16px !important;
   background: var(--minimap-bg) !important;
   box-shadow: var(--chrome-shadow) !important;
-  z-index: 20 !important;
+  z-index: 40 !important;
   pointer-events: auto !important;
   touch-action: none;
   cursor: grab;
@@ -1133,7 +1134,7 @@ button { border: 0; cursor: pointer; }
 
 .canvas-navigation {
   position: absolute;
-  z-index: 13;
+  z-index: 40;
   right: 16px;
   bottom: 16px;
   width: 200px;
@@ -1162,7 +1163,7 @@ button { border: 0; cursor: pointer; }
 }
 .canvas-navigation button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .canvas-navigation button.is-active { color: var(--ink); background: color-mix(in srgb, var(--ink) 9%, transparent); }
-.output-history-pill { position: absolute; z-index: 18; left: 50%; bottom: 14px; min-width: 118px; height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); background: color-mix(in srgb, var(--surface-strong) 94%, transparent); box-shadow: 0 12px 34px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); backdrop-filter: blur(20px); transform: translateX(-50%); font-size: 9px; font-weight: 750; }
+.output-history-pill { position: absolute; z-index: 40; left: 50%; bottom: 14px; min-width: 118px; height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); background: color-mix(in srgb, var(--surface-strong) 94%, transparent); box-shadow: 0 12px 34px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); backdrop-filter: blur(20px); transform: translateX(-50%); font-size: 9px; font-weight: 750; }
 .output-history-pill:hover { color: var(--ink); background: color-mix(in srgb, var(--surface-strong) 98%, var(--ink) 2%); }
 .output-history-pill small { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); background: color-mix(in srgb, var(--ink) 7%, transparent); font-size: 8px; }
 .output-history-pill em { height: 19px; padding: 0 6px; border-radius: 7px; display: inline-flex; align-items: center; color: var(--danger); background: var(--danger-soft); font-size: 8px; font-style: normal; }
@@ -3168,7 +3169,7 @@ body.is-resizing-node-editor { cursor: ns-resize !important; user-select: none !
 .api-model-empty { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 7px; color: var(--muted); text-align: center; }
 .api-model-empty strong { color: var(--ink); font-size: 10px; }
 .api-model-empty span { max-width: 330px; font-size: 8px; line-height: 1.55; }
-.api-manager-footer { position: sticky; bottom: 0; margin-top: 14px; padding: 13px 0 16px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; background: linear-gradient(180deg, rgba(23,26,24,.84), #171a18 24%); }
+.api-manager-footer { position: sticky; bottom: 0; z-index: 2; margin-top: 14px; padding: 13px 0 16px; border-top: 1px solid rgba(255,255,255,.075); display: flex; align-items: center; justify-content: space-between; gap: 14px; background: linear-gradient(180deg, rgba(15,19,21,.78), #0f1315 25%, #0f1315); box-shadow: 0 -12px 28px rgba(4,7,9,.18); }
 
 /* Multi-canvas switcher — lives beside the editable canvas name. */
 .canvas-switcher { position: relative; flex: none; }
