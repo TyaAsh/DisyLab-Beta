@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.4-77bdf2" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.5-77bdf2" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
   <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff" />
@@ -37,14 +37,13 @@
 > [!IMPORTANT]
 > **DisyLab is proprietary source-available software, not open-source software.** Commercial use, sale, rental, white-labeling, redistribution, relicensing, and paid services based on this project or modified versions require prior written permission from the copyright holder. See [LICENSE](LICENSE) and [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
 
-## What's new in v1.0.4
+## What's new in v1.0.5
 
-- **Workflow system:** a searchable and categorized template library, smooth motion, canvas import, and reusable node flows.
-- **Complete video workflow:** text-to-video, image-to-video, first/last frame, image reference, and all-reference modes with model-aware parameters.
-- **Video editing:** a compact trim desk, nine-grid crop, current/first/last-frame capture, fullscreen preview, downloads, and video asset management.
-- **Video plans in Agent:** review a proposed video direction before creating nodes and running generation; project style presets can inform compatible reference-image modes.
-- **iOS 26-inspired glass UI:** readable frosted-glass nodes, editors, floating toolbars, menus, and dialogs, with corrected layering and Escape-key behavior.
-- **Multi-platform deployment relay:** APIYI video task submission, polling, and media relay endpoints for Cloudflare Pages, Netlify, and Vercel.
+- **Skill system:** open image and text Skills with `/`, run instant or configured tasks, and safely import and manage custom Skills.
+- **Comic storyboard workflow:** move from content breakdown and layout selection to composition approval and asset generation in one editable node flow.
+- **File toolbox:** lightweight image, video, and PDF utilities.
+- **Personal workspace and projects:** a unified project home with search, grid/list views, batch selection, and import/export.
+- **Interaction and stability fixes:** corrected overlay stacking, hidden dialogs, minimap dragging, and Skill panel readability.
 
 ## Core capabilities
 
@@ -53,6 +52,7 @@
 - Image generation, video generation, trimming, cropping, and frame capture.
 - Workflow templates, inspiration library, asset library, and generation history.
 - Local-first storage with `.disy` project import and export.
+- Configure the API connection you need directly in the app.
 - API keys are stored separately and are not embedded in exported project packages.
 
 ## Quick start
@@ -73,10 +73,10 @@ npm run build
 
 ## Roadmap
 
-- **3D previsualization stage:** preview shots, scenes, character blocking, and spatial relationships before generation.
-- **Skill integration:** connect reusable specialist capabilities to Agent and structured creative workflows.
-- **Languages and themes:** additional interface languages plus dark and light modes will roll out progressively.
-- **Platform engineering:** frontend/backend separation and a desktop app are in active development.
+- **Next minor release:** multilingual UI plus light and dark theme switching.
+- **D-Motion:** a lightweight motion-design workspace.
+- **D-Board:** a thinking whiteboard for drawing, brainstorming, flowcharts, tables, and multi-format export including PDF.
+- Frontend/backend separation is paused. The desktop app will follow the major release, and audio generation will be introduced gradually later.
 
 ## License
 

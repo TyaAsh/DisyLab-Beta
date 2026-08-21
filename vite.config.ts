@@ -14,7 +14,7 @@ import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
 
-const rightsBanner = '/*! DisyLab v1.0.4 | Copyright (c) 2026 DisyLab. All rights reserved. | LicenseRef-DisyLab-Proprietary | ash::tya origin build | Unauthorized commercial use, redistribution, white-labeling, relicensing, or removal of this notice is prohibited. | Repository: https://github.com/TyaAsh/DisyLab-Canvas */'
+const rightsBanner = '/*! DisyLab v1.0.5 | Copyright (c) 2026 DisyLab. All rights reserved. | LicenseRef-DisyLab-Proprietary | ash::tya origin build | Unauthorized commercial use, redistribution, white-labeling, relicensing, or removal of this notice is prohibited. | Repository: https://github.com/TyaAsh/DisyLab-Canvas */'
 
 const localProxyUrl = new URL(process.env.DISYLAB_HTTPS_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://127.0.0.1:7890')
 

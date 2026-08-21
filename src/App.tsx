@@ -128,6 +128,14 @@ import '@xyflow/react/dist/style.css'
 import { useDisyStore, isConnectionUsable, type ApiConnection, type ApiModelConfig, type ModelCapability, type ModelSelection } from './store'
 import { appendWorkspaceProjects, createWorkspaceCanvas, createWorkspaceProject, deleteAgentSession, deleteHistoryMedia, deleteWorkspaceCanvas, deleteWorkspaceProject, exportWorkspaceSnapshot, listAgentSessions, listHistoryMedia, listWorkspaceCanvases, listWorkspaceProjects, loadHistoryMedia, loadLocalAssets, loadLocalProject, loadWorkspaceAuxiliaryData, loadWorkspaceCanvas, loadWorkspaceImportBackup, makeUniqueWorkspaceName, mergeWorkspaceIntoProject, renameWorkspaceProject, replaceWorkspaceProject, restoreWorkspaceImportBackup, saveAgentSession, saveHistoryMedia, saveLocalAssets, saveWorkspaceAuxiliaryData, saveWorkspaceCanvas, saveWorkspaceProject, validateWorkspaceSnapshot, type StylePresetRecord, type StyleReferenceRecord, type WorkspaceCanvas, type WorkspaceProject } from './localDb'
 import { collectReferencedMediaIds, extractMediaIntoBundle, isWorkspaceBundle, packWorkspaceBundle, reinflateBundleMedia, triggerBlobDownload, unpackWorkspaceBundle, type BundleMediaEntry } from './workspaceBundle'
+import { ToolboxPanel } from './ToolboxPanel'
+import { ImageSkillMenu } from './skill-ui/ImageSkillMenu'
+import { StoryboardComicWorkflow } from './skill-ui/StoryboardComicWorkflow'
+import { SkillConfigPanel } from './skill-ui/SkillConfigPanel'
+import { prepareImageSkill } from './skills/runner'
+import { renderSkillPrompt } from './skills/prompt'
+import type { SkillManifest } from './skills/types'
+import type { ComicWorkflowState } from './skills/storyboard'
 import { appendOperatorRecoveryLog, listOperatorRecoveryLogs, lockOperatorSession, unlockOperatorSession, verifyOperatorAccess, type OperatorRecoveryLog } from './adminGate'
 import { extractImageUrlsFromAdminResult, fetchProviderCredits, fetchProviderModelPrices, fetchRemoteModels, fetchUsdToCnyRate, generateRemoteImages, generateRemoteText, generateRemoteVideo, isModelAutoEnabled, normalizeGenerationError, pickPreferredModelId, prepareReferenceImageForRequest, resolveProviderLabel, shouldAppendReferenceGuide, validateApiCredentials, type CurrencyRate, type GenerationAdminLog, type GenerationErrorCategory, type ProviderCredits, type ProviderModelPrice } from './imageApi'
 import { AgentPanel } from './AgentPanel'
@@ -237,6 +245,9 @@ type CanvasNode = Node<{
   generationError?: string
   promptOptimizationBackup?: string
   promptOptimizedAt?: string
+  activeSkillId?: string
+  activeSkillName?: string
+  comicWorkflow?: ComicWorkflowState
   videoUrl?: string
   videoSource?: 'generated' | 'local-upload'
   videoMediaId?: string
@@ -2476,6 +2487,10 @@ function App() {
   const [optimizeTextModelKey, setOptimizeTextModelKey] = useState('')
   const [imageModelMenuOpen, setImageModelMenuOpen] = useState(false)
   const [imageParameterMenuOpen, setImageParameterMenuOpen] = useState(false)
+  const [imageSkillMenuOpen, setImageSkillMenuOpen] = useState(false)
+  const [textSkillMenuOpen, setTextSkillMenuOpen] = useState(false)
+  const [configuringSkill, setConfiguringSkill] = useState<SkillManifest | null>(null)
+  const [comicWorkflowOpen, setComicWorkflowOpen] = useState(false)
   const [videoParameterMenuOpen, setVideoParameterMenuOpen] = useState(false)
   const [videoQuantityMenuOpen, setVideoQuantityMenuOpen] = useState(false)
   const [videoModelMenuOpen, setVideoModelMenuOpen] = useState(false)
@@ -2505,6 +2520,8 @@ function App() {
       if (!target.closest('.generation-quantity-control')) setVideoQuantityMenuOpen(false)
       if (!target.closest('.image-model-picker')) setImageModelMenuOpen(false)
       if (!target.closest('.image-parameter-control')) setImageParameterMenuOpen(false)
+      if (!target.closest('.image-skill-control')) setImageSkillMenuOpen(false)
+      if (!target.closest('.text-skill-control')) setTextSkillMenuOpen(false)
       if (!target.closest('.welcome-model-select')) setModelMenuOpen(false)
     }
     document.addEventListener('pointerdown', closeFloatingMenus)
@@ -2514,7 +2531,7 @@ function App() {
   useEffect(() => {
     const hasFloatingMenu = optimizeModelMenuNodeId !== null
       || videoModelMenuOpen || videoParameterMenuOpen || videoQuantityMenuOpen
-      || imageModelMenuOpen || imageParameterMenuOpen || modelMenuOpen
+      || imageModelMenuOpen || imageParameterMenuOpen || imageSkillMenuOpen || modelMenuOpen
       || customAspectRatioOpen || imageMentionOpen || textMentionOpen || videoMentionOpen
     if (!hasFloatingMenu) return
     const closeFloatingMenusWithEscape = (event: KeyboardEvent) => {
@@ -2526,6 +2543,7 @@ function App() {
       setVideoQuantityMenuOpen(false)
       setImageModelMenuOpen(false)
       setImageParameterMenuOpen(false)
+      setImageSkillMenuOpen(false)
       setModelMenuOpen(false)
       setCustomAspectRatioOpen(false)
       setImageMentionOpen(false)
@@ -2534,7 +2552,7 @@ function App() {
     }
     window.addEventListener('keydown', closeFloatingMenusWithEscape)
     return () => window.removeEventListener('keydown', closeFloatingMenusWithEscape)
-  }, [customAspectRatioOpen, imageMentionOpen, imageModelMenuOpen, imageParameterMenuOpen, modelMenuOpen, optimizeModelMenuNodeId, textMentionOpen, videoMentionOpen, videoModelMenuOpen, videoParameterMenuOpen, videoQuantityMenuOpen])
+  }, [customAspectRatioOpen, imageMentionOpen, imageModelMenuOpen, imageParameterMenuOpen, imageSkillMenuOpen, modelMenuOpen, optimizeModelMenuNodeId, textMentionOpen, videoMentionOpen, videoModelMenuOpen, videoParameterMenuOpen, videoQuantityMenuOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -2701,6 +2719,7 @@ function App() {
   const [apiOpen, setApiOpen] = useState(false)
   const [apiStorageNavVisible, setApiStorageNavVisible] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [toolboxOpen, setToolboxOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [projectHomeOpen, setProjectHomeOpen] = useState(true)
   const projectHomeOpenRef = useRef(true)
@@ -2740,8 +2759,24 @@ function App() {
   useEffect(() => {
     projectHomeOpenRef.current = projectHomeOpen
     const state = history.state && typeof history.state === 'object' ? history.state : {}
-    if (projectHomeOpen) history.replaceState({ ...state, disyView: 'workspace' }, '')
-    else if (history.state?.disyView !== 'project') history.pushState({ ...state, disyView: 'project' }, '')
+    if (projectHomeOpen) {
+      history.replaceState({ ...state, disyView: 'workspace' }, '')
+      // The workspace home is a separate application surface. Canvas-local
+      // popovers and floating panels must not survive the route transition or
+      // escape above the home page through their own fixed positioning.
+      setProjectMenuOpen(false)
+      setCanvasSwitcherOpen(false)
+      setProjectSettingsOpen(false)
+      setNodeSearchOpen(false)
+      setHelpOpen(false)
+      setToolboxOpen(false)
+      setAgentOpen(false)
+      setAgentCanvasPicking(false)
+      setComicWorkflowOpen(false)
+      setConfiguringSkill(null)
+    } else if (history.state?.disyView !== 'project') {
+      history.pushState({ ...state, disyView: 'project' }, '')
+    }
   }, [projectHomeOpen])
 
   useEffect(() => {
@@ -3018,7 +3053,7 @@ function App() {
         const inverseMatrix = svg.getScreenCTM()?.inverse()
         if (!inverseMatrix) return
         const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(inverseMatrix)
-        const flowRect = svg.closest('.react-flow')?.getBoundingClientRect()
+        const flowRect = svg.closest('.canvas-area')?.querySelector<HTMLElement>('.react-flow')?.getBoundingClientRect()
         if (!flowRect) return
         const viewport = getViewport()
         drag = {
@@ -6969,6 +7004,72 @@ function App() {
       setImageMentionRange(null)
     }
   }
+  const applyImageSkill = (skill: SkillManifest) => {
+    if (!activeGenerationNode) return
+    if (skill.slug === 'storyboard-comic') {
+      setImageSkillMenuOpen(false)
+      setComicWorkflowOpen(true)
+      setToastMessage('已打开漫画分镜编排器')
+      return
+    }
+    const subject = activeGenerationNode.data.body.trim() || '请结合当前节点引用素材完成画面'
+    if (skill.execution === 'configured') {
+      setImageSkillMenuOpen(false)
+      setConfiguringSkill(skill)
+      setToastMessage(`请先配置 ${skill.name}，确认后会自动执行`)
+      return
+    }
+    let prepared: ReturnType<typeof prepareImageSkill>
+    try { prepared = prepareImageSkill(skill, subject) } catch (error) { setToastMessage(error instanceof Error ? error.message : 'Skill 解析失败'); return }
+    const prompt = prepared.prompt
+    setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? {
+      ...node,
+      data: { ...node.data, body: prompt, promptText: undefined, activeSkillId: `${skill.id}@${skill.version}`, activeSkillName: skill.name, ...(prepared.aspectRatio ? { imageAspectRatio: prepared.aspectRatio as ImageAspectRatio } : {}) },
+    } : node))
+    setImageSkillMenuOpen(false)
+    const missingReference = skill.capability.requiresReference && !activeImageReferences.some((reference) => Boolean(reference.url))
+    if (missingReference) {
+      setToastMessage(`已启用 ${skill.name}；上传参考照片后再次选择即可自动执行`)
+      window.requestAnimationFrame(() => imagePromptEditorRef.current?.focusAt(prompt.length))
+      return
+    }
+    setToastMessage(`正在执行 Skill：${skill.name}`)
+    window.requestAnimationFrame(() => void generateFromActiveImageNode({ prompt, aspectRatio: prepared.aspectRatio as ImageAspectRatio | undefined }))
+  }
+  const applyTextSkill = (skill: SkillManifest) => {
+    if (!activeTextNode) return
+    const subject = (activeTextNode.data.promptText ?? '').trim() || '请结合当前节点引用内容完成任务'
+    setTextSkillMenuOpen(false)
+    if (skill.execution === 'configured') {
+      setConfiguringSkill(skill)
+      setToastMessage(`请先配置 ${skill.name}，确认后会自动执行`)
+      return
+    }
+    const prompt = renderSkillPrompt(skill, subject)
+    setNodes((current) => current.map((node) => node.id === activeTextNode.id ? { ...node, data: { ...node.data, promptText: prompt, activeSkillId: `${skill.id}@${skill.version}`, activeSkillName: skill.name } } : node))
+    setToastMessage(`正在执行 Skill：${skill.name}`)
+    window.requestAnimationFrame(() => void generateFromActiveTextNode({ prompt }))
+  }
+  const runConfiguredSkill = (skill: SkillManifest, subject: string, values: Record<string, string | number | boolean>) => {
+    setConfiguringSkill(null)
+    if (skill.kind === 'text') {
+      if (!activeTextNode) return
+      const prompt = renderSkillPrompt(skill, subject, values)
+      setNodes((current) => current.map((node) => node.id === activeTextNode.id ? { ...node, data: { ...node.data, promptText: prompt, activeSkillId: `${skill.id}@${skill.version}`, activeSkillName: skill.name } } : node))
+      setToastMessage(`正在执行 Skill：${skill.name}`)
+      window.requestAnimationFrame(() => void generateFromActiveTextNode({ prompt }))
+      return
+    }
+    if (!activeGenerationNode) return
+    try {
+      const prepared = prepareImageSkill(skill, subject, values)
+      setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? { ...node, data: { ...node.data, body: prepared.prompt, promptText: undefined, activeSkillId: `${skill.id}@${skill.version}`, activeSkillName: skill.name, ...(prepared.aspectRatio ? { imageAspectRatio: prepared.aspectRatio as ImageAspectRatio } : {}) } } : node))
+      const missingReference = skill.capability.requiresReference && !activeImageReferences.some((reference) => Boolean(reference.url))
+      if (missingReference) { setToastMessage(`${skill.name} 需要参考图，请上传后再次执行`); return }
+      setToastMessage(`正在执行 Skill：${skill.name}`)
+      window.requestAnimationFrame(() => void generateFromActiveImageNode({ prompt: prepared.prompt, aspectRatio: prepared.aspectRatio as ImageAspectRatio | undefined }))
+    } catch (error) { setToastMessage(error instanceof Error ? error.message : 'Skill 执行失败') }
+  }
   const selectVideoMention = (reference: ActiveNodeReference) => {
     if (!activeVideoNode) return
     if (reference.disabledReason) {
@@ -8437,14 +8538,14 @@ function App() {
     }
   }
 
-  const generateFromActiveTextNode = async () => {
+  const generateFromActiveTextNode = async (overrides?: { prompt?: string }) => {
     if (!activeTextNode) return
     const taskKey = `text:${activeTextNode.id}`
     if (generationTaskControllersRef.current.has(taskKey)) {
       setToastMessage('这个文本节点已经在生成中')
       return
     }
-    const rawPromptText = activeTextNode.data.promptText ?? ''
+    const rawPromptText = overrides?.prompt ?? activeTextNode.data.promptText ?? ''
     const promptText = activeTextReferences.reduce((value, reference) => {
       const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : reference.kind === 'video' ? reference.available !== false : Boolean(reference.url)
       return value.replaceAll(reference.mention, available ? `@${reference.name}` : '')
@@ -8550,7 +8651,7 @@ function App() {
     }
   }
 
-  const generateFromActiveImageNode = async () => {
+  const generateFromActiveImageNode = async (overrides?: { prompt?: string; aspectRatio?: ImageAspectRatio; count?: number; referenceUrl?: string }) => {
     if (!activeGenerationNode) return
     const generationNodeId = activeGenerationNode.id
     const taskKey = `image:${generationNodeId}`
@@ -8558,11 +8659,14 @@ function App() {
       setGenerationControlMenuNodeId(generationNodeId)
       return
     }
+    const sourcePrompt = overrides?.prompt ?? activeGenerationNode.data.body
+    const requestedCount = overrides?.count ?? generationCount
+    const requestedAspectRatio = overrides?.aspectRatio ?? activeImageAspectRatio
     const promptText = activeGenerationReferences.reduce((value, reference) => {
       if (!('kind' in reference)) return value
       const available = reference.kind === 'text' ? Boolean(reference.text?.trim()) : Boolean(reference.url)
       return value.replaceAll(reference.mention, available ? `@${reference.name}` : '')
-    }, activeGenerationNode.data.body).replace(/@\[node:[^\]]+\]/g, '').trim()
+    }, sourcePrompt).replace(/@\[node:[^\]]+\]/g, '').trim()
     if (!promptText) {
       setToastMessage('请先输入图像提示词')
       return
@@ -8571,11 +8675,12 @@ function App() {
       setToastMessage(`提示词引用了图${highestReferencedImageNumber}，但顶部只有 ${activeImageReferences.filter((reference) => Boolean(reference.url)).length} 张可用图片`)
       return
     }
-    const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), activeGenerationNode.data.body)
+    const invocationText = activeGenerationReferences.reduce((value, reference) => value.replaceAll(reference.mention, ''), sourcePrompt)
     const styleInvocation = resolveStylePresets(stylePresets, invocationText)
     const orderedImageReferences = uniqueNamedImageReferences([
       ...selectedAvailableImageReferences.map((reference) => ({ name: reference.name, url: reference.url })),
       ...styleInvocation.references.map((reference) => ({ name: reference.name, url: reference.url })),
+      ...(overrides?.referenceUrl ? [{ name: '已确认构图粗稿', url: overrides.referenceUrl }] : []),
     ])
     const mentionGuide = shouldAppendReferenceGuide({
       modelId: activeNodeImageModel.model.id,
@@ -8624,10 +8729,10 @@ function App() {
       // A requested 2×/3×/4× batch is intentionally billed as up to that many
       // single-image requests. Each slot is sent once, sequentially, and the first
       // failure stops the remaining queue so unsupported gateways cannot keep charging.
-      while (images.length < generationCount) {
+      while (images.length < requestedCount) {
         try {
           if (controller.signal.aborted) throw new DOMException('Generation interrupted', 'AbortError')
-          const remaining = generationCount - images.length
+          const remaining = requestedCount - images.length
           const batch = await generateRemoteImages({
             baseUrl: activeNodeImageModel.connection.baseUrl,
             apiKey: activeNodeImageModel.connection.apiKey,
@@ -8636,7 +8741,7 @@ function App() {
             prompt,
             count: 1,
             referenceImages,
-            aspectRatio: activeImageAspectRatio,
+            aspectRatio: requestedAspectRatio,
             resolution: activeImageResolution,
             detail: activeImageDetail,
             signal: controller.signal,
@@ -8740,9 +8845,9 @@ function App() {
         modelId: activeNodeImageModel.model.id,
         modelName: activeNodeImageModel.model.name,
         connectionName: activeNodeImageModel.connection.name,
-        requestedCount: generationCount,
+        requestedCount,
         outputCount: images.length,
-        preview: `${activeImageAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]} · 参考图 ${referenceImages.length} 张 · ${requestMode}`,
+        preview: `${requestedAspectRatio} · ${activeImageResolution} · ${IMAGE_DETAIL_LABELS[activeImageDetail]} · 参考图 ${referenceImages.length} 张 · ${requestMode}`,
       }, generationOrigin.projectId)
       if (stoppedError && !(stoppedError instanceof DOMException && stoppedError.name === 'AbortError')) {
         appendOutputHistory({
@@ -8752,7 +8857,7 @@ function App() {
           modelId: activeNodeImageModel.model.id,
           modelName: activeNodeImageModel.model.name,
           connectionName: activeNodeImageModel.connection.name,
-          requestedCount: generationCount - images.length,
+          requestedCount: requestedCount - images.length,
           outputCount: 0,
           preview: `参考图 ${referenceImages.length} 张 · ${requestMode}`,
           error: toOutputHistoryError(stoppedError),
@@ -8788,7 +8893,7 @@ function App() {
         modelId: activeNodeImageModel.model.id,
         modelName: activeNodeImageModel.model.name,
         connectionName: activeNodeImageModel.connection.name,
-        requestedCount: generationCount,
+        requestedCount,
         outputCount: 0,
         preview: `参考图 ${attemptedReferenceCount} 张 · ${attemptedRequestMode}`,
         error: historyError,
@@ -8797,6 +8902,29 @@ function App() {
     } finally {
       finishGenerationTask(taskKey)
     }
+  }
+
+  const updateActiveComicWorkflow = (workflow: ComicWorkflowState) => {
+    if (!activeGenerationNode) return
+    setNodes((current) => current.map((node) => node.id === activeGenerationNode.id
+      ? { ...node, data: { ...node.data, comicWorkflow: workflow } }
+      : node))
+  }
+
+  const runActiveComicStage = async (mode: 'composition' | 'assets', prompt: string, workflow: ComicWorkflowState) => {
+    if (!activeGenerationNode) return
+    const nodeId = activeGenerationNode.id
+    const runningState: ComicWorkflowState = { ...workflow, status: mode === 'composition' ? 'composition_generating' : 'asset_generation', updatedAt: Date.now() }
+    setNodes((current) => current.map((node) => node.id === nodeId ? {
+      ...node,
+      data: { ...node.data, body: prompt, promptText: undefined, imageAspectRatio: workflow.aspectRatio as ImageAspectRatio, comicWorkflow: runningState },
+    } : node))
+    await generateFromActiveImageNode({
+      prompt,
+      aspectRatio: workflow.aspectRatio as ImageAspectRatio,
+      count: mode === 'composition' ? 1 : 4,
+      referenceUrl: mode === 'assets' ? activeGenerationNode.data.imageUrl : undefined,
+    })
   }
 
   useEffect(() => {
@@ -12005,7 +12133,7 @@ function App() {
               <div className="project-brand-menu-section"><small>项目</small>
                 <button onClick={() => { setProjectMenuOpen(false); setCanvasSwitcherOpen(true); setProjectRename({ id: activeProjectId, draft: projectName, source: 'switcher' }) }}><Pencil size={14} /><span>重命名</span></button>
                 <button onClick={() => { setProjectMenuOpen(false); void createNewProject() }}><Plus size={15} /><span>新建项目</span></button>
-                <button onClick={() => { setProjectMenuOpen(false); setSelectedProjectIds([]); setProjectOpen(true) }}><Folder size={14} /><span>管理项目</span></button>
+                <button onClick={() => { setProjectMenuOpen(false); setSelectedProjectIds([]); setProjectOpen(false); setProjectHomeOpen(true) }}><Folder size={14} /><span>管理项目</span></button>
               </div>
               <button className="project-brand-menu-danger" onClick={() => { setProjectMenuOpen(false); void removeProject(activeProjectId) }}><Trash2 size={14} /><span>删除当前项目</span></button>
             </motion.section>
@@ -12350,7 +12478,7 @@ function App() {
           <button
             aria-label="画布/项目"
             data-tooltip="画布/项目"
-            onClick={() => setProjectOpen(true)}
+            onClick={() => { setProjectOpen(false); setProjectHomeOpen(true) }}
           >
             <PanelsTopLeft size={18} />
           </button>
@@ -12422,6 +12550,19 @@ function App() {
             <footer>{nodeSearchResults.length} / {nodes.length} 个节点</footer>
           </motion.section>}
         </AnimatePresence>
+
+        <button
+          type="button"
+          className={`toolbox-launcher ${toolboxOpen ? 'is-active' : ''}`}
+          aria-label="打开文件工具箱"
+          aria-expanded={toolboxOpen}
+          data-tooltip="文件工具箱"
+          onClick={() => setToolboxOpen((current) => !current)}
+        >
+          <BriefcaseBusiness size={18} />
+        </button>
+
+        <ToolboxPanel open={toolboxOpen} onClose={() => setToolboxOpen(false)} />
 
         <button
           type="button"
@@ -13185,13 +13326,13 @@ function App() {
               }}
             >
               <motion.section
-                className={`image-node-editor nodrag nowheel ${imageParameterMenuOpen || imageModelMenuOpen ? 'is-parameter-open' : ''}`}
+                className={`image-node-editor nodrag nowheel ${imageParameterMenuOpen || imageModelMenuOpen || imageSkillMenuOpen ? 'is-parameter-open' : ''}`}
                 style={{ height: Math.max(260, Math.min(680, activeGenerationNode.data.imageEditorHeight ?? 340)) }}
                 aria-label="图像节点编辑器"
                 initial={{ opacity: 0, y: 14, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                onPointerDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => { if (imageSkillMenuOpen && !(event.target as HTMLElement).closest('.image-skill-control')) setImageSkillMenuOpen(false); event.stopPropagation() }}
                 onWheel={(event) => event.stopPropagation()}
               >
                 <div
@@ -13346,6 +13487,15 @@ function App() {
                     }}
                     onKeyDown={(event) => {
                       event.stopPropagation()
+                      if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                        event.preventDefault()
+                        setImageSkillMenuOpen(true)
+                        setImageMentionOpen(false)
+                        setImageParameterMenuOpen(false)
+                        setImageModelMenuOpen(false)
+                        setQuantityMenuOpen(false)
+                        return
+                      }
                       if (imageMentionOpen && filteredImageMentionReferences.length) {
                         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                           event.preventDefault()
@@ -13364,7 +13514,8 @@ function App() {
                         void generateFromActiveImageNode()
                       }
                       if (event.key === 'Escape') {
-                        if (imageMentionOpen) setImageMentionOpen(false)
+                        if (imageSkillMenuOpen) setImageSkillMenuOpen(false)
+                        else if (imageMentionOpen) setImageMentionOpen(false)
                         else setActiveGenerationNodeId(null)
                       }
                     }}
@@ -13443,6 +13594,7 @@ function App() {
                     </button>
                   </div>
                   <div className="image-editor-options">
+                    {activeGenerationNode.data.activeSkillName && <button type="button" className="image-active-skill-chip" title="点击清除当前 Skill" onClick={() => setNodes((current) => current.map((node) => node.id === activeGenerationNode.id ? { ...node, data: { ...node.data, activeSkillId: undefined, activeSkillName: undefined } } : node))}><Sparkles size={12}/><span>{activeGenerationNode.data.activeSkillName}</span><X size={11}/></button>}
                     {renderPromptOptimizeControl(activeGenerationNode.id)}
                     {activeGenerationNode.data.promptOptimizationBackup !== undefined && <button type="button" className="prompt-optimize-undo" title="撤回到优化前" onClick={() => undoNodePromptOptimization(activeGenerationNode.id)}><RefreshCw size={13} /><span>撤回</span></button>}
                     <div className="image-parameter-control">
@@ -13521,6 +13673,21 @@ function App() {
                         {generationCount}×
                       </button>
                     </div>
+                    <div className="image-skill-control">
+                      <button
+                        type="button"
+                        className={`image-skill-trigger ${imageSkillMenuOpen ? 'is-open' : ''}`}
+                        aria-label="选择图像 Skill"
+                        title="选择图像 Skill"
+                        onClick={() => {
+                          setImageSkillMenuOpen((value) => !value)
+                          setImageParameterMenuOpen(false)
+                          setImageModelMenuOpen(false)
+                          setQuantityMenuOpen(false)
+                        }}
+                      >/</button>
+                      <ImageSkillMenu open={imageSkillMenuOpen} onClose={() => setImageSkillMenuOpen(false)} onApply={applyImageSkill} onNotice={setToastMessage} />
+                    </div>
                     <div className="generation-run-control">
                     <div className="generation-run-control generation-run-composite">{activeImageCostLabel && <span className="generation-cost-chip" title={activeImagePrice ? formatProviderPriceTooltip(activeImagePrice, usdToCnyRate?.rate) : '厂商实时积分价格'}>{activeImageCostLabel}</span>}
                       <AnimatePresence>
@@ -13591,13 +13758,13 @@ function App() {
               }}
             >
               <motion.section
-                className="text-node-editor nodrag nowheel"
+                className={`text-node-editor nodrag nowheel ${textSkillMenuOpen ? 'is-parameter-open' : ''}`}
                 style={{ height: Math.max(260, Math.min(680, activeTextNode.data.textEditorHeight ?? 340)) }}
                 aria-label="文本节点编辑器"
                 initial={{ opacity: 0, y: 14, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                onPointerDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => { if (textSkillMenuOpen && !(event.target as HTMLElement).closest('.text-skill-control')) setTextSkillMenuOpen(false); event.stopPropagation() }}
               >
                 <div
                   className={`image-editor-reference-row text-editor-reference-row reference-drop-zone ${referenceDropTargetNodeId === activeTextNode.id ? 'is-drop-active' : ''}`}
@@ -13695,6 +13862,11 @@ function App() {
                     }}
                     onKeyDown={(event) => {
                       event.stopPropagation()
+                      if (event.key === '/' && !textMentionOpen) {
+                        event.preventDefault()
+                        setTextSkillMenuOpen(true)
+                        return
+                      }
                       if (textMentionOpen && filteredTextMentionReferences.length) {
                         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                           event.preventDefault()
@@ -13786,6 +13958,7 @@ function App() {
                     </button>
                   </div>
                   <div className="editor-footer-actions">
+                    {activeTextNode.data.activeSkillName && <span className="image-active-skill-chip"><Sparkles size={12} /><span>{activeTextNode.data.activeSkillName}</span></span>}
                     {renderPromptOptimizeControl(activeTextNode.id)}
                     {activeTextNode.data.promptOptimizationBackup !== undefined && <button type="button" className="prompt-optimize-undo" title="撤回到优化前" onClick={() => undoNodePromptOptimization(activeTextNode.id)}><RefreshCw size={13} /><span>撤回</span></button>}
                     <div className="generation-quantity-control">
@@ -13822,6 +13995,10 @@ function App() {
                       >
                         {generationCount}×
                       </button>
+                    </div>
+                    <div className="text-skill-control image-skill-control">
+                      <button type="button" className={`image-skill-trigger ${textSkillMenuOpen ? 'is-open' : ''}`} title="打开文本 Skill（/）" onClick={(event) => { event.stopPropagation(); setTextSkillMenuOpen((value) => !value) }}>/</button>
+                      <ImageSkillMenu kind="text" open={textSkillMenuOpen} onClose={() => setTextSkillMenuOpen(false)} onApply={applyTextSkill} onNotice={setToastMessage} />
                     </div>
                     <div className={`generation-run-control generation-run-composite ${activeTextGenerationRunning ? 'is-running' : ''}`}>{(activeTextCostLabel || activeTextGenerationRunning) && <span className="generation-cost-chip" title={activeTextGenerationRunning ? '文本模型正在分析提示词与参考素材' : activeTextPrice ? formatProviderPriceTooltip(activeTextPrice, usdToCnyRate?.rate) : '厂商实时积分价格'}>{activeTextGenerationRunning ? <><i className="generation-status-pulse" />正在生成</> : activeTextCostLabel}</span>}<button
                       className="editor-generate-button"
@@ -14168,6 +14345,23 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {activeGenerationNode && <StoryboardComicWorkflow
+        open={comicWorkflowOpen}
+        initialContent={activeGenerationNode.data.comicWorkflow?.content ?? activeGenerationNode.data.body}
+        initialState={activeGenerationNode.data.comicWorkflow}
+        imageUrl={activeGenerationNode.data.imageUrl}
+        generating={activeImageGenerationRunning}
+        onClose={() => setComicWorkflowOpen(false)}
+        onUpdate={updateActiveComicWorkflow}
+        onGenerate={runActiveComicStage}
+      />}
+      <SkillConfigPanel
+        skill={configuringSkill}
+        initialSubject={configuringSkill?.kind === 'text' ? (activeTextNode?.data.promptText ?? '') : (activeGenerationNode?.data.body ?? '')}
+        onClose={() => setConfiguringSkill(null)}
+        onRun={runConfiguredSkill}
+      />
 
       <AnimatePresence>
         {promptLibraryOpen && <Suspense fallback={<div className="prompt-library-backdrop"><div className="prompt-library-state"><span className="prompt-library-spinner" /><strong>正在打开灵感库…</strong></div></div>}><PromptLibraryPanel
