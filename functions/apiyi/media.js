@@ -5,7 +5,8 @@ export async function onRequest({ request }) {
   if (!/^https:\/\//i.test(target)) return new Response('invalid media url', { status: 400 })
   let parsed
   try { parsed = new URL(target) } catch { return new Response('invalid media url', { status: 400 }) }
-  if (!/(?:^|\.)apiyi\.com$|(?:^|\.)volces\.com$|(?:^|\.)aliyuncs\.com$/i.test(parsed.hostname)) return new Response('media host not allowed', { status: 403 })
+  if (parsed.username || parsed.password || parsed.port) return new Response('invalid media url', { status: 400 })
+  if (!/(?:^|\.)apiyi\.com$|(?:^|\.)volces\.com$|(?:^|\.)aliyuncs\.com$|(?:^|\.)visionary\.beer$/i.test(parsed.hostname)) return new Response('media host not allowed', { status: 403 })
   try {
     const upstream = await fetch(parsed, { headers: { 'Accept-Encoding': 'identity' } })
     const headers = new Headers()
